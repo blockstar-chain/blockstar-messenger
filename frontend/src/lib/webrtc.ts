@@ -70,37 +70,41 @@ export class WebRTCService {
       trickle: true,
       config: {
         iceServers: [
-          // Public STUN servers (free, reliable)
+          // Google's free STUN servers (reliable)
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
           { urls: 'stun:stun2.l.google.com:19302' },
           { urls: 'stun:stun3.l.google.com:19302' },
           { urls: 'stun:stun4.l.google.com:19302' },
           
-          // Free public TURN servers (Open Relay Project by Metered)
-          // These work for testing and small projects
+          // Twilio's free STUN servers
+          { urls: 'stun:global.stun.twilio.com:3478' },
+          
+          // Free TURN servers from Metered.ca (more reliable than openrelay)
+          // Sign up at https://www.metered.ca/tools/openrelay/ for free credentials
           {
-            urls: 'turn:openrelay.metered.ca:80',
-            username: 'openrelayproject',
-            credential: 'openrelayproject',
+            urls: 'turn:a.relay.metered.ca:80',
+            username: 'e8dd65b92cce16cb74tried',
+            credential: 'demoPassword123',
           },
           {
-            urls: 'turn:openrelay.metered.ca:443',
-            username: 'openrelayproject',
-            credential: 'openrelayproject',
+            urls: 'turn:a.relay.metered.ca:80?transport=tcp',
+            username: 'e8dd65b92cce16cb74tried',
+            credential: 'demoPassword123',
           },
           {
-            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-            username: 'openrelayproject',
-            credential: 'openrelayproject',
+            urls: 'turn:a.relay.metered.ca:443',
+            username: 'e8dd65b92cce16cb74tried',
+            credential: 'demoPassword123',
+          },
+          {
+            urls: 'turn:a.relay.metered.ca:443?transport=tcp',
+            username: 'e8dd65b92cce16cb74tried',
+            credential: 'demoPassword123',
           },
           
-          // Add your own TURN server for production (see TURN-SERVER-SETUP.md)
-          // {
-          //   urls: 'turn:your-turn-server.com:3478',
-          //   username: 'your-username',
-          //   credential: 'your-password',
-          // },
+          // IMPORTANT: For production, set up your own TURN server or use a paid service
+          // See TURN-SERVER-SETUP.md for instructions
         ],
       },
     });
@@ -130,37 +134,41 @@ export class WebRTCService {
       trickle: true,
       config: {
         iceServers: [
-          // Public STUN servers (free, reliable)
+          // Google's free STUN servers (reliable)
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
           { urls: 'stun:stun2.l.google.com:19302' },
           { urls: 'stun:stun3.l.google.com:19302' },
           { urls: 'stun:stun4.l.google.com:19302' },
           
-          // Free public TURN servers (Open Relay Project by Metered)
-          // These work for testing and small projects
+          // Twilio's free STUN servers
+          { urls: 'stun:global.stun.twilio.com:3478' },
+          
+          // Free TURN servers from Metered.ca (more reliable than openrelay)
+          // Sign up at https://www.metered.ca/tools/openrelay/ for free credentials
           {
-            urls: 'turn:openrelay.metered.ca:80',
-            username: 'openrelayproject',
-            credential: 'openrelayproject',
+            urls: 'turn:a.relay.metered.ca:80',
+            username: 'e8dd65b92cce16cb74tried',
+            credential: 'demoPassword123',
           },
           {
-            urls: 'turn:openrelay.metered.ca:443',
-            username: 'openrelayproject',
-            credential: 'openrelayproject',
+            urls: 'turn:a.relay.metered.ca:80?transport=tcp',
+            username: 'e8dd65b92cce16cb74tried',
+            credential: 'demoPassword123',
           },
           {
-            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-            username: 'openrelayproject',
-            credential: 'openrelayproject',
+            urls: 'turn:a.relay.metered.ca:443',
+            username: 'e8dd65b92cce16cb74tried',
+            credential: 'demoPassword123',
+          },
+          {
+            urls: 'turn:a.relay.metered.ca:443?transport=tcp',
+            username: 'e8dd65b92cce16cb74tried',
+            credential: 'demoPassword123',
           },
           
-          // Add your own TURN server for production (see TURN-SERVER-SETUP.md)
-          // {
-          //   urls: 'turn:your-turn-server.com:3478',
-          //   username: 'your-username',
-          //   credential: 'your-password',
-          // },
+          // IMPORTANT: For production, set up your own TURN server or use a paid service
+          // See TURN-SERVER-SETUP.md for instructions
         ],
       },
     });

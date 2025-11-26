@@ -1,7 +1,10 @@
 # Dependencies
 frontend/node_modules/
 backend/node_modules/
-mobile-app/node_modules/
+mobile/node_modules/
+mobile/ios/Pods/
+mobile/android/app/build/
+.expo/
 /.pnp
 .pnp.js
 

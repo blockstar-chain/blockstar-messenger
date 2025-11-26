@@ -242,7 +242,7 @@ export class EncryptionService {
 
     const publicKey = await crypto.subtle.importKey(
       'raw',
-      keys.identityKeyPair.pubKey,
+      new Uint8Array(keys.identityKeyPair.pubKey.buffer.slice(0)),
       {
         name: 'ECDH',
         namedCurve: 'P-256',
@@ -348,7 +348,7 @@ export class EncryptionService {
       const recipientKeyRaw = base64ToUint8Array(recipientPublicKey);
       const recipientKey = await crypto.subtle.importKey(
         'raw',
-        recipientKeyRaw,
+        new Uint8Array(recipientKeyRaw.buffer.slice(0)),
         {
           name: 'ECDH',
           namedCurve: 'P-256',
@@ -414,7 +414,7 @@ export class EncryptionService {
       const senderKeyRaw = base64ToUint8Array(senderPublicKey);
       const senderKey = await crypto.subtle.importKey(
         'raw',
-        senderKeyRaw,
+        new Uint8Array(senderKeyRaw.buffer.slice(0)),
         {
           name: 'ECDH',
           namedCurve: 'P-256',

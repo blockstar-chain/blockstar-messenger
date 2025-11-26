@@ -5,8 +5,8 @@ import { webSocketService } from '@/lib/websocket';
 import { webRTCService } from '@/lib/webrtc';
 import { encryptionService } from '@/lib/encryption';
 import { Message } from '@/types';
-import { Send, Phone, Video, MoreVertical, Menu, Paperclip, Mic, Lock, Unlock } from 'lucide-react';
-import { generateMessageId, generateConversationId, formatMessageTime, truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
+import { Send, Phone, Video, MoreVertical, Menu, Paperclip, Mic, Lock, Unlock, Search, X, Bell, BellOff } from 'lucide-react';
+import { generateMessageId, generateConversationId, formatMessageTime, truncateAddress, getInitials, getAvatarColor, getAvatarUrl } from '@/utils/helpers';
 import toast from 'react-hot-toast';
 
 // Store for decrypted message content (in-memory cache)
@@ -29,11 +29,23 @@ export default function ChatArea() {
   const [isSending, setIsSending] = useState(false);
   const [userStatuses, setUserStatuses] = useState<Map<string, string>>(new Map());
   const [isEncrypted, setIsEncrypted] = useState(true);
+  const [showChatMenu, setShowChatMenu] = useState(false);
+  const [searchMode, setSearchMode] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isMuted, setIsMuted] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId);
   const conversationMessages = activeConversationId ? messages.get(activeConversationId) || [] : [];
+
+  // Filter messages based on search query
+  const filteredMessages = searchQuery
+    ? conversationMessages.filter(msg =>
+      msg.content.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+    : conversationMessages;
   const otherParticipant = activeConversation?.participants.find(
     (p) => p.toLowerCase() !== currentUser?.walletAddress.toLowerCase()
   )?.toLowerCase();
@@ -71,7 +83,7 @@ export default function ChatArea() {
         }
       };
       fetchStatus();
-      
+
       // Refresh status every 30 seconds
       const interval = setInterval(fetchStatus, 30000);
       return () => clearInterval(interval);
@@ -87,6 +99,29 @@ export default function ChatArea() {
   useEffect(() => {
     scrollToBottom();
   }, [conversationMessages]);
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setShowChatMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Load mute status from localStorage
+  useEffect(() => {
+    if (activeConversationId) {
+      const mutedConvos = JSON.parse(localStorage.getItem('mutedConversations') || '[]');
+      setIsMuted(mutedConvos.includes(activeConversationId));
+      // Reset search when conversation changes
+      setSearchMode(false);
+      setSearchQuery('');
+    }
+  }, [activeConversationId]);
 
   // Listen for user status updates
   useEffect(() => {
@@ -123,35 +158,35 @@ export default function ChatArea() {
           message.content,
           message.senderId
         );
-        
+
         // Store decrypted content in cache
         decryptedContentCache.set(message.id, decrypted);
-        
+
         // Normalize addresses
         const senderId = message.senderId.toLowerCase();
-        const recipientId = (typeof message.recipientId === 'string' 
-          ? message.recipientId 
+        const recipientId = (typeof message.recipientId === 'string'
+          ? message.recipientId
           : message.recipientId[0]).toLowerCase();
-        
+
         // Generate consistent conversation ID
         const conversationId = generateConversationId(senderId, recipientId);
-        
+
         // Create decrypted message for display
-        const decryptedMessage = { 
-          ...message, 
+        const decryptedMessage = {
+          ...message,
           content: decrypted,
           conversationId, // Use consistent conversation ID
           senderId,
           recipientId,
         };
-        
+
         // Save message to DB (this will also create conversation if needed)
         await dbHelpers.saveMessage(decryptedMessage);
-        
+
         // Check if conversation exists in store, if not add it
         const { conversations, addConversation } = useAppStore.getState();
         const convExists = conversations.some(c => c.id === conversationId);
-        
+
         if (!convExists) {
           const newConv = {
             id: conversationId,
@@ -164,13 +199,13 @@ export default function ChatArea() {
           };
           addConversation(newConv);
         }
-        
+
         // Add message to store
         addMessage(decryptedMessage);
-        
+
         // Mark as delivered
         webSocketService.markDelivered(message.id);
-        
+
         // Show notification if not in active conversation
         if (conversationId !== activeConversationId) {
           toast(`New message from ${truncateAddress(senderId)}`);
@@ -188,7 +223,7 @@ export default function ChatArea() {
 
     try {
       const msgs = await dbHelpers.getConversationMessages(activeConversationId);
-      
+
       // Decrypt all messages for display
       const decryptedMsgs = await Promise.all(
         msgs.map(async (msg) => {
@@ -196,12 +231,12 @@ export default function ChatArea() {
           if (decryptedContentCache.has(msg.id)) {
             return { ...msg, content: decryptedContentCache.get(msg.id)! };
           }
-          
+
           // If sent by current user, content should be plaintext
           if (msg.senderId === currentUser?.walletAddress) {
             return msg;
           }
-          
+
           // Decrypt received messages
           const { decrypted } = await encryptionService.decryptFromSender(
             msg.content,
@@ -211,11 +246,59 @@ export default function ChatArea() {
           return { ...msg, content: decrypted };
         })
       );
-      
+
       setMessages(activeConversationId, decryptedMsgs);
     } catch (error) {
       console.error('Error loading messages:', error);
     }
+  };
+
+  const handleToggleSearch = () => {
+    setSearchMode(!searchMode);
+    setSearchQuery('');
+    setShowChatMenu(false);
+  };
+
+  const handleToggleMute = () => {
+    if (!activeConversationId) return;
+
+    const mutedConvos = JSON.parse(localStorage.getItem('mutedConversations') || '[]');
+    const newMuted = !isMuted;
+
+    if (newMuted) {
+      mutedConvos.push(activeConversationId);
+      toast.success('Notifications muted for this chat');
+    } else {
+      const index = mutedConvos.indexOf(activeConversationId);
+      if (index > -1) {
+        mutedConvos.splice(index, 1);
+      }
+      toast.success('Notifications unmuted for this chat');
+    }
+
+    localStorage.setItem('mutedConversations', JSON.stringify(mutedConvos));
+    setIsMuted(newMuted);
+    setShowChatMenu(false);
+  };
+
+  const handleClearChat = async () => {
+    if (!activeConversationId) return;
+
+    if (confirm('Are you sure you want to clear all messages in this chat?')) {
+      try {
+        // Clear messages from database
+        await db.messages.where('conversationId').equals(activeConversationId).delete();
+
+        // Clear from store
+        setMessages(activeConversationId, []);
+
+        toast.success('Chat cleared!');
+      } catch (error) {
+        console.error('Error clearing chat:', error);
+        toast.error('Failed to clear chat');
+      }
+    }
+    setShowChatMenu(false);
   };
 
   const scrollToBottom = () => {
@@ -242,7 +325,7 @@ export default function ChatArea() {
 
     try {
       const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
-      
+
       // Upload file to server
       const formData = new FormData();
       formData.append('file', file);
@@ -257,13 +340,13 @@ export default function ChatArea() {
       }
 
       const data = await response.json();
-      
+
       // Create file message
       const senderId = currentUser.walletAddress.toLowerCase();
       const recipientId = otherParticipant.toLowerCase();
 
       // Determine message type based on file
-      let messageType: 'image' | 'video' | 'audio' | 'file' = 'file';
+      let messageType: Message['type'] = 'file';
       if (file.type.startsWith('image/')) messageType = 'image';
       else if (file.type.startsWith('video/')) messageType = 'video';
       else if (file.type.startsWith('audio/')) messageType = 'audio';
@@ -376,9 +459,9 @@ export default function ChatArea() {
     try {
       // Initialize local media stream
       toast.loading(`Starting ${type} call...`, { id: 'call-init' });
-      
+
       const stream = await webRTCService.initializeLocalStream(type === 'audio');
-      
+
       // Check if microphone is muted at system level
       const audioTracks = stream.getAudioTracks();
       if (audioTracks.length > 0 && audioTracks[0].muted) {
@@ -387,10 +470,10 @@ export default function ChatArea() {
         webRTCService.stopLocalStream();
         return;
       }
-      
+
       const callId = `${currentUser.walletAddress.toLowerCase()}-${otherParticipant}-${Date.now()}`;
       let offerSent = false;
-      
+
       // Create peer connection
       webRTCService.createCall(
         callId,
@@ -461,28 +544,28 @@ export default function ChatArea() {
               <Menu size={20} />
             </button>
             <div className="relative">
-              <div className={`w-10 h-10 rounded-full ${getAvatarColor(otherParticipant || '')} flex items-center justify-center text-white font-semibold`}>
-                {getInitials(otherParticipant || '')}
-              </div>
+              <img
+                src={getAvatarUrl(activeConversation.username || otherParticipant || 'User', activeConversation.backgroundcolor)}
+                className="w-12 h-12 rounded-full flex-shrink-0 object-cover"
+              />
               {/* Online indicator */}
-              <span 
-                className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white ${
-                  otherStatus === 'online' ? 'bg-green-500' : 
+              <span
+                className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white ${otherStatus === 'online' ? 'bg-green-500' :
                   otherStatus === 'away' ? 'bg-yellow-500' : 'bg-gray-400'
-                }`}
+                  }`}
               />
             </div>
-            <div>
-              <h3 className="font-semibold text-gray-900">
-                {truncateAddress(otherParticipant || '')}
+            <div className="space-y-1">
+              <h3 className="font-semibold text-gray-900 ">
+                {activeConversation.username}
               </h3>
+              <div className="text-xs text-gray-500">{truncateAddress(otherParticipant || '')}</div>
               <div className="flex items-center gap-2">
-                <p className={`text-xs ${
-                  otherStatus === 'online' ? 'text-green-500' : 
+                <p className={`text-xs ${otherStatus === 'online' ? 'text-green-500' :
                   otherStatus === 'away' ? 'text-yellow-500' : 'text-gray-400'
-                }`}>
-                  {otherStatus === 'online' ? 'Online' : 
-                   otherStatus === 'away' ? 'Away' : 'Offline'}
+                  }`}>
+                  {otherStatus === 'online' ? 'Online' :
+                    otherStatus === 'away' ? 'Away' : 'Offline'}
                 </p>
                 <span className="text-xs text-gray-300">•</span>
                 <span className="text-xs text-green-600 flex items-center gap-1">
@@ -508,12 +591,86 @@ export default function ChatArea() {
             >
               <Video size={20} className="text-gray-600" />
             </button>
-            <button className="p-3 hover:bg-gray-100 rounded-full transition">
-              <MoreVertical size={20} className="text-gray-600" />
-            </button>
+
+            {/* Chat Menu Dropdown */}
+            <div className="relative" ref={menuRef}>
+              <button
+                onClick={() => setShowChatMenu(!showChatMenu)}
+                className="p-3 hover:bg-gray-100 rounded-full transition"
+                title="More Options"
+              >
+                <MoreVertical size={20} className="text-gray-600" />
+              </button>
+
+              {showChatMenu && (
+                <div className="absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
+                  <button
+                    onClick={handleToggleSearch}
+                    className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3"
+                  >
+                    <Search size={16} />
+                    {searchMode ? 'Close Search' : 'Search in Chat'}
+                  </button>
+                  <button
+                    onClick={handleToggleMute}
+                    className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3"
+                  >
+                    {isMuted ? (
+                      <>
+                        <Bell size={16} />
+                        Unmute Notifications
+                      </>
+                    ) : (
+                      <>
+                        <BellOff size={16} />
+                        Mute Notifications
+                      </>
+                    )}
+                  </button>
+                  <div className="border-t border-gray-200 my-1"></div>
+                  <button
+                    onClick={handleClearChat}
+                    className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-3"
+                  >
+                    <X size={16} />
+                    Clear Chat
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Search Bar */}
+      {searchMode && (
+        <div className="bg-white border-b border-gray-200 p-4">
+          <div className="relative">
+            <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search messages..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              autoFocus
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                <X size={18} />
+              </button>
+            )}
+          </div>
+          {searchQuery && (
+            <p className="text-xs text-gray-500 mt-2">
+              Found {filteredMessages.length} message{filteredMessages.length !== 1 ? 's' : ''}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-gray-50">
@@ -525,14 +682,14 @@ export default function ChatArea() {
           </div>
         </div>
 
-        {conversationMessages.length === 0 ? (
+        {filteredMessages.length === 0 ? (
           <div className="flex items-center justify-center h-full text-gray-400">
-            <p>No messages yet. Start the conversation!</p>
+            <p>{searchQuery ? 'No messages found matching your search.' : 'No messages yet. Start the conversation!'}</p>
           </div>
         ) : (
-          conversationMessages.map((message, index) => {
+          filteredMessages.map((message, index) => {
             const isSender = message.senderId.toLowerCase() === currentUser?.walletAddress.toLowerCase();
-            const showAvatar = index === 0 || conversationMessages[index - 1].senderId !== message.senderId;
+            const showAvatar = index === 0 || filteredMessages[index - 1].senderId !== message.senderId;
 
             // Parse file info for file messages
             let fileInfo: { url: string; filename: string; mimetype: string; size: number } | null = null;
@@ -549,8 +706,8 @@ export default function ChatArea() {
               if (message.type === 'image' && fileInfo) {
                 return (
                   <div className="max-w-xs">
-                    <img 
-                      src={fileInfo.url} 
+                    <img
+                      src={fileInfo.url}
                       alt={fileInfo.filename}
                       className="rounded-lg max-w-full cursor-pointer hover:opacity-90"
                       onClick={() => window.open(fileInfo!.url, '_blank')}
@@ -564,8 +721,8 @@ export default function ChatArea() {
               if (message.type === 'video' && fileInfo) {
                 return (
                   <div className="max-w-xs">
-                    <video 
-                      src={fileInfo.url} 
+                    <video
+                      src={fileInfo.url}
                       controls
                       className="rounded-lg max-w-full"
                     />
@@ -578,8 +735,8 @@ export default function ChatArea() {
               if (message.type === 'audio' && fileInfo) {
                 return (
                   <div className="min-w-[200px]">
-                    <audio 
-                      src={fileInfo.url} 
+                    <audio
+                      src={fileInfo.url}
                       controls
                       className="w-full"
                     />
@@ -597,9 +754,9 @@ export default function ChatArea() {
                 };
 
                 return (
-                  <a 
-                    href={fileInfo.url} 
-                    target="_blank" 
+                  <a
+                    href={fileInfo.url}
+                    target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center gap-3 hover:opacity-80"
                   >
@@ -631,11 +788,10 @@ export default function ChatArea() {
                 {!showAvatar && !isSender && <div className="w-8" />}
 
                 <div
-                  className={`max-w-md px-4 py-2 rounded-2xl ${
-                    isSender
-                      ? 'bg-primary-500 text-white'
-                      : 'bg-white text-gray-900 border border-gray-200'
-                  }`}
+                  className={`max-w-md px-4 py-2 rounded-2xl ${isSender
+                    ? 'bg-primary-500 text-white'
+                    : 'bg-white text-gray-900 border border-gray-200'
+                    }`}
                 >
                   {renderMessageContent()}
                   <div className={`flex items-center gap-1 mt-1 ${isSender ? 'justify-end' : 'justify-start'}`}>
@@ -667,7 +823,7 @@ export default function ChatArea() {
           className="hidden"
           accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt"
         />
-        
+
         <form onSubmit={handleSendMessage} className="flex items-center gap-3">
           <button
             type="button"
