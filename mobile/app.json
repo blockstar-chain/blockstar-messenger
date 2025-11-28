@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "BlockStar Messenger",
-    "slug": "blockstar-messenger",
+    "name": "BlockStar Cypher",
+    "slug": "blockstar-cypher",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -16,13 +16,13 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "io.blockstar.messenger",
+      "bundleIdentifier": "io.blockstar.cypher",
       "infoPlist": {
-        "NSCameraUsageDescription": "BlockStar needs camera access for video calls and sharing photos",
-        "NSMicrophoneUsageDescription": "BlockStar needs microphone access for voice and video calls",
-        "NSPhotoLibraryUsageDescription": "BlockStar needs photo library access to share images",
-        "NSBluetoothAlwaysUsageDescription": "BlockStar uses Bluetooth for peer-to-peer messaging",
-        "NSLocalNetworkUsageDescription": "BlockStar uses local network for peer-to-peer connectivity"
+        "NSCameraUsageDescription": "BlockStar Cypher needs camera access for video calls and sharing photos",
+        "NSMicrophoneUsageDescription": "BlockStar Cypher needs microphone access for voice and video calls",
+        "NSPhotoLibraryUsageDescription": "BlockStar Cypher needs photo library access to share images",
+        "NSBluetoothAlwaysUsageDescription": "BlockStar Cypher uses Bluetooth for peer-to-peer messaging",
+        "NSLocalNetworkUsageDescription": "BlockStar Cypher uses local network for peer-to-peer connectivity"
       },
       "buildNumber": "1",
       "googleServicesFile": "./GoogleService-Info.plist"
@@ -32,7 +32,7 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#000000"
       },
-      "package": "io.blockstar.messenger",
+      "package": "io.blockstar.cypher",
       "versionCode": 1,
       "permissions": [
         "android.permission.CAMERA",

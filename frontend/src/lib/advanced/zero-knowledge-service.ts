@@ -246,7 +246,8 @@ export class ZeroKnowledgeService {
    */
   private async derivePublicKey(privateKey: Uint8Array): Promise<Uint8Array> {
     // Simplified - in production use proper key derivation
-    const hashBuffer = await crypto.subtle.digest('SHA-256', new Uint8Array(privateKey.buffer.slice(0)));
+    const keyCopy = new Uint8Array(privateKey);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', keyCopy);
     return new Uint8Array(hashBuffer);
   }
 

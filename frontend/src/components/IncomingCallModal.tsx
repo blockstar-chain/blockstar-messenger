@@ -52,14 +52,25 @@ export default function IncomingCallModal() {
       
       const audioOnly = incomingCall.type === 'audio';
       
+      console.log('========================================');
+      console.log('ACCEPTING CALL');
+      console.log('Call ID:', incomingCall.id);
+      console.log('Call type:', incomingCall.type);
+      console.log('========================================');
+      
       // Initialize local media
       const stream = await webRTCService.initializeLocalStream(audioOnly);
       
       // Check if microphone is muted at system level
       const audioTracks = stream.getAudioTracks();
+      console.log('Local audio tracks:', audioTracks.length);
+      audioTracks.forEach((t, i) => {
+        console.log('Track ' + i + ':', { enabled: t.enabled, muted: t.muted, readyState: t.readyState });
+      });
+      
       if (audioTracks.length > 0 && audioTracks[0].muted) {
         toast.dismiss('call-accept');
-        toast.error('🎤 Your microphone is muted in system settings! Please unmute it and try again.', { duration: 5000 });
+        toast.error('🎤 Your microphone is muted in system settings!', { duration: 5000 });
         webRTCService.stopLocalStream();
         return;
       }
@@ -67,6 +78,12 @@ export default function IncomingCallModal() {
       // Get the stored offer signal
       const offerJson = sessionStorage.getItem('incomingCallOffer');
       const offer = offerJson ? JSON.parse(offerJson) : null;
+      
+      console.log('Retrieved offer from session:', !!offer);
+      if (offer) {
+        console.log('Offer type:', offer.type);
+        console.log('Offer has SDP:', !!offer.sdp);
+      }
 
       // Create answer peer connection
       const peer = webRTCService.answerCall(
@@ -74,28 +91,30 @@ export default function IncomingCallModal() {
         audioOnly,
         (signal) => {
           // SimplePeer sends both SDP answer and ICE candidates via onSignal
-          // SDP answer has type: 'answer', ICE candidates have 'candidate' property
           if (signal.type === 'answer') {
-            console.log('Sending answer signal to caller');
+            console.log('📤 Sending ANSWER signal to caller');
             webSocketService.answerCall(incomingCall.id, signal);
-          } else if (signal.candidate) {
-            // This is an ICE candidate
-            console.log('Sending ICE candidate to caller');
-            webSocketService.sendIceCandidate(incomingCall.callerId, signal);
+          } else if (signal.candidate || signal.type === 'candidate') {
+            console.log('📤 Sending ICE candidate to caller');
+            webSocketService.sendIceCandidate(incomingCall.callerId, signal, incomingCall.id);
+          } else {
+            console.log('📤 Sending other signal:', signal.type);
+            webSocketService.sendIceCandidate(incomingCall.callerId, signal, incomingCall.id);
           }
         },
         (candidate) => {
-          // This callback might not be used with SimplePeer's trickle
-          // but keep it for compatibility
-          console.log('Sending ICE candidate (onIceCandidate)');
-          webSocketService.sendIceCandidate(incomingCall.callerId, candidate);
+          console.log('📤 Sending ICE candidate (separate callback)');
+          webSocketService.sendIceCandidate(incomingCall.callerId, candidate, incomingCall.id);
         }
       );
 
       // Process the incoming offer
       if (offer) {
+        console.log('Processing incoming offer...');
         webRTCService.processSignal(incomingCall.id, offer);
         sessionStorage.removeItem('incomingCallOffer');
+      } else {
+        console.error('❌ No offer found in session storage!');
       }
 
       // Set active call and open call modal
@@ -108,7 +127,7 @@ export default function IncomingCallModal() {
     } catch (error: any) {
       toast.dismiss('call-accept');
       console.error('Error accepting call:', error);
-      toast.error(error.message || 'Failed to connect. Check camera/microphone permissions.');
+      toast.error(error.message || 'Failed to connect. Check microphone permissions.');
       handleReject();
     }
   };
@@ -132,22 +151,22 @@ export default function IncomingCallModal() {
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center">
-      <div className="bg-white rounded-3xl p-8 max-w-sm w-full mx-4 shadow-2xl">
+      <div className="bg-card border border-midnight rounded-3xl p-8 max-w-sm w-full mx-4 shadow-2xl">
         <div className="text-center">
           {/* Caller avatar with animation */}
           <div className="relative inline-block mb-6">
-            <div className={`w-28 h-28 rounded-full ${getAvatarColor(incomingCall.callerId)} flex items-center justify-center text-white text-3xl font-semibold shadow-lg`}>
+            <div className="w-28 h-28 rounded-full bg-gradient-to-br from-primary-500 to-cyan-500 flex items-center justify-center text-white text-3xl font-semibold shadow-glow-lg">
               {getInitials(incomingCall.callerId)}
             </div>
             {/* Animated ring */}
             <div className="absolute inset-0 rounded-full border-4 border-primary-500 animate-ping opacity-30" />
           </div>
           
-          <h2 className="text-2xl font-bold text-gray-900 mb-1">
+          <h2 className="text-2xl font-bold text-white mb-1">
             Incoming {isVideoCall ? 'Video' : 'Voice'} Call
           </h2>
           
-          <p className="text-gray-600 mb-8">
+          <p className="text-secondary mb-8">
             {truncateAddress(incomingCall.callerId)}
           </p>
 
@@ -156,17 +175,17 @@ export default function IncomingCallModal() {
             <div className="text-center">
               <button
                 onClick={handleReject}
-                className="p-5 bg-red-500 hover:bg-red-600 rounded-full transition-all duration-200 transform hover:scale-105 shadow-lg"
+                className="p-5 bg-danger-500 hover:bg-danger-600 rounded-full transition-all duration-200 transform hover:scale-105 shadow-lg"
               >
                 <PhoneOff size={28} className="text-white" />
               </button>
-              <p className="text-sm text-gray-500 mt-2">Decline</p>
+              <p className="text-sm text-muted mt-2">Decline</p>
             </div>
             
             <div className="text-center">
               <button
                 onClick={handleAccept}
-                className="p-5 bg-green-500 hover:bg-green-600 rounded-full transition-all duration-200 transform hover:scale-105 shadow-lg animate-pulse"
+                className="p-5 bg-success-500 hover:bg-success-600 rounded-full transition-all duration-200 transform hover:scale-105 shadow-glow-green animate-pulse"
               >
                 {isVideoCall ? (
                   <Video size={28} className="text-white" />
@@ -174,7 +193,7 @@ export default function IncomingCallModal() {
                   <Phone size={28} className="text-white" />
                 )}
               </button>
-              <p className="text-sm text-gray-500 mt-2">Accept</p>
+              <p className="text-sm text-muted mt-2">Accept</p>
             </div>
           </div>
         </div>

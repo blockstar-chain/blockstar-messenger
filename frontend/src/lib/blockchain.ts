@@ -1,4 +1,4 @@
-import { ethers, BrowserProvider, JsonRpcSigner, JsonRpcProvider } from 'ethers';
+import { ethers, BrowserProvider, JsonRpcSigner } from 'ethers';
 import { NFTMetadata } from '@/types';
 import NFT_ABI from '@/abi/nft.json';
 import axios from 'axios';
@@ -10,21 +10,12 @@ const NFT_CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_NFT_CONTRACT || '0x00000000
 const CHAIN_NAME = process.env.NEXT_PUBLIC_CHAIN_NAME || 'Polygon';
 const CHAIN_SYMBOL = process.env.NEXT_PUBLIC_CHAIN_SYMBOL || 'MATIC';
 const EXPLORER_URL = process.env.NEXT_PUBLIC_EXPLORER_URL || 'https://polygonscan.com';
-const jsonrpc = new JsonRpcProvider(BLOCKSTAR_RPC_URL);
 
 
 export class BlockchainService {
   private provider: BrowserProvider | null = null;
   private signer: JsonRpcSigner | null = null;
   private nftContract: ethers.Contract | null = null;
-
-  constructor() {
-    this.nftContract = new ethers.Contract(
-      NFT_CONTRACT_ADDRESS,
-      NFT_ABI,
-      jsonrpc
-    );
-  }
 
   async connectWallet(): Promise<string> {
     if (typeof window.ethereum === 'undefined') {
@@ -95,20 +86,6 @@ export class BlockchainService {
     });
   }
 
-  async getUsername(address: string): Promise<string | null> {
-    if (!this.nftContract) {
-      throw new Error('NFT contract not initialized');
-    }
-
-    try {
-      const name = await this.nftContract.getPrimaryName(address);
-      return name;
-    } catch (error) {
-      console.error('NFT verification error:', error);
-      return null;
-    }
-  }
-
   async verifyNFTOwnership(address: string): Promise<NFTMetadata | null> {
     if (!this.nftContract) {
       throw new Error('NFT contract not initialized');
@@ -117,9 +94,9 @@ export class BlockchainService {
     try {
       const balance = await this.nftContract.balanceOf(address);
 
-      // if (Number(balance.toString()) === 0) {
-      //   return null; // No NFT owned
-      // }
+      if (Number(balance.toString()) === 0) {
+        return null; // No NFT owned
+      }
 
       let response = await axios.post(`https://nftapp.blockstar.kids/api/nft/collected`, {
         address,
@@ -127,11 +104,11 @@ export class BlockchainService {
       });
 
 
-      // if (!response || !response.data || !response.data.data || response.data.data.length === 0) {
-      //   return null;
-      // }
+      if (!response || !response.data || !response.data.data || response.data.data.length === 0) {
+        return null;
+      }
 
-      const tokenId = 56; //response.data.data[0]?.tokenId;
+      const tokenId = response.data.data[0]?.tokenId;
 
       // Get token URI and metadata
       const name = await this.nftContract.getPrimaryName(address);

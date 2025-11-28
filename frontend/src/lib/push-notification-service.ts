@@ -72,7 +72,7 @@ export class PushNotificationService {
       const vapidKey = this.urlBase64ToUint8Array(this.vapidPublicKey);
       const subscription = await this.registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: new Uint8Array(vapidKey.buffer.slice(0)),
+        applicationServerKey: new Uint8Array(vapidKey),
       });
 
       // Send subscription to backend

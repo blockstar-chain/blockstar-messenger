@@ -1,4 +1,4 @@
-// BlockStar Messenger - Complete Type Definitions
+// BlockStar Cypher - Complete Type Definitions
 
 export interface User {
   walletAddress: string;
@@ -21,27 +21,27 @@ export interface Message {
   delivered: boolean;
   read: boolean;
   type: 'text' | 'image' | 'file' | 'voice' | 'audio' | 'video' | 'location';
-
+  
   // File metadata
   fileName?: string;
   fileSize?: number;
   fileType?: string;
   fileUrl?: string; // IPFS hash
   thumbnailUrl?: string;
-
+  
   // Voice message
   duration?: number;
   waveform?: number[];
-
+  
   // Reactions
   reactions?: MessageReaction[];
-
+  
   // Reply/thread
   replyToId?: string;
-
+  
   // Forwarded
   forwardedFrom?: string;
-
+  
   // Deleted/edited
   deleted?: boolean;
   edited?: boolean;
@@ -58,20 +58,19 @@ export interface Conversation {
   id: string;
   type: 'direct' | 'group';
   participants: string[]; // wallet addresses
+  name?: string; // Conversation name for display
   lastMessage?: Message;
   unreadCount: number;
   createdAt: number;
   updatedAt: number;
-  username?: string;
-  backgroundcolor?: string;
-
+  
   // Group chat specific
   groupName?: string;
   groupAvatar?: string;
   groupDescription?: string;
   admins?: string[];
   createdBy?: string;
-
+  
   // Pinned/archived
   pinned?: boolean;
   archived?: boolean;
@@ -93,10 +92,13 @@ export interface Call {
   id: string;
   callerId: string;
   recipientId: string;
+  recipientAddress?: string; // Optional backwards compatibility
   type: 'audio' | 'video';
-  status: 'ringing' | 'active' | 'ended' | 'missed';
+  status: 'calling' | 'ringing' | 'active' | 'ended' | 'missed';
   startTime: number;
   endTime?: number;
+  localStream?: MediaStream;
+  remoteStream?: MediaStream;
 }
 
 export interface SignalKeys {

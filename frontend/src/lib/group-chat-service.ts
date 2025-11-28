@@ -42,7 +42,7 @@ export class GroupChatService {
     };
 
     // Save to database
-    await db.conversations.add(group);
+    await db.conversations.put(group);
 
     // Notify server and members
     webSocketService.emit('group:create', {
@@ -355,7 +355,7 @@ export class GroupChatService {
 
     await db.conversations.update(groupId, {
       inviteLink: inviteCode,
-    });
+    } as any);
 
     return inviteLink;
   }

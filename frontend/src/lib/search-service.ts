@@ -1,5 +1,5 @@
 import { Message, User, GroupChat, SearchResult } from '@/types';
-import { dbHelpers } from './database';
+import { db } from './database';
 
 /**
  * Message Search Service
@@ -28,7 +28,7 @@ export class SearchService {
    * Build search index from all messages
    */
   private async buildSearchIndex(): Promise<void> {
-    const messages = await dbHelpers.db.messages.toArray();
+    const messages = await db.messages.toArray();
 
     for (const message of messages) {
       this.indexMessage(message);
@@ -94,7 +94,7 @@ export class SearchService {
     const results: SearchResult[] = [];
 
     for (const id of messageIds) {
-      const message = await dbHelpers.db.messages.get(id);
+      const message = await db.messages.get(id);
       
       if (message) {
         results.push({
@@ -135,7 +135,7 @@ export class SearchService {
   async searchUsers(query: string): Promise<SearchResult[]> {
     if (!query.trim()) return [];
 
-    const users = await dbHelpers.db.users.toArray();
+    const users = await db.users.toArray();
     const terms = this.tokenize(query);
     const results: SearchResult[] = [];
 
@@ -170,7 +170,7 @@ export class SearchService {
   async searchGroups(query: string): Promise<SearchResult[]> {
     if (!query.trim()) return [];
 
-    const conversations = await dbHelpers.db.conversations
+    const conversations = await db.conversations
       .where('type')
       .equals('group')
       .toArray();

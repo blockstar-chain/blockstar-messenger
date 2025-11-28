@@ -5,6 +5,28 @@ import { VoiceMessage } from '@/types';
  * Record, encode, and manage voice messages
  */
 
+// Supported mimeTypes in order of preference
+const SUPPORTED_MIME_TYPES = [
+  'audio/webm;codecs=opus',
+  'audio/webm',
+  'audio/ogg;codecs=opus',
+  'audio/mp4',
+  'audio/mpeg',
+  'audio/wav',
+];
+
+function getSupportedMimeType(): string {
+  for (const mimeType of SUPPORTED_MIME_TYPES) {
+    if (MediaRecorder.isTypeSupported(mimeType)) {
+      console.log('Using mimeType:', mimeType);
+      return mimeType;
+    }
+  }
+  // Fallback - let browser choose
+  console.log('No preferred mimeType supported, using browser default');
+  return '';
+}
+
 export class VoiceMessageService {
   private mediaRecorder: MediaRecorder | null = null;
   private audioChunks: Blob[] = [];
@@ -13,6 +35,7 @@ export class VoiceMessageService {
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private waveformData: number[] = [];
+  private mimeType: string = '';
 
   /**
    * Start recording voice message
@@ -25,8 +48,17 @@ export class VoiceMessageService {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
+          sampleRate: 44100,
+          channelCount: 1,
         },
       });
+
+      // Verify we have audio tracks
+      const audioTracks = this.stream.getAudioTracks();
+      if (audioTracks.length === 0) {
+        throw new Error('No audio tracks available');
+      }
+      console.log('Audio track:', audioTracks[0].label, audioTracks[0].readyState);
 
       // Setup audio context for waveform visualization
       this.audioContext = new AudioContext();
@@ -35,10 +67,19 @@ export class VoiceMessageService {
       this.analyser.fftSize = 2048;
       source.connect(this.analyser);
 
-      // Create media recorder
-      this.mediaRecorder = new MediaRecorder(this.stream, {
-        mimeType: 'audio/webm;codecs=opus',
-      });
+      // Get supported mimeType
+      this.mimeType = getSupportedMimeType();
+
+      // Create media recorder with options
+      const options: MediaRecorderOptions = {};
+      if (this.mimeType) {
+        options.mimeType = this.mimeType;
+      }
+      
+      this.mediaRecorder = new MediaRecorder(this.stream, options);
+      
+      // Log the actual mimeType being used
+      console.log('MediaRecorder created with mimeType:', this.mediaRecorder.mimeType);
 
       this.audioChunks = [];
       this.waveformData = [];
@@ -46,13 +87,18 @@ export class VoiceMessageService {
 
       // Collect audio data
       this.mediaRecorder.ondataavailable = (event) => {
+        console.log('Audio data available:', event.data.size, 'bytes');
         if (event.data.size > 0) {
           this.audioChunks.push(event.data);
         }
       };
 
-      // Start recording
-      this.mediaRecorder.start(100); // Collect data every 100ms
+      this.mediaRecorder.onerror = (event: any) => {
+        console.error('MediaRecorder error:', event.error);
+      };
+
+      // Start recording with timeslice to get data chunks
+      this.mediaRecorder.start(250); // Collect data every 250ms
 
       // Start waveform capture
       this.captureWaveform();
@@ -60,6 +106,7 @@ export class VoiceMessageService {
       console.log('Voice recording started');
     } catch (error) {
       console.error('Failed to start recording:', error);
+      this.cleanup();
       throw new Error('Failed to access microphone');
     }
   }
@@ -74,9 +121,34 @@ export class VoiceMessageService {
         return;
       }
 
+      if (this.mediaRecorder.state === 'inactive') {
+        reject(new Error('Recording already stopped'));
+        return;
+      }
+
       this.mediaRecorder.onstop = () => {
         const duration = (Date.now() - this.startTime) / 1000;
-        const blob = new Blob(this.audioChunks, { type: 'audio/webm' });
+        
+        console.log('Recording stopped. Chunks:', this.audioChunks.length);
+        console.log('Total size:', this.audioChunks.reduce((acc, chunk) => acc + chunk.size, 0), 'bytes');
+        
+        if (this.audioChunks.length === 0) {
+          this.cleanup();
+          reject(new Error('No audio data recorded'));
+          return;
+        }
+
+        // Use the actual mimeType from the recorder
+        const actualMimeType = this.mediaRecorder?.mimeType || 'audio/webm';
+        const blob = new Blob(this.audioChunks, { type: actualMimeType });
+        
+        console.log('Created blob:', blob.size, 'bytes, type:', blob.type);
+
+        if (blob.size === 0) {
+          this.cleanup();
+          reject(new Error('Empty audio recording'));
+          return;
+        }
 
         const voiceMessage: VoiceMessage = {
           id: `voice_${Date.now()}`,
@@ -90,6 +162,11 @@ export class VoiceMessageService {
         resolve(voiceMessage);
       };
 
+      // Request final data before stopping
+      if (this.mediaRecorder.state === 'recording') {
+        this.mediaRecorder.requestData();
+      }
+      
       this.mediaRecorder.stop();
     });
   }
@@ -158,6 +235,8 @@ export class VoiceMessageService {
     if (data.length === 0) return [];
 
     const maxValue = Math.max(...data);
+    if (maxValue === 0) return data.map(() => 50); // Return flat line if no audio
+    
     const targetLength = 50; // Fixed number of bars
     const chunkSize = Math.ceil(data.length / targetLength);
 
@@ -177,10 +256,25 @@ export class VoiceMessageService {
    * Convert voice message to File for upload
    */
   async voiceMessageToFile(voiceMessage: VoiceMessage): Promise<File> {
+    // Determine file extension based on blob type
+    let extension = 'webm';
+    if (voiceMessage.blob.type.includes('ogg')) {
+      extension = 'ogg';
+    } else if (voiceMessage.blob.type.includes('mp4')) {
+      extension = 'mp4';
+    } else if (voiceMessage.blob.type.includes('mpeg') || voiceMessage.blob.type.includes('mp3')) {
+      extension = 'mp3';
+    } else if (voiceMessage.blob.type.includes('wav')) {
+      extension = 'wav';
+    }
+    
+    const filename = `voice_${voiceMessage.id}.${extension}`;
+    console.log('Creating file:', filename, 'type:', voiceMessage.blob.type, 'size:', voiceMessage.blob.size);
+    
     return new File(
       [voiceMessage.blob],
-      `voice_${voiceMessage.id}.webm`,
-      { type: 'audio/webm' }
+      filename,
+      { type: voiceMessage.blob.type || 'audio/webm' }
     );
   }
 
@@ -227,6 +321,7 @@ export class VoiceMessageService {
     this.audioChunks = [];
     this.waveformData = [];
     this.startTime = 0;
+    this.mimeType = '';
   }
 
   /**

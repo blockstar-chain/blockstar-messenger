@@ -13,13 +13,14 @@ export class WebSocketService {
   /**
    * Connect to WebSocket server
    */
-  connect(walletAddress: string, publicKey: string): void {
+  connect(walletAddress: string, publicKey: string, username?: string): void {
     this.userAddress = walletAddress;
 
     this.socket = io(SOCKET_URL, {
       auth: {
         walletAddress,
         publicKey,
+        username,
       },
       transports: ['websocket', 'polling'],
       reconnection: true,
@@ -132,12 +133,15 @@ export class WebSocketService {
   /**
    * Send ICE candidate
    */
-  sendIceCandidate(recipientAddress: string, candidate: any): void {
+  sendIceCandidate(recipientAddress: string, candidate: any, callId?: string): void {
     if (!this.socket || !this.socket.connected) return;
 
+    console.log('📤 Sending ICE candidate to:', recipientAddress, 'for call:', callId);
+    
     this.socket.emit('call:ice-candidate', {
       recipientAddress,
       candidate,
+      callId,
     });
   }
 

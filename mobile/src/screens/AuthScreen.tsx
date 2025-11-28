@@ -1,4 +1,6 @@
 // mobile/src/screens/AuthScreen.tsx
+// BlockStar Cypher - Authentication Screen (Dark Midnight Theme)
+
 import React, { useState } from 'react';
 import {
   View,
@@ -9,9 +11,11 @@ import {
   Alert,
   TextInput,
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useAuthStore } from '../store/authStore';
 import { webSocketService } from '../services/WebSocketService';
 import { storageService } from '../services/StorageService';
+import { COLORS, SPACING, BORDER_RADIUS, FONT_SIZES, SHADOWS } from '../constants/theme';
 
 const API_URL = 'http://192.168.1.100:3001'; // CHANGE THIS TO YOUR SERVER IP
 
@@ -68,10 +72,15 @@ export function AuthScreen({ navigation }: any) {
     <View style={styles.container}>
       {/* Logo */}
       <View style={styles.logoContainer}>
-        <View style={styles.logo}>
+        <LinearGradient
+          colors={[COLORS.primary, COLORS.cyan]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.logo}
+        >
           <Text style={styles.logoText}>B★</Text>
-        </View>
-        <Text style={styles.title}>BlockStar Messenger</Text>
+        </LinearGradient>
+        <Text style={styles.title}>BlockStar Cypher</Text>
         <Text style={styles.subtitle}>Decentralized Communication</Text>
       </View>
 
@@ -96,7 +105,7 @@ export function AuthScreen({ navigation }: any) {
       <TextInput
         style={styles.input}
         placeholder="Wallet Address (optional)"
-        placeholderTextColor="#666"
+        placeholderTextColor={COLORS.textMuted}
         value={walletAddress}
         onChangeText={setWalletAddress}
         autoCapitalize="none"
@@ -105,20 +114,33 @@ export function AuthScreen({ navigation }: any) {
 
       {/* Connect Button */}
       <TouchableOpacity
-        style={[styles.button, loading && styles.buttonDisabled]}
+        style={[styles.buttonContainer, loading && styles.buttonDisabled]}
         onPress={connectDemo}
         disabled={loading}
+        activeOpacity={0.8}
       >
-        {loading ? (
-          <ActivityIndicator color="#fff" size="small" />
-        ) : (
-          <Text style={styles.buttonText}>Enter Demo Mode</Text>
-        )}
+        <LinearGradient
+          colors={[COLORS.primary, COLORS.cyan]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={styles.button}
+        >
+          {loading ? (
+            <ActivityIndicator color="#fff" size="small" />
+          ) : (
+            <Text style={styles.buttonText}>Enter Demo Mode</Text>
+          )}
+        </LinearGradient>
       </TouchableOpacity>
 
       {/* Info */}
       <Text style={styles.infoText}>
         For production wallet support, use EAS Build
+      </Text>
+
+      {/* Version */}
+      <Text style={styles.versionText}>
+        BlockStar Cypher v1.0.0 · BlockStar Mainnet
       </Text>
     </View>
   );
@@ -136,111 +158,121 @@ function FeatureItem({ icon, text }: { icon: string; text: string }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: COLORS.bgPrimary,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    padding: SPACING.lg,
   },
   logoContainer: {
     alignItems: 'center',
-    marginBottom: 40,
+    marginBottom: SPACING.xxl,
   },
   logo: {
     width: 100,
     height: 100,
-    borderRadius: 50,
-    backgroundColor: '#3b82f6',
+    borderRadius: BORDER_RADIUS.xl,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: SPACING.lg,
+    ...SHADOWS.glow,
   },
   logoText: {
     fontSize: 48,
     fontWeight: 'bold',
-    color: '#fff',
+    color: COLORS.textPrimary,
   },
   title: {
-    fontSize: 32,
+    fontSize: FONT_SIZES.xxxl,
     fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 8,
+    color: COLORS.textPrimary,
+    marginBottom: SPACING.xs,
   },
   subtitle: {
-    fontSize: 16,
-    color: '#888',
+    fontSize: FONT_SIZES.md,
+    color: COLORS.textSecondary,
   },
   features: {
     width: '100%',
-    marginBottom: 30,
+    marginBottom: SPACING.xl,
   },
   featureItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
-    paddingHorizontal: 20,
+    marginBottom: SPACING.md,
+    paddingHorizontal: SPACING.lg,
   },
   featureIcon: {
     fontSize: 24,
-    marginRight: 12,
+    marginRight: SPACING.sm + 4,
   },
   featureText: {
-    fontSize: 16,
-    color: '#ccc',
+    fontSize: FONT_SIZES.md,
+    color: COLORS.textSecondary,
   },
   demoNotice: {
-    backgroundColor: '#1a1a1a',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 20,
+    backgroundColor: COLORS.bgCard,
+    borderRadius: BORDER_RADIUS.md,
+    padding: SPACING.md,
+    marginBottom: SPACING.lg,
     width: '100%',
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: COLORS.border,
   },
   demoTitle: {
-    fontSize: 16,
+    fontSize: FONT_SIZES.md,
     fontWeight: 'bold',
-    color: '#3b82f6',
-    marginBottom: 8,
+    color: COLORS.primary,
+    marginBottom: SPACING.xs,
     textAlign: 'center',
   },
   demoText: {
-    fontSize: 14,
-    color: '#999',
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textSecondary,
     textAlign: 'center',
     lineHeight: 20,
   },
   input: {
     width: '100%',
-    backgroundColor: '#1a1a1a',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    color: '#fff',
-    fontSize: 14,
-    marginBottom: 16,
+    backgroundColor: COLORS.bgCard,
+    borderRadius: BORDER_RADIUS.md,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm + 4,
+    color: COLORS.textPrimary,
+    fontSize: FONT_SIZES.sm,
+    marginBottom: SPACING.md,
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: COLORS.border,
+  },
+  buttonContainer: {
+    width: '100%',
+    marginBottom: SPACING.md,
+    borderRadius: BORDER_RADIUS.md,
+    overflow: 'hidden',
   },
   button: {
-    backgroundColor: '#3b82f6',
-    paddingHorizontal: 60,
-    paddingVertical: 16,
-    borderRadius: 12,
-    width: '100%',
+    paddingHorizontal: SPACING.xxl,
+    paddingVertical: SPACING.md,
     alignItems: 'center',
-    marginBottom: 16,
+    ...SHADOWS.glow,
   },
   buttonDisabled: {
     opacity: 0.6,
   },
   buttonText: {
-    color: '#fff',
-    fontSize: 18,
+    color: COLORS.textPrimary,
+    fontSize: FONT_SIZES.lg,
     fontWeight: '600',
   },
   infoText: {
-    fontSize: 14,
-    color: '#666',
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textMuted,
+    textAlign: 'center',
+  },
+  versionText: {
+    position: 'absolute',
+    bottom: SPACING.xl,
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.textMuted,
     textAlign: 'center',
   },
 });

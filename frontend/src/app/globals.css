@@ -2,59 +2,274 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================
+   BlockStar Cypher - Dark Midnight Theme
+   ============================================ */
+
+@layer base {
+  :root {
+    /* Background Colors */
+    --bg-primary: #000000;
+    --bg-secondary: #030308;
+    --bg-card: #06060c;
+    --bg-card-hover: #0a0a12;
+    --bg-input: #0a0a12;
+
+    /* Border Colors */
+    --border-color: #12121f;
+    --border-glow: #0066FF;
+
+    /* Text Colors */
+    --text-primary: #ffffff;
+    --text-secondary: #8a8a9a;
+    --text-muted: #4a4a5a;
+
+    /* Accent Colors - BlockStar Blue */
+    --accent-blue: #0066FF;
+    --accent-blue-light: #1a8cff;
+    --accent-blue-dark: #0052cc;
+    --accent-cyan: #00c8ff;
+
+    /* Status Colors */
+    --accent-green: #00d67f;
+    --accent-red: #ff3b5c;
+    --accent-yellow: #ffb800;
+    --accent-orange: #ff6b35;
+
+    /* Gradient Colors */
+    --gradient-start: #0066FF;
+    --gradient-mid: #0088ff;
+    --gradient-end: #00c8ff;
+
+    /* Glow Effects */
+    --glow-blue: rgba(0, 102, 255, 0.6);
+    --glow-cyan: rgba(0, 200, 255, 0.4);
+    --glow-green: rgba(0, 214, 127, 0.4);
+
+    /* Legacy primary colors for Tailwind compatibility */
+    --primary-50: 0 102 255;
+    --primary-100: 26 140 255;
+    --primary-200: 0 136 255;
+    --primary-300: 0 200 255;
+    --primary-400: 0 102 255;
+    --primary-500: 0 102 255;
+    --primary-600: 0 82 204;
+    --primary-700: 0 61 153;
+    --primary-800: 0 41 102;
+    --primary-900: 0 20 51;
+  }
+}
+
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 html,
 body {
   height: 100%;
-  overflow: hidden;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
 }
 
-@layer base {
-  :root {
-    --primary-50: 240 249 255;
-    --primary-100: 224 242 254;
-    --primary-200: 186 230 253;
-    --primary-300: 125 211 252;
-    --primary-400: 56 189 248;
-    --primary-500: 14 165 233;
-    --primary-600: 2 132 199;
-    --primary-700: 3 105 161;
-    --primary-800: 7 89 133;
-    --primary-900: 12 74 110;
-  }
+/* ============================================
+   Custom Scrollbar - Dark Theme
+   ============================================ */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
+
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-blue);
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) var(--bg-secondary);
+}
+
+/* ============================================
+   Utility Classes
+   ============================================ */
 
 @layer utilities {
   .scrollbar-hide {
     -ms-overflow-style: none;
     scrollbar-width: none;
   }
-  
+
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
+
+  /* Gradient text */
+  .text-gradient {
+    background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Glow effects */
+  .glow-blue {
+    box-shadow: 0 0 20px var(--glow-blue), 0 0 40px var(--glow-cyan);
+  }
+
+  .glow-blue-sm {
+    box-shadow: 0 0 10px var(--glow-blue);
+  }
+
+  .glow-green {
+    box-shadow: 0 0 20px var(--glow-green);
+  }
+
+  /* Glass effect */
+  .glass {
+    background: rgba(6, 6, 12, 0.8);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  /* Card hover effect */
+  .card-hover {
+    transition: all 0.3s ease;
+  }
+
+  .card-hover:hover {
+    background-color: var(--bg-card-hover);
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 30px var(--glow-blue);
+    transform: translateY(-2px);
+  }
+
+  /* Button gradient */
+  .btn-gradient {
+    background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+    transition: all 0.3s ease;
+  }
+
+  .btn-gradient:hover {
+    box-shadow: 0 0 30px var(--glow-blue);
+    transform: translateY(-1px);
+  }
+
+  /* Input focus glow */
+  .input-glow:focus {
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 3px rgba(0, 102, 255, 0.2);
+  }
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+/* ============================================
+   Animation Keyframes
+   ============================================ */
+
+@keyframes pulse-glow {
+
+  0%,
+  100% {
+    box-shadow: 0 0 20px var(--glow-blue);
+  }
+
+  50% {
+    box-shadow: 0 0 40px var(--glow-blue), 0 0 60px var(--glow-cyan);
+  }
 }
 
-::-webkit-scrollbar-track {
-  background: #f1f1f1;
+@keyframes float {
+
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-10px);
+  }
 }
 
-::-webkit-scrollbar-thumb {
-  background: #888;
-  border-radius: 3px;
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+
+  100% {
+    background-position: 200% 0;
+  }
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: #555;
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg,
+      var(--bg-card) 0%,
+      var(--bg-card-hover) 50%,
+      var(--bg-card) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* ============================================
+   Component Overrides
+   ============================================ */
+
+/* Message bubbles */
+.message-sent {
+  background: linear-gradient(135deg, var(--gradient-start), var(--gradient-mid));
+}
+
+.message-received {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+}
+
+/* Online status indicator */
+.status-online {
+  background-color: var(--accent-green);
+  box-shadow: 0 0 8px var(--glow-green);
+}
+
+.status-offline {
+  background-color: var(--text-muted);
+}
+
+/* Selection color */
+::selection {
+  background: var(--accent-blue);
+  color: var(--text-primary);
+}
+
+/* Focus outline */
+:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+/* Placeholder text */
+::placeholder {
+  color: var(--text-muted);
 }

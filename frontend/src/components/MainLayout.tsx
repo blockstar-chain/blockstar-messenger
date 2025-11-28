@@ -1,7 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAppStore } from '@/store';
 import { webSocketService } from '@/lib/websocket';
 import { webRTCService } from '@/lib/webrtc';
+import { syncFromServer } from '@/lib/syncService';
+import { db } from '@/lib/database';
 import toast, { Toaster } from 'react-hot-toast';
 import Sidebar from './Sidebar';
 import ChatArea from './ChatArea';
@@ -17,7 +19,56 @@ export default function MainLayout() {
     activeCall,
     setActiveCall,
     setCallModalOpen,
+    setConversations,
   } = useAppStore();
+  
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  // Sync data from server on startup
+  useEffect(() => {
+    if (!isAuthenticated || !currentUser) return;
+
+    const performSync = async () => {
+      setIsSyncing(true);
+      setSyncError(null);
+      
+      try {
+        console.log('🔄 Syncing data from server...');
+        const result = await syncFromServer(currentUser.walletAddress);
+        
+        if (result.success) {
+          console.log(`✅ Synced ${result.conversationsCount} conversations, ${result.messagesCount} messages`);
+          
+          // Reload conversations into store
+          const conversations = await db.conversations.toArray();
+          const sorted = conversations.sort((a, b) => b.updatedAt - a.updatedAt);
+          setConversations(sorted);
+          
+          if (result.messagesCount > 0) {
+            toast.success(`Synced ${result.messagesCount} messages`);
+          }
+        } else {
+          console.warn('⚠️ Sync failed:', result.error);
+          setSyncError(result.error || 'Sync failed');
+          // Don't show error toast - user can still use local data
+        }
+      } catch (error) {
+        console.error('Sync error:', error);
+        setSyncError(error instanceof Error ? error.message : 'Unknown error');
+      } finally {
+        setIsSyncing(false);
+      }
+    };
+
+    // Perform initial sync
+    performSync();
+    
+    // Also sync periodically (every 5 minutes)
+    const syncInterval = setInterval(performSync, 5 * 60 * 1000);
+    
+    return () => clearInterval(syncInterval);
+  }, [isAuthenticated, currentUser, setConversations]);
 
   // Setup call handlers
   useEffect(() => {
@@ -80,11 +131,17 @@ export default function MainLayout() {
 
     // Handle ICE candidates
     const unsubscribeIce = webSocketService.on('call:ice-candidate', (data: any) => {
-      const { activeCall: currentActiveCall } = useAppStore.getState();
-      console.log('ICE candidate received:', data);
-      if (currentActiveCall && data.candidate) {
-        // The candidate comes as data.candidate from the backend
-        webRTCService.addIceCandidate(currentActiveCall.id, data.candidate);
+      const { activeCall: currentActiveCall, incomingCall: currentIncomingCall } = useAppStore.getState();
+      console.log('📥 ICE candidate received:', { from: data.from, callId: data.callId, hasCandidate: !!data.candidate });
+      
+      // Determine which call this ICE candidate belongs to
+      const targetCallId = data.callId || currentActiveCall?.id || currentIncomingCall?.id;
+      
+      if (targetCallId && data.candidate) {
+        console.log('📥 Adding ICE candidate to call:', targetCallId);
+        webRTCService.addIceCandidate(targetCallId, data.candidate);
+      } else {
+        console.warn('⚠️ Could not process ICE candidate - no matching call');
       }
     });
 
@@ -98,7 +155,7 @@ export default function MainLayout() {
         console.log('MainLayout: Call IDs match, updating status to ACTIVE');
         const updatedCall = { ...currentActiveCall, status: 'active' as const };
         setActiveCall(updatedCall);
-        toast.success('🎉 Call active! Audio should be working now.');
+        toast.success('🎉 Call connected!');
         
         // Verify update
         setTimeout(() => {
@@ -107,6 +164,17 @@ export default function MainLayout() {
         }, 100);
       } else {
         console.log('MainLayout: Call IDs do not match or no active call');
+      }
+    });
+
+    // Monitor connection state for debugging
+    const unsubscribeConnectionState = webRTCService.onConnectionState((state, callId) => {
+      console.log(`🔗 Connection state for ${callId}: ${state}`);
+      
+      if (state === 'failed') {
+        toast.error('Connection failed. Try checking your network or TURN server settings.', { duration: 5000 });
+      } else if (state === 'disconnected') {
+        toast.error('Connection lost. Attempting to reconnect...', { duration: 3000 });
       }
     });
 
@@ -133,6 +201,7 @@ export default function MainLayout() {
       unsubscribeAnswer();
       unsubscribeIce();
       unsubscribeStream();
+      unsubscribeConnectionState();
       handleCallEnded();
       handleUnavailable();
     };
@@ -184,14 +253,28 @@ export default function MainLayout() {
   }
 
   return (
-    <div className="flex h-screen bg-gray-50">
+    <div className="flex h-screen bg-midnight">
       <Toaster
         position="top-right"
         toastOptions={{
           duration: 3000,
           style: {
-            background: '#363636',
+            background: '#06060c',
             color: '#fff',
+            border: '1px solid #12121f',
+            borderRadius: '12px',
+          },
+          success: {
+            iconTheme: {
+              primary: '#00d67f',
+              secondary: '#fff',
+            },
+          },
+          error: {
+            iconTheme: {
+              primary: '#ff3b5c',
+              secondary: '#fff',
+            },
           },
         }}
       />

@@ -29,12 +29,12 @@ export function generateMessageId(): string {
 export function formatTimestamp(timestamp: number): string {
   const now = Date.now();
   const diff = now - timestamp;
-
+  
   const seconds = Math.floor(diff / 1000);
   const minutes = Math.floor(seconds / 60);
   const hours = Math.floor(minutes / 60);
   const days = Math.floor(hours / 24);
-
+  
   if (seconds < 60) {
     return 'Just now';
   } else if (minutes < 60) {
@@ -96,28 +96,21 @@ export function getInitials(username: string): string {
   return name.slice(0, 2).toUpperCase();
 }
 
-export const getAvatarUrl = (name: string, colorcode: string = "0D8ABC") => {
-  return `https://ui-avatars.com/api/?name=${encodeURIComponent(
-    name
-  )}&background=${colorcode}&color=fff&size=128&rounded=true`;
-};
-
-
 /**
- * Generate random color for avatar
+ * Generate random color for avatar (theme-consistent)
  */
 export function getAvatarColor(address: string): string {
   const colors = [
-    'bg-red-500',
-    'bg-blue-500',
-    'bg-green-500',
-    'bg-yellow-500',
-    'bg-purple-500',
-    'bg-pink-500',
-    'bg-indigo-500',
-    'bg-teal-500',
+    'bg-gradient-to-br from-primary-500 to-cyan-500',
+    'bg-gradient-to-br from-primary-600 to-primary-400',
+    'bg-gradient-to-br from-cyan-500 to-primary-500',
+    'bg-gradient-to-br from-success-500 to-cyan-500',
+    'bg-gradient-to-br from-primary-500 to-success-500',
+    'bg-gradient-to-br from-cyan-600 to-cyan-400',
+    'bg-gradient-to-br from-primary-400 to-cyan-600',
+    'bg-gradient-to-br from-cyan-400 to-primary-600',
   ];
-
+  
   const index = parseInt(address.slice(2, 8), 16) % colors.length;
   return colors[index];
 }
@@ -141,11 +134,11 @@ export function downloadFile(data: Blob, filename: string): void {
  */
 export function formatFileSize(bytes: number): string {
   if (bytes === 0) return '0 Bytes';
-
+  
   const k = 1024;
   const sizes = ['Bytes', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
-
+  
   return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
 }
 
@@ -157,13 +150,13 @@ export function debounce<T extends (...args: any[]) => any>(
   wait: number
 ): (...args: Parameters<T>) => void {
   let timeout: NodeJS.Timeout;
-
+  
   return function executedFunction(...args: Parameters<T>) {
     const later = () => {
       clearTimeout(timeout);
       func(...args);
     };
-
+    
     clearTimeout(timeout);
     timeout = setTimeout(later, wait);
   };
@@ -177,7 +170,7 @@ export function throttle<T extends (...args: any[]) => any>(
   limit: number
 ): (...args: Parameters<T>) => void {
   let inThrottle: boolean;
-
+  
   return function executedFunction(...args: Parameters<T>) {
     if (!inThrottle) {
       func(...args);
