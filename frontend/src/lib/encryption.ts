@@ -1,19 +1,21 @@
-import { SignalKeys } from '@/types';
-import { dbHelpers } from './database';
+import { x25519 } from '@noble/curves/ed25519';
 
 /**
- * End-to-End Encryption Service with Wallet-Derived Keys
+ * End-to-End Encryption Service with Wallet-Derived Keys (X25519)
  * 
- * Keys are derived from wallet signature, so:
- * - Same wallet = same keys on ANY device
- * - User can decrypt old messages after clearing cache
- * - Server only stores encrypted content (can't read messages)
+ * FIXED: Now uses truly deterministic key derivation!
  * 
- * Flow:
- * 1. User connects wallet
- * 2. We ask wallet to sign a deterministic message
- * 3. Signature is used to derive encryption keys
- * 4. Keys are the same on every device with same wallet
+ * How it works:
+ * 1. User connects wallet and signs a fixed message
+ * 2. Signature is hashed to get 32 bytes (private key seed)
+ * 3. X25519 derives public key from private key deterministically
+ * 4. Same wallet = same signature = same keys on ANY device!
+ * 
+ * Security model:
+ * - Private key never leaves the device
+ * - Server only stores public keys
+ * - Messages encrypted with ECDH shared secret + AES-GCM
+ * - Same wallet can decrypt on any device (re-derive keys)
  */
 
 // API base URL
@@ -26,7 +28,7 @@ const NEGATIVE_CACHE_TTL = 30 * 1000; // 30 seconds for "not found" results
 
 // The message we ask users to sign to derive keys
 // This MUST stay constant - changing it would invalidate all keys!
-const KEY_DERIVATION_MESSAGE = 'BlockStar Cypher - Secure Messaging Key Derivation v1\n\nSigning this message generates your encryption keys.\nThis does NOT cost any gas or make any transactions.';
+const KEY_DERIVATION_MESSAGE = 'BlockStar Messenger - Secure Key Derivation v2\n\nSigning this message generates your encryption keys.\nThis does NOT cost any gas or make any transactions.\n\nYour keys will be the same on all your devices.';
 
 // Browser-compatible base64 utilities
 function uint8ArrayToBase64(array: Uint8Array): string {
@@ -57,7 +59,8 @@ function hexToUint8Array(hex: string): Uint8Array {
 }
 
 export class EncryptionService {
-  private keyPair: CryptoKeyPair | null = null;
+  private privateKey: Uint8Array | null = null;
+  private publicKey: Uint8Array | null = null;
   private userAddress: string | null = null;
   private publicKeyBase64: string | null = null;
   private signMessageFn: ((message: string) => Promise<string>) | null = null;
@@ -80,35 +83,38 @@ export class EncryptionService {
       this.signMessageFn = signMessage;
     }
 
-    // Check if we have cached keys in database
-    const existingKeys = await dbHelpers.getSignalKeys(this.userAddress);
+    // Check if we have cached keys in localStorage (faster startup)
+    const cachedPrivateKey = localStorage.getItem(`blockstar_x25519_priv_${this.userAddress}`);
+    const cachedPublicKey = localStorage.getItem(`blockstar_x25519_pub_${this.userAddress}`);
     
-    if (existingKeys) {
+    if (cachedPrivateKey && cachedPublicKey) {
       try {
-        // Import existing keys from local cache
-        console.log('🔐 Loading cached encryption keys for', this.userAddress);
-        this.keyPair = await this.importKeyPair(existingKeys);
-        this.publicKeyBase64 = await this.getPublicKey();
-        console.log('🔐 Successfully loaded cached keys, public key:', this.publicKeyBase64?.substring(0, 20) + '...');
-      } catch (importError) {
-        console.error('Failed to import existing keys, they may be corrupted:', importError);
-        // Keys are corrupted - clear them and regenerate
-        localStorage.removeItem(`blockstar_keys_${this.userAddress}`);
-        if (this.signMessageFn) {
-          console.log('🔐 Regenerating keys from wallet signature...');
-          await this.deriveKeysFromWallet();
+        this.privateKey = base64ToUint8Array(cachedPrivateKey);
+        this.publicKey = base64ToUint8Array(cachedPublicKey);
+        this.publicKeyBase64 = cachedPublicKey;
+        
+        // Verify the keys are valid by checking public key derivation
+        const derivedPub = x25519.getPublicKey(this.privateKey);
+        if (uint8ArrayToBase64(derivedPub) === cachedPublicKey) {
+          console.log('🔐 Loaded cached X25519 keys for', this.userAddress);
+          await this.registerPublicKey();
+          return;
         } else {
-          await this.generateRandomKeyPair();
+          console.warn('⚠️ Cached keys invalid, re-deriving...');
         }
+      } catch (error) {
+        console.warn('⚠️ Failed to load cached keys:', error);
       }
-    } else if (this.signMessageFn) {
-      // Derive new keys from wallet signature
-      console.log('🔐 No cached keys found, deriving from wallet signature...');
+    }
+
+    // Derive new keys from wallet signature
+    if (this.signMessageFn) {
+      console.log('🔐 Deriving X25519 keys from wallet signature...');
       await this.deriveKeysFromWallet();
     } else {
       // Fallback: generate random keys (won't sync across devices)
       console.warn('⚠️ No sign function available, generating random keys (won\'t sync across devices)');
-      await this.generateRandomKeyPair();
+      await this.generateRandomKeys();
     }
 
     // Register public key with server
@@ -116,8 +122,13 @@ export class EncryptionService {
   }
 
   /**
-   * Derive encryption keys from wallet signature
-   * Same wallet + same message = same signature = same keys
+   * Derive DETERMINISTIC encryption keys from wallet signature
+   * 
+   * This is the key fix! The same wallet will always produce the same keys:
+   * 1. Sign a fixed message with wallet
+   * 2. Hash the signature to get 32 bytes
+   * 3. Use those 32 bytes as X25519 private key
+   * 4. Derive public key deterministically
    */
   private async deriveKeysFromWallet(): Promise<void> {
     if (!this.signMessageFn || !this.userAddress) {
@@ -126,68 +137,51 @@ export class EncryptionService {
 
     try {
       // Ask wallet to sign the derivation message
+      // Same wallet + same message = same signature = same keys!
       const signature = await this.signMessageFn(KEY_DERIVATION_MESSAGE);
       
-      // Use signature as seed for key derivation
+      // Convert signature to bytes
       const signatureBytes = hexToUint8Array(signature);
       
-      // Hash the signature to get consistent 32 bytes for key material
-      // Create a copy to ensure proper ArrayBuffer type
-      const signatureCopy = new Uint8Array(signatureBytes);
-      const keyMaterial = await crypto.subtle.digest('SHA-256', signatureCopy);
+      // Hash the signature to get exactly 32 bytes for X25519 private key
+      // Using SHA-256 ensures we always get 32 bytes regardless of signature format
+      const hashBuffer = await crypto.subtle.digest('SHA-256', signatureBytes);
+      this.privateKey = new Uint8Array(hashBuffer);
       
-      // Import as raw key material for HKDF
-      const baseKey = await crypto.subtle.importKey(
-        'raw',
-        keyMaterial,
-        'HKDF',
-        false,
-        ['deriveBits']
-      );
-
-      // Derive 32 bytes for the private key scalar
-      const derivedBits = await crypto.subtle.deriveBits(
-        {
-          name: 'HKDF',
-          hash: 'SHA-256',
-          salt: new TextEncoder().encode('blockstar-cypher-ecdh-key'),
-          info: new TextEncoder().encode(this.userAddress),
-        },
-        baseKey,
-        256
-      );
-
-      // For ECDH P-256, we need to generate a proper key pair
-      // We'll use the derived bits to seed a deterministic key generation
-      // by using them as the private key d value (with proper reduction)
+      // X25519 deterministically derives public key from private key
+      // This is the magic - same private key = same public key, always!
+      this.publicKey = x25519.getPublicKey(this.privateKey);
+      this.publicKeyBase64 = uint8ArrayToBase64(this.publicKey);
       
-      // Generate a key pair and we'll use a workaround for deterministic keys
-      // In production, you might use a library like noble-secp256k1 for true determinism
+      // Cache keys locally for faster startup
+      localStorage.setItem(`blockstar_x25519_priv_${this.userAddress}`, uint8ArrayToBase64(this.privateKey));
+      localStorage.setItem(`blockstar_x25519_pub_${this.userAddress}`, this.publicKeyBase64);
       
-      // For now, we generate keys and save them locally
-      // The key insight: we ALSO store the signature-derived seed
-      // So on a new device, we can re-derive the same seed
-      this.keyPair = await crypto.subtle.generateKey(
-        {
-          name: 'ECDH',
-          namedCurve: 'P-256',
-        },
-        true,
-        ['deriveKey', 'deriveBits']
-      );
-
-      // Export and save keys (cached locally)
-      await this.saveKeyPair();
-      
-      // Also save the derivation signature for verification
-      localStorage.setItem(`blockstar-key-sig-${this.userAddress}`, signature);
-
-      console.log('🔐 Encryption keys derived from wallet signature');
+      console.log('🔐 X25519 keys derived from wallet signature');
+      console.log('🔑 Public key:', this.publicKeyBase64.substring(0, 20) + '...');
     } catch (error) {
       console.error('Failed to derive keys from wallet:', error);
       // Fall back to random keys
-      await this.generateRandomKeyPair();
+      await this.generateRandomKeys();
     }
+  }
+
+  /**
+   * Generate random keys (fallback, won't sync across devices)
+   */
+  private async generateRandomKeys(): Promise<void> {
+    // Generate random 32 bytes for private key
+    this.privateKey = crypto.getRandomValues(new Uint8Array(32));
+    this.publicKey = x25519.getPublicKey(this.privateKey);
+    this.publicKeyBase64 = uint8ArrayToBase64(this.publicKey);
+    
+    // Cache locally
+    if (this.userAddress) {
+      localStorage.setItem(`blockstar_x25519_priv_${this.userAddress}`, uint8ArrayToBase64(this.privateKey));
+      localStorage.setItem(`blockstar_x25519_pub_${this.userAddress}`, this.publicKeyBase64);
+    }
+    
+    console.log('🔐 Generated random X25519 keys (device-specific)');
   }
 
   /**
@@ -199,7 +193,12 @@ export class EncryptionService {
     }
 
     try {
-      console.log('🔐 Re-deriving encryption keys...');
+      console.log('🔐 Re-deriving X25519 keys...');
+      
+      // Clear cached keys first
+      localStorage.removeItem(`blockstar_x25519_priv_${this.userAddress}`);
+      localStorage.removeItem(`blockstar_x25519_pub_${this.userAddress}`);
+      
       await this.deriveKeysFromWallet();
       await this.registerPublicKey();
       return true;
@@ -298,135 +297,55 @@ export class EncryptionService {
   /**
    * Fetch multiple public keys at once
    */
-  async fetchPublicKeys(addresses: string[]): Promise<Map<string, string>> {
-    const results = new Map<string, string>();
-    const uncached: string[] = [];
+  async fetchPublicKeys(walletAddresses: string[]): Promise<Map<string, string | null>> {
+    const results = new Map<string, string | null>();
+    const toFetch: string[] = [];
 
     // Check cache first
-    for (const addr of addresses) {
-      const address = addr.toLowerCase();
-      const cached = publicKeyCache.get(address);
-      if (cached && cached.key && Date.now() - cached.timestamp < CACHE_TTL) {
-        results.set(address, cached.key);
-      } else if (!cached || Date.now() - cached.timestamp >= NEGATIVE_CACHE_TTL) {
-        // Not cached or negative cache expired
-        uncached.push(address);
+    for (const address of walletAddresses) {
+      const normalized = address.toLowerCase();
+      const cached = publicKeyCache.get(normalized);
+      if (cached && Date.now() - cached.timestamp < (cached.key ? CACHE_TTL : NEGATIVE_CACHE_TTL)) {
+        results.set(normalized, cached.key);
+      } else {
+        toFetch.push(normalized);
       }
-      // If cached.key is null and negative cache hasn't expired, skip this address
     }
 
-    // Fetch uncached keys from server
-    if (uncached.length > 0) {
+    // Fetch missing keys
+    if (toFetch.length > 0) {
       try {
         const response = await fetch(`${API_URL}/api/keys/batch`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ addresses: uncached }),
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ addresses: toFetch }),
         });
 
         if (response.ok) {
           const data = await response.json();
-          for (const [address, info] of Object.entries(data)) {
-            const { publicKey } = info as any;
-            if (publicKey) {
-              results.set(address, publicKey);
-              publicKeyCache.set(address, {
-                key: publicKey,
-                timestamp: Date.now(),
-              });
-            }
+          for (const user of data.users || []) {
+            const addr = user.walletAddress.toLowerCase();
+            publicKeyCache.set(addr, {
+              key: user.publicKey || null,
+              timestamp: Date.now(),
+            });
+            results.set(addr, user.publicKey || null);
           }
         }
       } catch (error) {
-        console.error('Error fetching public keys:', error);
+        console.error('Error fetching batch keys:', error);
+      }
+
+      // Mark unfetched as null
+      for (const addr of toFetch) {
+        if (!results.has(addr)) {
+          publicKeyCache.set(addr, { key: null, timestamp: Date.now() });
+          results.set(addr, null);
+        }
       }
     }
 
     return results;
-  }
-
-  /**
-   * Generate random encryption keys (fallback)
-   */
-  private async generateRandomKeyPair(): Promise<void> {
-    this.keyPair = await crypto.subtle.generateKey(
-      {
-        name: 'ECDH',
-        namedCurve: 'P-256',
-      },
-      true,
-      ['deriveKey', 'deriveBits']
-    );
-
-    await this.saveKeyPair();
-  }
-
-  /**
-   * Save key pair to local database
-   */
-  private async saveKeyPair(): Promise<void> {
-    if (!this.keyPair || !this.userAddress) return;
-
-    const publicKeyRaw = await crypto.subtle.exportKey('raw', this.keyPair.publicKey);
-    const privateKeyJwk = await crypto.subtle.exportKey('jwk', this.keyPair.privateKey);
-
-    this.publicKeyBase64 = uint8ArrayToBase64(new Uint8Array(publicKeyRaw));
-
-    const privateKeyString = JSON.stringify(privateKeyJwk);
-    const privateKeyBytes = new TextEncoder().encode(privateKeyString);
-
-    const signalKeys: SignalKeys = {
-      identityKeyPair: {
-        pubKey: new Uint8Array(publicKeyRaw),
-        privKey: privateKeyBytes,
-      },
-      registrationId: Math.floor(Math.random() * 16383) + 1,
-      preKeys: [],
-      signedPreKey: {
-        keyId: 1,
-        keyPair: {
-          pubKey: new Uint8Array(publicKeyRaw),
-          privKey: privateKeyBytes,
-        },
-        signature: new Uint8Array(32),
-      },
-    };
-
-    await dbHelpers.saveSignalKeys(this.userAddress, signalKeys);
-  }
-
-  /**
-   * Import existing key pair from database
-   */
-  private async importKeyPair(keys: SignalKeys): Promise<CryptoKeyPair> {
-    const privateKeyString = new TextDecoder().decode(keys.identityKeyPair.privKey);
-    const privateKeyJwk = JSON.parse(privateKeyString);
-
-    const privateKey = await crypto.subtle.importKey(
-      'jwk',
-      privateKeyJwk,
-      {
-        name: 'ECDH',
-        namedCurve: 'P-256',
-      },
-      true,
-      ['deriveKey', 'deriveBits']
-    );
-
-    const publicKey = await crypto.subtle.importKey(
-      'raw',
-      new Uint8Array(keys.identityKeyPair.pubKey),
-      {
-        name: 'ECDH',
-        namedCurve: 'P-256',
-      },
-      true,
-      []
-    );
-
-    return { publicKey, privateKey };
   }
 
   /**
@@ -437,12 +356,11 @@ export class EncryptionService {
       return this.publicKeyBase64;
     }
 
-    if (!this.keyPair) {
+    if (!this.publicKey) {
       throw new Error('Encryption not initialized');
     }
 
-    const publicKeyRaw = await crypto.subtle.exportKey('raw', this.keyPair.publicKey);
-    this.publicKeyBase64 = uint8ArrayToBase64(new Uint8Array(publicKeyRaw));
+    this.publicKeyBase64 = uint8ArrayToBase64(this.publicKey);
     return this.publicKeyBase64;
   }
 
@@ -512,15 +430,8 @@ export class EncryptionService {
       console.warn('Decryption failed for message. This usually means encryption keys were regenerated.');
       console.warn('Error:', error?.message || error);
       
-      // Check if it's specifically an AES-GCM authentication failure (key mismatch)
-      const isKeyMismatch = error?.message?.includes('OperationError') || 
-                           error?.name === 'OperationError' ||
-                           error?.message?.includes('decrypt');
-      
       return { 
-        decrypted: isKeyMismatch 
-          ? '🔒 [Cannot decrypt - keys changed]'
-          : '🔒 [Decryption failed]', 
+        decrypted: '🔒 [Cannot decrypt - keys changed]', 
         wasEncrypted: true,
         decryptionFailed: true 
       };
@@ -528,56 +439,59 @@ export class EncryptionService {
   }
 
   /**
-   * Encrypt a message for a recipient
+   * Encrypt a message for a recipient using X25519 + AES-GCM
+   * 
+   * Process:
+   * 1. Compute shared secret using X25519 ECDH
+   * 2. Derive AES key from shared secret using HKDF
+   * 3. Encrypt message with AES-GCM
+   * 4. Prepend IV to ciphertext
    */
   async encryptMessage(
     message: string,
     recipientPublicKey: string
   ): Promise<string> {
-    if (!this.keyPair) {
+    if (!this.privateKey) {
       throw new Error('Encryption not initialized');
     }
 
     try {
-      // Import recipient's public key
-      const recipientKeyRaw = base64ToUint8Array(recipientPublicKey);
-      const recipientKey = await crypto.subtle.importKey(
+      // Decode recipient's public key
+      const recipientPubBytes = base64ToUint8Array(recipientPublicKey);
+      
+      // Compute X25519 shared secret
+      const sharedSecret = x25519.getSharedSecret(this.privateKey, recipientPubBytes);
+      
+      // Derive AES-256 key from shared secret using HKDF
+      const keyMaterial = await crypto.subtle.importKey(
         'raw',
-        new Uint8Array(recipientKeyRaw),
-        {
-          name: 'ECDH',
-          namedCurve: 'P-256',
-        },
+        sharedSecret,
+        'HKDF',
         false,
-        []
+        ['deriveKey']
       );
-
-      // Derive shared secret
-      const sharedSecret = await crypto.subtle.deriveKey(
+      
+      const aesKey = await crypto.subtle.deriveKey(
         {
-          name: 'ECDH',
-          public: recipientKey,
+          name: 'HKDF',
+          hash: 'SHA-256',
+          salt: new TextEncoder().encode('blockstar-e2e-v2'),
+          info: new TextEncoder().encode('aes-gcm-key'),
         },
-        this.keyPair.privateKey,
-        {
-          name: 'AES-GCM',
-          length: 256,
-        },
+        keyMaterial,
+        { name: 'AES-GCM', length: 256 },
         false,
         ['encrypt']
       );
 
-      // Generate IV
+      // Generate random IV
       const iv = crypto.getRandomValues(new Uint8Array(12));
 
       // Encrypt message
       const encoder = new TextEncoder();
       const encrypted = await crypto.subtle.encrypt(
-        {
-          name: 'AES-GCM',
-          iv: iv,
-        },
-        sharedSecret,
+        { name: 'AES-GCM', iv },
+        aesKey,
         encoder.encode(message)
       );
 
@@ -594,41 +508,41 @@ export class EncryptionService {
   }
 
   /**
-   * Decrypt a message from a sender
+   * Decrypt a message from a sender using X25519 + AES-GCM
    */
   async decryptMessage(
     encryptedMessage: string,
     senderPublicKey: string
   ): Promise<string> {
-    if (!this.keyPair) {
+    if (!this.privateKey) {
       throw new Error('Encryption not initialized');
     }
 
     try {
-      // Import sender's public key
-      const senderKeyRaw = base64ToUint8Array(senderPublicKey);
-      const senderKey = await crypto.subtle.importKey(
+      // Decode sender's public key
+      const senderPubBytes = base64ToUint8Array(senderPublicKey);
+      
+      // Compute X25519 shared secret
+      const sharedSecret = x25519.getSharedSecret(this.privateKey, senderPubBytes);
+      
+      // Derive AES-256 key from shared secret using HKDF
+      const keyMaterial = await crypto.subtle.importKey(
         'raw',
-        new Uint8Array(senderKeyRaw),
-        {
-          name: 'ECDH',
-          namedCurve: 'P-256',
-        },
+        sharedSecret,
+        'HKDF',
         false,
-        []
+        ['deriveKey']
       );
-
-      // Derive shared secret
-      const sharedSecret = await crypto.subtle.deriveKey(
+      
+      const aesKey = await crypto.subtle.deriveKey(
         {
-          name: 'ECDH',
-          public: senderKey,
+          name: 'HKDF',
+          hash: 'SHA-256',
+          salt: new TextEncoder().encode('blockstar-e2e-v2'),
+          info: new TextEncoder().encode('aes-gcm-key'),
         },
-        this.keyPair.privateKey,
-        {
-          name: 'AES-GCM',
-          length: 256,
-        },
+        keyMaterial,
+        { name: 'AES-GCM', length: 256 },
         false,
         ['decrypt']
       );
@@ -640,11 +554,8 @@ export class EncryptionService {
 
       // Decrypt message
       const decrypted = await crypto.subtle.decrypt(
-        {
-          name: 'AES-GCM',
-          iv: iv,
-        },
-        sharedSecret,
+        { name: 'AES-GCM', iv },
+        aesKey,
         encrypted
       );
 
@@ -660,7 +571,7 @@ export class EncryptionService {
    * Check if encryption is ready
    */
   isReady(): boolean {
-    return this.keyPair !== null && this.userAddress !== null;
+    return this.privateKey !== null && this.userAddress !== null;
   }
 
   /**
@@ -671,12 +582,31 @@ export class EncryptionService {
   }
 
   /**
-   * Clean up encryption keys
+   * Clean up encryption keys from memory (not storage)
    */
   destroy(): void {
-    this.keyPair = null;
+    // Zero out private key in memory for security
+    if (this.privateKey) {
+      this.privateKey.fill(0);
+    }
+    this.privateKey = null;
+    this.publicKey = null;
     this.userAddress = null;
     this.publicKeyBase64 = null;
+  }
+
+  /**
+   * Clear all stored keys for a user (for logout/reset)
+   */
+  clearStoredKeys(): void {
+    if (this.userAddress) {
+      localStorage.removeItem(`blockstar_x25519_priv_${this.userAddress}`);
+      localStorage.removeItem(`blockstar_x25519_pub_${this.userAddress}`);
+      // Also clear old format keys
+      localStorage.removeItem(`blockstar_keys_${this.userAddress}`);
+      localStorage.removeItem(`blockstar-key-sig-${this.userAddress}`);
+    }
+    this.destroy();
   }
 }
 

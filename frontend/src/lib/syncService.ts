@@ -3,7 +3,7 @@
 // Fetches data from MongoDB backend via API
 // Messages are stored ENCRYPTED on server, decrypted locally
 
-import { dbHelpers } from './database';
+import { db, dbHelpers } from './database';
 import { encryptionService } from './encryption';
 import { Message, Conversation } from '@/types';
 
@@ -132,7 +132,8 @@ export async function syncFromServer(walletAddress: string): Promise<SyncResult>
         };
       }
       
-      // Not storing conversations locally - data comes from API
+      // Save conversation to local cache so it's available in db.conversations.toArray()
+      await db.conversations.put(conversation);
     }
     
     console.log(`✅ Sync complete: ${data.conversations.length} conversations, ${messagesCount} messages (decrypted)`);

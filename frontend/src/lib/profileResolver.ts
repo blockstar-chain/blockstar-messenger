@@ -5,6 +5,9 @@
 const API_BASE = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
 const RESOLVER_BASE = 'https://domains.blockstar.site';
 
+// LocalStorage key for persisting wallet->profile mappings
+const WALLET_PROFILE_CACHE_KEY = 'blockstar_wallet_profiles';
+
 // Profile data from BlockStar Domains smart contract
 export interface BlockStarProfile {
   username: string;           // e.g., "blockstar" or "sub.blockstar"
@@ -21,9 +24,144 @@ export interface BlockStarProfile {
   resolvedAt: number;         // Timestamp when resolved
 }
 
-// Local cache for profiles
-const profileCache = new Map<string, { profile: BlockStarProfile; expires: number }>();
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+interface CachedProfile {
+  profile: BlockStarProfile;
+  expires: number;
+}
+
+// Local cache for profiles by username (memory only)
+const profileCache = new Map<string, CachedProfile>();
+// Additional cache by wallet address for reverse lookups (memory + localStorage)
+const walletProfileCache = new Map<string, CachedProfile>();
+const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours for localStorage persistence
+
+/**
+ * Load wallet profile cache from localStorage on module init
+ */
+function loadCacheFromStorage(): void {
+  if (typeof window === 'undefined') return;
+  
+  try {
+    const stored = localStorage.getItem(WALLET_PROFILE_CACHE_KEY);
+    if (stored) {
+      const data: Record<string, CachedProfile> = JSON.parse(stored);
+      const now = Date.now();
+      
+      for (const [wallet, cached] of Object.entries(data)) {
+        // Only load non-expired entries
+        if (cached.expires > now) {
+          walletProfileCache.set(wallet.toLowerCase(), cached);
+          // Also populate username cache
+          if (cached.profile.username) {
+            profileCache.set(cached.profile.username.toLowerCase(), cached);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error loading profile cache from storage:', error);
+  }
+}
+
+/**
+ * Save wallet profile cache to localStorage
+ */
+function saveCacheToStorage(): void {
+  if (typeof window === 'undefined') return;
+  
+  try {
+    const data: Record<string, CachedProfile> = {};
+    const now = Date.now();
+    
+    walletProfileCache.forEach((cached, wallet) => {
+      // Only save non-expired entries
+      if (cached.expires > now) {
+        data[wallet] = cached;
+      }
+    });
+    
+    localStorage.setItem(WALLET_PROFILE_CACHE_KEY, JSON.stringify(data));
+  } catch (error) {
+    console.error('Error saving profile cache to storage:', error);
+  }
+}
+
+// Load cache from localStorage on module initialization
+loadCacheFromStorage();
+
+/**
+ * Cache a profile by both username and wallet address
+ */
+function cacheProfile(profile: BlockStarProfile): void {
+  const expires = Date.now() + CACHE_TTL;
+  
+  // Cache by username (memory only)
+  if (profile.username) {
+    profileCache.set(profile.username.toLowerCase(), { profile, expires });
+  }
+  
+  // Cache by wallet address for reverse lookups (memory + localStorage)
+  if (profile.walletAddress) {
+    walletProfileCache.set(profile.walletAddress.toLowerCase(), { profile, expires });
+    // Persist to localStorage
+    saveCacheToStorage();
+  }
+}
+
+/**
+ * Get profile by wallet address from cache
+ */
+export function getProfileByWallet(walletAddress: string): BlockStarProfile | null {
+  const cached = walletProfileCache.get(walletAddress.toLowerCase());
+  if (cached && cached.expires > Date.now()) {
+    return cached.profile;
+  }
+  return null;
+}
+
+/**
+ * Manually cache a profile by wallet address
+ * Use this when you've already fetched a profile and want to make it available globally
+ */
+export function cacheProfileByWallet(profile: BlockStarProfile): void {
+  if (!profile.walletAddress) return;
+  
+  const expires = Date.now() + CACHE_TTL;
+  const cached = { profile, expires };
+  
+  walletProfileCache.set(profile.walletAddress.toLowerCase(), cached);
+  
+  // Also cache by username
+  if (profile.username) {
+    profileCache.set(profile.username.toLowerCase(), cached);
+  }
+  
+  // Persist to localStorage
+  saveCacheToStorage();
+  
+  console.log(`📋 Cached profile by wallet: ${profile.username || profile.walletAddress}`);
+}
+
+/**
+ * Clear expired entries from cache
+ */
+export function clearExpiredProfiles(): void {
+  const now = Date.now();
+  
+  walletProfileCache.forEach((cached, wallet) => {
+    if (cached.expires <= now) {
+      walletProfileCache.delete(wallet);
+    }
+  });
+  
+  profileCache.forEach((cached, username) => {
+    if (cached.expires <= now) {
+      profileCache.delete(username);
+    }
+  });
+  
+  saveCacheToStorage();
+}
 
 /**
  * Resolve NFT domain profile by username
@@ -31,17 +169,26 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 export async function resolveProfile(username: string): Promise<BlockStarProfile | null> {
   const cacheKey = username.toLowerCase();
   
+  console.log(`🔍 [ProfileResolver] Resolving: "${username}" (cacheKey: "${cacheKey}")`);
+  
   // Check local cache first
   const cached = profileCache.get(cacheKey);
   if (cached && cached.expires > Date.now()) {
+    console.log(`📋 [ProfileResolver] Cache hit for: ${username}`);
     return cached.profile;
   }
   
   try {
-    const response = await fetch(`${API_BASE}/api/profile/resolve/${encodeURIComponent(username)}`);
+    const url = `${API_BASE}/api/profile/resolve/${encodeURIComponent(username)}`;
+    console.log(`🌐 [ProfileResolver] Fetching: ${url}`);
+    
+    const response = await fetch(url);
+    
+    console.log(`📥 [ProfileResolver] Response status: ${response.status}`);
     
     if (!response.ok) {
       if (response.status === 404) {
+        console.log(`❌ [ProfileResolver] Not found: ${username}`);
         return null;
       }
       throw new Error(`HTTP ${response.status}`);
@@ -49,12 +196,11 @@ export async function resolveProfile(username: string): Promise<BlockStarProfile
     
     const data = await response.json();
     
+    console.log(`📦 [ProfileResolver] Response data:`, data.success ? 'success' : 'failed', data.profile?.walletAddress ? `wallet: ${data.profile.walletAddress}` : 'no wallet');
+    
     if (data.success && data.profile) {
-      // Cache locally
-      profileCache.set(cacheKey, {
-        profile: data.profile,
-        expires: Date.now() + CACHE_TTL,
-      });
+      // Cache by both username and wallet address
+      cacheProfile(data.profile);
       return data.profile;
     }
     
@@ -185,4 +331,5 @@ export default {
   formatUsername,
   clearProfileCache,
   getCachedProfile,
+  cacheProfileByWallet,
 };

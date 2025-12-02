@@ -6,11 +6,15 @@ import { webRTCService } from '@/lib/webrtc';
 import { encryptionService } from '@/lib/encryption';
 import { voiceMessageService } from '@/lib/voice-message-service';
 import { Message } from '@/types';
-import { Send, Phone, Video, MoreVertical, Menu, Paperclip, Mic, MicOff, Lock, Search, X, Bell, BellOff, Smile, Check, CheckCheck, Trash2, Shield, MessageSquare, Users, RefreshCw } from 'lucide-react';
+import { Send, Phone, Video, MoreVertical, Menu, Paperclip, Mic, MicOff, Lock, LockOpen, Search, X, Bell, BellOff, Smile, Check, CheckCheck, Trash2, Shield, ShieldAlert, MessageSquare, Users, RefreshCw, Settings, UserPlus } from 'lucide-react';
 import { generateMessageId, generateConversationId, formatMessageTime, truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
-import { resolveProfile, type BlockStarProfile } from '@/lib/profileResolver';
+import { resolveProfile, getProfileByWallet, type BlockStarProfile } from '@/lib/profileResolver';
 import toast from 'react-hot-toast';
 import EmojiPicker from './EmojiPicker';
+import GroupSettingsModal from './GroupSettingsModal';
+import UserProfileModal from './UserProfileModal';
+import { addToContacts, isContact } from './ContactsSection';
+import { isConversationDeleted, removeFromDeletedConversations } from './Sidebar';
 
 // Store for decrypted message content (in-memory + localStorage cache)
 const decryptedContentCache = new Map<string, string>();
@@ -124,6 +128,11 @@ export default function ChatArea() {
   const [contactProfile, setContactProfile] = useState<BlockStarProfile | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
+  const [showGroupSettings, setShowGroupSettings] = useState(false);
+  const [memberProfiles, setMemberProfiles] = useState<Map<string, BlockStarProfile | null>>(new Map());
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [isUserContact, setIsUserContact] = useState(false);
+  const [encryptionStatus, setEncryptionStatus] = useState<'encrypted' | 'unencrypted' | 'checking'>('checking');
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -147,6 +156,17 @@ export default function ChatArea() {
     (p) => p.toLowerCase() !== currentUser?.walletAddress.toLowerCase()
   )?.toLowerCase() : null;
 
+  // Display profile - check cache as fallback if state is null
+  // This ensures we show @name even if the state wasn't updated when cache was populated
+  // Adding conversations.length triggers re-check when new conversations (with cached profiles) are added
+  const displayProfile = React.useMemo(() => {
+    if (contactProfile) return contactProfile;
+    if (otherParticipant) {
+      return getProfileByWallet(otherParticipant) || null;
+    }
+    return null;
+  }, [contactProfile, otherParticipant, conversations.length]);
+
   const getStatus = (address: string) => {
     const status = userStatuses.get(address.toLowerCase());
     return status || 'offline';
@@ -163,6 +183,15 @@ export default function ChatArea() {
       }
     };
   }, [activeConversationId, isRecording]);
+
+  // Reset unread count when conversation is opened
+  useEffect(() => {
+    if (activeConversationId && activeConversation && activeConversation.unreadCount > 0) {
+      // Reset unread count in store and database
+      useAppStore.getState().updateConversation(activeConversationId, { unreadCount: 0 });
+      db.conversations.update(activeConversationId, { unreadCount: 0 }).catch(console.error);
+    }
+  }, [activeConversationId]);
 
   // Fetch user status
   useEffect(() => {
@@ -199,10 +228,22 @@ export default function ChatArea() {
     const loadContactProfile = async () => {
       if (!otherParticipant) {
         setContactProfile(null);
+        setIsUserContact(false);
         return;
       }
       
+      // Check if this user is in contacts
+      setIsUserContact(isContact(otherParticipant));
+      
       try {
+        // First check local wallet cache (populated when @name was resolved)
+        const cachedProfile = getProfileByWallet(otherParticipant);
+        if (cachedProfile) {
+          setContactProfile(cachedProfile);
+          return;
+        }
+        
+        // Try to resolve by looking up if they have an NFT name in our database
         const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
         const response = await fetch(`${API_URL}/api/profile/${otherParticipant}`);
         
@@ -223,6 +264,114 @@ export default function ChatArea() {
     
     loadContactProfile();
   }, [otherParticipant]);
+
+  // Check encryption status for direct chats and groups
+  useEffect(() => {
+    const checkEncryptionStatus = async () => {
+      if (isGroupChat) {
+        // Group chats: Check if we have keys for any members
+        setEncryptionStatus('checking');
+        
+        const participants = activeConversation?.participants || [];
+        let hasAnyKey = false;
+        
+        for (const participant of participants) {
+          if (participant.toLowerCase() === currentUser?.walletAddress.toLowerCase()) continue;
+          
+          try {
+            const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
+            const response = await fetch(`${API_URL}/api/keys/${participant.toLowerCase()}`);
+            if (response.ok) {
+              const data = await response.json();
+              if (data.success && data.publicKey) {
+                hasAnyKey = true;
+                break; // At least one member has encryption key
+              }
+            }
+          } catch (error) {
+            // Continue checking other members
+          }
+        }
+        
+        setEncryptionStatus(hasAnyKey ? 'encrypted' : 'unencrypted');
+        return;
+      }
+      
+      if (!otherParticipant) {
+        setEncryptionStatus('checking');
+        return;
+      }
+      
+      setEncryptionStatus('checking');
+      
+      try {
+        const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
+        const response = await fetch(`${API_URL}/api/keys/${otherParticipant}`);
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.publicKey) {
+            setEncryptionStatus('encrypted');
+          } else {
+            setEncryptionStatus('unencrypted');
+          }
+        } else {
+          setEncryptionStatus('unencrypted');
+        }
+      } catch (error) {
+        console.error('Error checking encryption status:', error);
+        setEncryptionStatus('unencrypted');
+      }
+    };
+    
+    checkEncryptionStatus();
+  }, [otherParticipant, isGroupChat]);
+
+  // Load member profiles for group chats
+  useEffect(() => {
+    const loadMemberProfiles = async () => {
+      if (!isGroupChat || !activeConversation) return;
+      
+      const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
+      const newProfiles = new Map<string, BlockStarProfile | null>();
+      
+      for (const participant of activeConversation.participants) {
+        const normalizedAddress = participant.toLowerCase();
+        
+        // FIRST check local wallet cache (may have been populated since last load)
+        const cachedProfile = getProfileByWallet(normalizedAddress);
+        if (cachedProfile) {
+          newProfiles.set(normalizedAddress, cachedProfile);
+          continue;
+        }
+        
+        // Then check if already loaded (and no cache available)
+        if (memberProfiles.has(normalizedAddress)) {
+          newProfiles.set(normalizedAddress, memberProfiles.get(normalizedAddress) || null);
+          continue;
+        }
+        
+        try {
+          const response = await fetch(`${API_URL}/api/profile/${normalizedAddress}`);
+          if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.profile?.nftName) {
+              const profile = await resolveProfile(data.profile.nftName);
+              newProfiles.set(normalizedAddress, profile);
+              continue;
+            }
+          }
+          newProfiles.set(normalizedAddress, null);
+        } catch (error) {
+          newProfiles.set(normalizedAddress, null);
+        }
+      }
+      
+      setMemberProfiles(newProfiles);
+    };
+    
+    loadMemberProfiles();
+  }, [isGroupChat, activeConversation?.id, activeConversation?.participants.length]);
 
   useEffect(() => {
     if (activeConversationId) {
@@ -274,10 +423,30 @@ export default function ChatArea() {
       if (data.status === 'online' && prevStatus !== 'online') {
         encryptionService.clearKeyCache(address);
         console.log('🔑 User came online, cleared key cache for', address);
+        
+        // Re-check encryption status if this is our chat partner
+        if (address === otherParticipant?.toLowerCase() && encryptionStatus === 'unencrypted') {
+          // Re-check after a short delay to allow key registration
+          setTimeout(async () => {
+            try {
+              const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
+              const response = await fetch(`${API_URL}/api/keys/${address}`);
+              if (response.ok) {
+                const keyData = await response.json();
+                if (keyData.publicKey) {
+                  setEncryptionStatus('encrypted');
+                  toast.success('🔐 Encryption now active!', { duration: 3000 });
+                }
+              }
+            } catch (error) {
+              console.error('Error re-checking encryption:', error);
+            }
+          }, 1000);
+        }
       }
     });
     return () => unsubscribe();
-  }, [userStatuses]);
+  }, [userStatuses, otherParticipant, encryptionStatus]);
 
   // Listen for incoming messages
   useEffect(() => {
@@ -321,9 +490,11 @@ export default function ChatArea() {
         const senderId = message.senderId.toLowerCase();
         const recipientId = (typeof message.recipientId === 'string' 
           ? message.recipientId 
-          : message.recipientId[0]).toLowerCase();
+          : message.recipientId?.[0] || currentUser?.walletAddress).toLowerCase();
         
+        // Use message's conversationId (for groups) or generate one (for direct)
         const conversationId = message.conversationId || generateConversationId(senderId, recipientId);
+        const isGroupMessage = Array.isArray(message.recipientId) || message.conversationId?.startsWith('group_');
         
         const displayMessage: Message = { 
           ...message, 
@@ -337,15 +508,24 @@ export default function ChatArea() {
         
         await dbHelpers.saveMessage(displayMessage);
         
-        const { conversations, addConversation } = useAppStore.getState();
-        const convExists = conversations.some(c => c.id === conversationId);
+        const { conversations, addConversation, updateConversation, activeConversationId: currentActiveId } = useAppStore.getState();
+        const conv = conversations.find(c => c.id === conversationId);
+        const isActiveConversation = currentActiveId === conversationId;
         
-        if (!convExists) {
+        // Check if this conversation was deleted by the user
+        // If so, remove from deleted list so it reappears with the new message
+        if (isConversationDeleted(conversationId, currentUser?.walletAddress)) {
+          console.log('📬 New message for deleted conversation, restoring:', conversationId);
+          removeFromDeletedConversations(conversationId, currentUser?.walletAddress);
+        }
+        
+        if (!conv) {
+          // Conversation doesn't exist yet - create it
           const newConv = {
             id: conversationId,
-            type: 'direct' as const,
-            participants: [senderId, recipientId],
-            unreadCount: 1,
+            type: isGroupMessage ? 'group' as const : 'direct' as const,
+            participants: isGroupMessage ? [senderId, recipientId] : [senderId, recipientId],
+            unreadCount: isActiveConversation ? 0 : 1,
             createdAt: Date.now(),
             updatedAt: Date.now(),
             lastMessage: displayMessage,
@@ -353,6 +533,19 @@ export default function ChatArea() {
           
           await db.conversations.put(newConv);
           addConversation(newConv);
+        } else {
+          // Update existing conversation - increment unread if not the active conversation
+          const updates: any = {
+            lastMessage: displayMessage,
+            updatedAt: Date.now()
+          };
+          
+          if (!isActiveConversation) {
+            updates.unreadCount = (conv.unreadCount || 0) + 1;
+          }
+          
+          useAppStore.getState().updateConversation(conversationId, updates);
+          await db.conversations.update(conversationId, updates);
         }
         
         addMessage(displayMessage);
@@ -987,20 +1180,42 @@ export default function ChatArea() {
       let messageContent = plainText;
       
       if (isGroup) {
-        // Group chat: For now, send unencrypted (group encryption is complex)
-        // In production, you'd use a shared group key
+        // Group chat: Pairwise E2E encryption - encrypt for each recipient
         const recipients = activeConversation?.participants.filter(
           p => p.toLowerCase() !== senderId
         ) || [];
         
         console.log('📢 Group message to recipients:', recipients);
         
+        // Encrypt message for each recipient (pairwise encryption)
+        const encryptedPayloads: Record<string, string> = {};
+        let hasEncryption = false;
+        
+        for (const recipient of recipients) {
+          const recipientLower = recipient.toLowerCase();
+          const { encrypted, error } = await encryptionService.encryptForRecipient(plainText, recipientLower);
+          
+          if (encrypted && !error) {
+            encryptedPayloads[recipientLower] = encrypted;
+            hasEncryption = true;
+          } else {
+            // Fallback to plain text for this recipient
+            encryptedPayloads[recipientLower] = plainText;
+            console.log(`⚠️ Could not encrypt for ${recipientLower}:`, error);
+          }
+        }
+        
+        // Update encryption status based on results
+        if (hasEncryption) {
+          setEncryptionStatus('encrypted');
+        }
+        
         const message: Message = {
           id: messageId,
           conversationId: activeConversationId,
           senderId,
           recipientId: recipients,  // Array for group
-          content: plainText,
+          content: plainText, // Store plain text locally
           timestamp: Date.now(),
           delivered: false,
           read: false,
@@ -1012,22 +1227,42 @@ export default function ChatArea() {
         const localMessage = { ...message };
         await dbHelpers.saveMessage(localMessage);
         addMessage(localMessage);
+        
+        // Update conversation with last message for sorting
+        useAppStore.getState().updateConversation(activeConversationId, {
+          lastMessage: localMessage,
+          updatedAt: Date.now()
+        });
+        await db.conversations.update(activeConversationId, {
+          updatedAt: Date.now()
+        });
 
-        // Send to group
+        // Send to group with encrypted payloads for each recipient
         webSocketService.emit('group:message', {
           groupId: activeConversationId,
-          message,
+          message: {
+            ...message,
+            content: hasEncryption ? '__ENCRYPTED_GROUP__' : plainText,
+            encryptedPayloads, // Each recipient's encrypted copy
+          },
           recipients,
         });
         
-        console.log('✅ Group message sent');
+        console.log('✅ Group message sent with E2E encryption for', Object.keys(encryptedPayloads).length, 'recipients');
       } else {
         // Direct chat: encrypt for recipient
         const recipientId = otherParticipant!.toLowerCase();
         const { encrypted, error } = await encryptionService.encryptForRecipient(plainText, recipientId);
 
         if (error) {
-          toast.error(error, { duration: 3000 });
+          // Only show toast once per conversation session, not on every message
+          if (encryptionStatus !== 'unencrypted') {
+            toast(error.replace(' - message sent unencrypted', ''), { 
+              icon: '🔓',
+              duration: 4000 
+            });
+            setEncryptionStatus('unencrypted');
+          }
         }
 
         messageContent = encrypted || plainText;
@@ -1049,6 +1284,15 @@ export default function ChatArea() {
         const localMessage = { ...message, content: plainText };
         await dbHelpers.saveMessage(localMessage);
         addMessage(localMessage);
+        
+        // Update conversation with last message for sorting
+        useAppStore.getState().updateConversation(activeConversationId, {
+          lastMessage: localMessage,
+          updatedAt: Date.now()
+        });
+        await db.conversations.update(activeConversationId, {
+          updatedAt: Date.now()
+        });
 
         webSocketService.sendMessage(message);
       }
@@ -1062,13 +1306,21 @@ export default function ChatArea() {
   };
 
   const handleStartCall = async (type: 'audio' | 'video') => {
-    if (!otherParticipant || !currentUser) return;
+    if (!currentUser) return;
+
+    // Check if this is a group call
+    const isGroup = isGroupChat || 
+                    (activeConversation?.participants && activeConversation.participants.length > 2) ||
+                    !!(activeConversation as any)?.groupName;
+
+    // For direct calls, require otherParticipant
+    if (!isGroup && !otherParticipant) return;
 
     try {
       console.log('========================================');
       console.log('INITIATING CALL');
       console.log('Call type:', type);
-      console.log('To:', otherParticipant);
+      console.log('Is group call:', isGroup);
       console.log('========================================');
       
       toast.loading(`Starting ${type} call...`, { id: 'call-init' });
@@ -1088,48 +1340,128 @@ export default function ChatArea() {
         webRTCService.stopLocalStream();
         return;
       }
-      
-      const callId = `${currentUser.walletAddress.toLowerCase()}-${otherParticipant}-${Date.now()}`;
-      console.log('Generated call ID:', callId);
-      
-      let offerSent = false;
-      
-      webRTCService.createCall(
-        callId,
-        type === 'audio',
-        (signal) => {
-          if (signal.type === 'offer' && !offerSent) {
-            console.log('📤 Sending OFFER to:', otherParticipant);
-            webSocketService.initiateCall(otherParticipant, type, signal, callId);
-            offerSent = true;
-          } else if (signal.candidate || signal.type === 'candidate') {
-            console.log('📤 Sending ICE candidate');
-            webSocketService.sendIceCandidate(otherParticipant, signal, callId);
-          } else if (signal.type !== 'offer') {
-            console.log('📤 Sending other signal:', signal.type);
-            webSocketService.sendIceCandidate(otherParticipant, signal, callId);
-          }
-        },
-        (candidate) => {
-          console.log('📤 Sending ICE candidate (separate callback)');
-          webSocketService.sendIceCandidate(otherParticipant, candidate, callId);
+
+      if (isGroup) {
+        // GROUP CALL
+        const groupConversation = activeConversation as any;
+        const recipients = activeConversation?.participants.filter(
+          p => p.toLowerCase() !== currentUser.walletAddress.toLowerCase()
+        ) || [];
+
+        if (recipients.length === 0) {
+          toast.dismiss('call-init');
+          toast.error('No other participants in group');
+          webRTCService.stopLocalStream();
+          return;
         }
-      );
 
-      const call = {
-        id: callId,
-        callerId: currentUser.walletAddress.toLowerCase(),
-        recipientId: otherParticipant,
-        recipientAddress: otherParticipant, // Keep for backwards compatibility
-        type,
-        status: 'calling' as const,
-        startTime: Date.now(),
-        localStream: stream,
-      };
+        const callId = `${activeConversationId}-${Date.now()}`;
+        console.log('Generated group call ID:', callId);
+        console.log('Recipients:', recipients);
 
-      toast.dismiss('call-init');
-      setActiveCall(call);
-      setCallModalOpen(true);
+        // Create peer connections for each recipient
+        for (const recipientAddress of recipients) {
+          const peerId = `${callId}-${recipientAddress.toLowerCase()}`;
+          let offerSent = false;
+
+          webRTCService.createCall(
+            peerId,
+            type === 'audio',
+            (signal) => {
+              if (signal.type === 'offer' && !offerSent) {
+                console.log('📤 Sending group call OFFER to:', recipientAddress);
+                webSocketService.emit('group:call:initiate', {
+                  recipientAddress,
+                  callType: type,
+                  offer: signal,
+                  callId,
+                  groupId: activeConversationId,
+                  groupName: groupConversation?.groupName || 'Group Call',
+                  participants: activeConversation?.participants,
+                });
+                offerSent = true;
+              } else if (signal.candidate || signal.type === 'candidate') {
+                console.log('📤 Sending group call ICE candidate to:', recipientAddress);
+                webSocketService.emit('group:call:ice-candidate', {
+                  recipientAddress,
+                  candidate: signal,
+                  callId,
+                  peerId,
+                });
+              }
+            },
+            (candidate) => {
+              webSocketService.emit('group:call:ice-candidate', {
+                recipientAddress,
+                candidate,
+                callId,
+                peerId,
+              });
+            }
+          );
+        }
+
+        const call = {
+          id: callId,
+          callerId: currentUser.walletAddress.toLowerCase(),
+          recipientId: recipients,
+          type,
+          status: 'calling' as const,
+          startTime: Date.now(),
+          localStream: stream,
+          isGroupCall: true,
+          participants: activeConversation?.participants || [],
+          groupName: groupConversation?.groupName || 'Group Call',
+        };
+
+        toast.dismiss('call-init');
+        toast.success(`Calling ${recipients.length} participants...`);
+        setActiveCall(call);
+        setCallModalOpen(true);
+      } else {
+        // DIRECT CALL (existing logic)
+        const callId = `${currentUser.walletAddress.toLowerCase()}-${otherParticipant}-${Date.now()}`;
+        console.log('Generated call ID:', callId);
+        
+        let offerSent = false;
+        
+        webRTCService.createCall(
+          callId,
+          type === 'audio',
+          (signal) => {
+            if (signal.type === 'offer' && !offerSent) {
+              console.log('📤 Sending OFFER to:', otherParticipant);
+              webSocketService.initiateCall(otherParticipant!, type, signal, callId);
+              offerSent = true;
+            } else if (signal.candidate || signal.type === 'candidate') {
+              console.log('📤 Sending ICE candidate');
+              webSocketService.sendIceCandidate(otherParticipant!, signal, callId);
+            } else if (signal.type !== 'offer') {
+              console.log('📤 Sending other signal:', signal.type);
+              webSocketService.sendIceCandidate(otherParticipant!, signal, callId);
+            }
+          },
+          (candidate) => {
+            console.log('📤 Sending ICE candidate (separate callback)');
+            webSocketService.sendIceCandidate(otherParticipant!, candidate, callId);
+          }
+        );
+
+        const call = {
+          id: callId,
+          callerId: currentUser.walletAddress.toLowerCase(),
+          recipientId: otherParticipant!,
+          recipientAddress: otherParticipant, // Keep for backwards compatibility
+          type,
+          status: 'calling' as const,
+          startTime: Date.now(),
+          localStream: stream,
+        };
+
+        toast.dismiss('call-init');
+        setActiveCall(call);
+        setCallModalOpen(true);
+      }
     } catch (error: any) {
       toast.dismiss('call-init');
       console.error('Call initiation error:', error);
@@ -1184,33 +1516,62 @@ export default function ChatArea() {
               <Menu size={20} className="text-secondary" />
             </button>
             
-            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold overflow-hidden ${
-              isGroupChat 
-                ? 'bg-gradient-to-br from-purple-500/50 to-pink-500/50'
-                : 'bg-gradient-to-br from-primary-500/50 to-cyan-500/50'
-            }`}>
+            {/* Clickable Avatar */}
+            <div 
+              className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary-500 transition ${
+                isGroupChat 
+                  ? 'bg-gradient-to-br from-purple-500/50 to-pink-500/50'
+                  : 'bg-gradient-to-br from-primary-500/50 to-cyan-500/50'
+              }`}
+              onClick={() => {
+                if (!isGroupChat && otherParticipant) {
+                  setShowProfileModal(true);
+                } else if (isGroupChat) {
+                  setShowGroupSettings(true);
+                }
+              }}
+              title={isGroupChat ? 'Group Settings' : 'View Profile'}
+            >
               {isGroupChat ? (
-                <Users size={20} />
-              ) : contactProfile?.avatar ? (
+                (groupConv?.groupAvatar || groupConv?.avatar) ? (
+                  <img 
+                    src={groupConv.groupAvatar || groupConv.avatar} 
+                    alt={groupConv.groupName || 'Group'} 
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <Users size={20} />
+                )
+              ) : displayProfile?.avatar ? (
                 <img 
-                  src={contactProfile.avatar} 
-                  alt={contactProfile.username || 'Avatar'} 
+                  src={displayProfile.avatar} 
+                  alt={displayProfile.username || 'Avatar'} 
                   className="w-full h-full object-cover"
                 />
               ) : (
-                getInitials(contactProfile?.username || otherParticipant || '')
+                getInitials(displayProfile?.username || otherParticipant || '')
               )}
             </div>
             
-            <div>
+            {/* Clickable Name */}
+            <div 
+              className="cursor-pointer hover:opacity-80 transition"
+              onClick={() => {
+                if (!isGroupChat && otherParticipant) {
+                  setShowProfileModal(true);
+                } else if (isGroupChat) {
+                  setShowGroupSettings(true);
+                }
+              }}
+            >
               {isGroupChat ? (
                 <>
                   <h2 className="font-semibold text-white">{groupConv?.groupName || 'Group Chat'}</h2>
                   <p className="text-xs text-muted">{activeConversation?.participants.length} members</p>
                 </>
-              ) : contactProfile?.username ? (
+              ) : displayProfile?.username ? (
                 <>
-                  <h2 className="font-semibold text-white">@{contactProfile.username}</h2>
+                  <h2 className="font-semibold text-white">@{displayProfile.username}</h2>
                   <p className="text-xs text-muted">{truncateAddress(otherParticipant || '')}</p>
                 </>
               ) : (
@@ -1232,15 +1593,56 @@ export default function ChatArea() {
                     <span className="text-muted">•</span>
                   </>
                 )}
-                <span className="text-success-500 text-xs flex items-center gap-1">
-                  <Lock size={10} />
-                  E2E Encrypted
-                </span>
+                {encryptionStatus === 'encrypted' ? (
+                  <span className="text-success-500 text-xs flex items-center gap-1">
+                    <Lock size={10} />
+                    E2E Encrypted
+                  </span>
+                ) : encryptionStatus === 'unencrypted' ? (
+                  <span className="text-yellow-500 text-xs flex items-center gap-1" title={isGroupChat ? "Some members haven't set up encryption yet" : "Recipient hasn't set up encryption yet"}>
+                    <LockOpen size={10} />
+                    Not Encrypted
+                  </span>
+                ) : (
+                  <span className="text-muted text-xs flex items-center gap-1">
+                    <Lock size={10} />
+                    Checking...
+                  </span>
+                )}
               </div>
             </div>
           </div>
 
           <div className="flex items-center gap-1">
+            {/* Add to Contacts Button (only for direct chats if not already a contact) */}
+            {!isGroupChat && otherParticipant && !isUserContact && (
+              <button
+                onClick={async () => {
+                  const added = await addToContacts(otherParticipant);
+                  if (added) {
+                    setIsUserContact(true);
+                    toast.success('Added to contacts!');
+                  } else {
+                    toast.error('Already in contacts');
+                  }
+                }}
+                className="p-2 hover:bg-dark-200 rounded-lg transition text-secondary hover:text-success-400"
+                title="Add to contacts"
+              >
+                <UserPlus size={20} />
+              </button>
+            )}
+            
+            {/* Group Settings Button (only for group chats) */}
+            {isGroupChat && (
+              <button
+                onClick={() => setShowGroupSettings(true)}
+                className="p-2 hover:bg-dark-200 rounded-lg transition text-secondary hover:text-white"
+                title="Group settings"
+              >
+                <Settings size={20} />
+              </button>
+            )}
             <button
               onClick={() => handleStartCall('audio')}
               className="p-2 hover:bg-dark-200 rounded-lg transition text-secondary hover:text-white"
@@ -1336,10 +1738,24 @@ export default function ChatArea() {
       <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-midnight">
         {/* Encryption notice */}
         <div className="flex justify-center mb-4">
-          <div className="bg-success-500/10 border border-success-500/30 text-success-400 text-xs px-4 py-1.5 rounded-full flex items-center gap-2">
-            <Lock size={12} />
-            Messages are end-to-end encrypted
-          </div>
+          {encryptionStatus === 'encrypted' ? (
+            <div className="bg-success-500/10 border border-success-500/30 text-success-400 text-xs px-4 py-1.5 rounded-full flex items-center gap-2">
+              <Lock size={12} />
+              Messages are end-to-end encrypted
+            </div>
+          ) : encryptionStatus === 'unencrypted' ? (
+            <div className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-xs px-4 py-1.5 rounded-full flex items-center gap-2">
+              <LockOpen size={12} />
+              {isGroupChat 
+                ? 'Group messages are not yet encrypted' 
+                : 'Messages not encrypted - recipient needs to set up encryption'}
+            </div>
+          ) : (
+            <div className="bg-dark-200 border border-midnight text-muted text-xs px-4 py-1.5 rounded-full flex items-center gap-2">
+              <Lock size={12} />
+              Checking encryption status...
+            </div>
+          )}
         </div>
 
         {filteredMessages.length === 0 ? (
@@ -1634,8 +2050,19 @@ export default function ChatArea() {
                 onContextMenu={(e) => handleMessageContextMenu(e, message.id, isSender)}
               >
                 {showAvatar && !isSender && (
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500/50 to-cyan-500/50 flex items-center justify-center text-white text-xs font-semibold flex-shrink-0">
-                    {getInitials(message.senderId)}
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500/50 to-cyan-500/50 flex items-center justify-center text-white text-xs font-semibold flex-shrink-0 overflow-hidden">
+                    {(() => {
+                      // For group chats, get sender profile from memberProfiles
+                      // For direct chats, use displayProfile (the other participant)
+                      const senderProfile = isGroupChat 
+                        ? memberProfiles.get(message.senderId.toLowerCase())
+                        : displayProfile;
+                      
+                      if (senderProfile?.avatar) {
+                        return <img src={senderProfile.avatar} alt="" className="w-full h-full object-cover" />;
+                      }
+                      return getInitials(senderProfile?.username || message.senderId);
+                    })()}
                   </div>
                 )}
                 {!showAvatar && !isSender && <div className="w-8" />}
@@ -1647,6 +2074,18 @@ export default function ChatArea() {
                       : 'bg-card border border-midnight text-white'
                   } ${selectedMessageId === message.id ? 'ring-2 ring-primary-400' : ''}`}
                 >
+                  {/* Show sender name in group chats for received messages */}
+                  {isGroupChat && !isSender && showAvatar && (
+                    <p className="text-xs font-medium text-primary-400 mb-1">
+                      {(() => {
+                        const senderProfile = memberProfiles.get(message.senderId.toLowerCase());
+                        if (senderProfile?.username) {
+                          return `@${senderProfile.username}`;
+                        }
+                        return truncateAddress(message.senderId);
+                      })()}
+                    </p>
+                  )}
                   {renderMessageContent()}
                   <div className={`flex items-center gap-1.5 mt-1 ${isSender ? 'justify-end' : 'justify-start'}`}>
                     <span className={`text-xs ${isSender ? 'text-white/60' : 'text-muted'}`}>
@@ -1778,6 +2217,32 @@ export default function ChatArea() {
           </button>
         </form>
       </div>
+
+      {/* Group Settings Modal */}
+      {isGroupChat && activeConversation && (
+        <GroupSettingsModal
+          isOpen={showGroupSettings}
+          onClose={() => setShowGroupSettings(false)}
+          conversation={activeConversation}
+        />
+      )}
+
+      {/* User Profile Modal */}
+      {!isGroupChat && otherParticipant && (
+        <UserProfileModal
+          isOpen={showProfileModal}
+          onClose={() => setShowProfileModal(false)}
+          walletAddress={otherParticipant}
+          onAddContact={async () => {
+            const added = await addToContacts(otherParticipant);
+            if (added) {
+              setIsUserContact(true);
+              toast.success('Added to contacts!');
+            }
+          }}
+          isContact={isUserContact}
+        />
+      )}
     </div>
   );
 }

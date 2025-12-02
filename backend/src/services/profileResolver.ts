@@ -97,8 +97,10 @@ export interface BlockStarProfile {
 // CACHE
 // ============================================
 
+// Cache for public keys (in-memory)
 const profileCache = new Map<string, { profile: BlockStarProfile; expires: number }>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const RPC_TIMEOUT = 15000; // 15 seconds
 
 // ============================================
 // PROVIDER & CONTRACT
@@ -142,8 +144,15 @@ export async function resolveProfile(name: string): Promise<BlockStarProfile | n
   // Check cache first
   const cached = profileCache.get(cacheKey);
   if (cached && cached.expires > Date.now()) {
-    console.log(`📋 Profile cache hit for: ${name}`);
-    return cached.profile;
+    // Validate cached profile has walletAddress
+    if (cached.profile && cached.profile.walletAddress) {
+      console.log(`📋 Profile cache hit for: ${name} (wallet: ${cached.profile.walletAddress})`);
+      return cached.profile;
+    } else {
+      // Invalid cached profile - clear and re-fetch
+      console.log(`⚠️ Invalid cached profile for ${name} (missing walletAddress) - clearing cache`);
+      profileCache.delete(cacheKey);
+    }
   }
   
   try {
@@ -176,23 +185,35 @@ export async function resolveProfile(name: string): Promise<BlockStarProfile | n
     try {
       const recordsPromise = domainContract.getUnifiedRecords(domainName, subDomain);
       const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('RPC timeout')), 10000)
+        setTimeout(() => reject(new Error('RPC timeout')), RPC_TIMEOUT)
       );
       records = await Promise.race([recordsPromise, timeoutPromise]);
-    } catch (rpcError) {
-      console.error('RPC call failed for getUnifiedRecords:', rpcError);
+    } catch (rpcError: any) {
+      console.error('RPC call failed for getUnifiedRecords:', rpcError?.message || rpcError);
       return null;
     }
     
     // Get token ID and owner
     let owner = '';
+    let tokenId: bigint | null = null;
     try {
-      const tokenId = await domainContract.getNameToTokenId(domainName);
-      if (tokenId && tokenId > 0) {
+      tokenId = await domainContract.getNameToTokenId(domainName);
+      console.log(`🔍 Token ID for ${domainName}:`, tokenId?.toString());
+      
+      if (tokenId && tokenId > 0n) {
         owner = await domainContract.ownerOf(tokenId);
+        console.log(`🔍 Owner for ${domainName}:`, owner);
+      } else {
+        console.log(`❌ No token ID found for ${domainName} (domain not minted)`);
       }
-    } catch (err) {
-      console.log('Could not get owner:', err);
+    } catch (err: any) {
+      console.log('Could not get owner:', err?.message || err);
+    }
+    
+    // If no owner found, the domain doesn't exist or isn't minted
+    if (!owner) {
+      console.log(`❌ Domain ${name} has no owner - not minted or doesn't exist`);
+      return null;
     }
     
     // Get subdomains
@@ -203,16 +224,42 @@ export async function resolveProfile(name: string): Promise<BlockStarProfile | n
       console.log('Could not get subdomains:', err);
     }
     
-    // Parse records into profile
-    const profile = parseRecords(
-      records,
-      name,
-      owner,
-      subdomains,
-      isSubdomain,
-      domainName,
-      subDomain
-    );
+    // Parse records into profile - with fallback if record parsing fails
+    let profile: BlockStarProfile;
+    try {
+      profile = parseRecords(
+        records,
+        name,
+        owner,
+        subdomains,
+        isSubdomain,
+        domainName,
+        subDomain
+      );
+    } catch (parseError) {
+      console.log(`⚠️ Record parsing failed for ${name}, creating minimal profile:`, parseError);
+      // Create minimal profile with just wallet address
+      profile = {
+        username: name,
+        fullUsername: `${name}@blockstar`,
+        walletAddress: owner,
+        avatar: '',
+        banner: '',
+        bio: '',
+        records: {},
+        subdomains: [],
+        isSubdomain,
+        mainDomain: domainName,
+        subDomain,
+        resolvedAt: Date.now(),
+      };
+    }
+    
+    // Double-check profile has walletAddress before caching
+    if (!profile.walletAddress) {
+      console.log(`❌ Profile parsed but missing walletAddress for ${name}`);
+      return null;
+    }
     
     // Cache the result
     profileCache.set(cacheKey, {
@@ -220,7 +267,7 @@ export async function resolveProfile(name: string): Promise<BlockStarProfile | n
       expires: Date.now() + CACHE_TTL,
     });
     
-    console.log(`✅ Profile resolved for: ${name}`);
+    console.log(`✅ Profile resolved for: ${name} (wallet: ${profile.walletAddress})`);
     return profile;
     
   } catch (error) {
@@ -230,19 +277,63 @@ export async function resolveProfile(name: string): Promise<BlockStarProfile | n
 }
 
 /**
+ * Convert IPFS hash to full URL
+ */
+function ipfsToUrl(input: any): string | null {
+  if (!input || typeof input !== 'string') return null;
+  let hash = input.trim();
+  // Match IPFS hash (typically starts with Qm or bafy and is 46+ chars)
+  const ipfsHashRegex = /(?:ipfs:\/\/|\/ipfs\/)?([a-zA-Z0-9]{46,})/;
+  const match = hash.match(ipfsHashRegex);
+  if (match && match[1]) {
+    return 'https://alchemy.mypinata.cloud/ipfs/' + match[1];
+  }
+  return null; // Not a valid IPFS input
+}
+
+/**
+ * Safely convert ethers Result to plain array, handling decode errors
+ */
+function safeArrayFrom(result: any): string[] {
+  if (!result) return [];
+  
+  const arr: string[] = [];
+  try {
+    // Try to get length
+    const len = result.length || 0;
+    for (let i = 0; i < len; i++) {
+      try {
+        const val = result[i];
+        arr.push(typeof val === 'string' ? val : String(val || ''));
+      } catch (itemError) {
+        // If individual item fails to decode, use empty string
+        console.log(`⚠️ Could not decode record at index ${i}:`, itemError);
+        arr.push('');
+      }
+    }
+  } catch (err) {
+    console.log('⚠️ Could not iterate result:', err);
+  }
+  return arr;
+}
+
+/**
  * Parse contract records into BlockStarProfile
  */
 function parseRecords(
   records: [string[], string[]],
   name: string,
   owner: string,
-  subdomains: string[],
+  subdomains: string[] | any,
   isSubdomain: boolean,
   mainDomain: string,
   subDomain: string
 ): BlockStarProfile {
-  const keys = records[0] || [];
-  const values = records[1] || [];
+  // Safely convert ethers Result objects to plain arrays
+  const keys: string[] = safeArrayFrom(records?.[0]);
+  const values: string[] = safeArrayFrom(records?.[1]);
+  
+  console.log(`🔍 Parsed ${keys.length} keys and ${values.length} values for ${name}`);
   
   let avatar = '';
   let banner = '';
@@ -270,7 +361,9 @@ function parseRecords(
         break;
       default:
         // Store all other records
-        customRecords[key] = value;
+        if (key) {
+          customRecords[key] = value;
+        }
     }
   });
   
@@ -278,11 +371,11 @@ function parseRecords(
     username: name,
     fullUsername: `${name}@blockstar`,
     walletAddress: owner,
-    avatar,
-    banner,
+    avatar: ipfsToUrl(avatar) || avatar, // Convert IPFS hash to URL, fallback to original
+    banner: ipfsToUrl(banner) || banner, // Convert IPFS hash to URL, fallback to original
     bio,
     records: customRecords,
-    subdomains: subdomains || [],
+    subdomains: safeArrayFrom(subdomains),
     isSubdomain,
     mainDomain,
     subDomain,

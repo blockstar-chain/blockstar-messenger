@@ -11,8 +11,9 @@ export function cn(...inputs: ClassValue[]) {
 /**
  * Generate conversation ID from wallet addresses
  */
-export function generateConversationId(...addresses: string[]): string {
-  const sorted = addresses.map(a => a.toLowerCase()).sort();
+export function generateConversationId(...addresses: (string | undefined | null)[]): string {
+  const validAddresses = addresses.filter((a): a is string => typeof a === 'string' && a.length > 0);
+  const sorted = validAddresses.map(a => a.toLowerCase()).sort();
   return sorted.join('-');
 }
 
@@ -64,7 +65,8 @@ export function formatMessageTime(timestamp: number): string {
 /**
  * Truncate wallet address
  */
-export function truncateAddress(address: string): string {
+export function truncateAddress(address: string | undefined | null): string {
+  if (!address || typeof address !== 'string') return '';
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
@@ -91,7 +93,8 @@ export async function copyToClipboard(text: string): Promise<boolean> {
 /**
  * Get initials from username
  */
-export function getInitials(username: string): string {
+export function getInitials(username: string | undefined | null): string {
+  if (!username || typeof username !== 'string') return '??';
   const name = username.replace('@', '');
   return name.slice(0, 2).toUpperCase();
 }
@@ -99,7 +102,7 @@ export function getInitials(username: string): string {
 /**
  * Generate random color for avatar (theme-consistent)
  */
-export function getAvatarColor(address: string): string {
+export function getAvatarColor(address: string | undefined | null): string {
   const colors = [
     'bg-gradient-to-br from-primary-500 to-cyan-500',
     'bg-gradient-to-br from-primary-600 to-primary-400',
@@ -111,6 +114,7 @@ export function getAvatarColor(address: string): string {
     'bg-gradient-to-br from-cyan-400 to-primary-600',
   ];
   
+  if (!address || typeof address !== 'string') return colors[0];
   const index = parseInt(address.slice(2, 8), 16) % colors.length;
   return colors[index];
 }

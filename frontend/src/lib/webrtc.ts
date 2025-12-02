@@ -50,7 +50,7 @@ function getIceServers(): RTCIceServer[] {
 export class WebRTCService {
   private peers: Map<string, SimplePeer.Instance> = new Map();
   private localStream: MediaStream | null = null;
-  private onStreamHandlers: Set<(stream: MediaStream, callId: string) => void> = new Set();
+  private onStreamHandlers: Set<(stream: MediaStream, callId: string, peerId?: string) => void> = new Set();
   private onCallEndHandlers: Set<(callId: string) => void> = new Set();
   private onConnectionStateHandlers: Set<(state: string, callId: string) => void> = new Set();
   private audioMonitorInterval: NodeJS.Timeout | null = null;
@@ -125,6 +125,38 @@ export class WebRTCService {
       return this.localStream;
     } catch (error: any) {
       console.error('❌ Failed to get local stream:', error);
+      
+      // If video failed but audio might work, try audio-only
+      if (!audioOnly && (error.name === 'NotFoundError' || error.name === 'NotAllowedError' || error.name === 'NotReadableError')) {
+        console.log('📱 Video failed, trying audio-only fallback...');
+        try {
+          const audioOnlyConstraints: MediaStreamConstraints = {
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            },
+            video: false,
+          };
+          this.localStream = await navigator.mediaDevices.getUserMedia(audioOnlyConstraints);
+          console.log('✅ Audio-only stream ready (no camera available)');
+          
+          this.localStream.getTracks().forEach((track, i) => {
+            track.enabled = true;
+            console.log('📱 Track ' + i + ' [' + track.kind + ']:', {
+              id: track.id.substring(0, 8),
+              label: track.label,
+              enabled: track.enabled,
+              readyState: track.readyState,
+            });
+          });
+          
+          this.startAudioMonitor(this.localStream, 'LOCAL');
+          return this.localStream;
+        } catch (audioError) {
+          console.error('❌ Audio-only fallback also failed:', audioError);
+        }
+      }
       
       if (error.name === 'NotAllowedError') {
         throw new Error('Microphone permission denied');
@@ -357,8 +389,8 @@ export class WebRTCService {
       
       console.log('========================================');
       
-      // Notify handlers
-      this.onStreamHandlers.forEach((handler) => handler(stream, callId));
+      // Notify handlers - pass callId as both callId and peerId for compatibility
+      this.onStreamHandlers.forEach((handler) => handler(stream, callId, callId));
     });
 
     // Handle connection
@@ -453,8 +485,8 @@ export class WebRTCService {
             this.startAudioMonitor(streamToUse, 'REMOTE');
           }
           
-          // Notify all handlers
-          this.onStreamHandlers.forEach((handler) => handler(streamToUse, callId));
+          // Notify all handlers - pass callId as both callId and peerId
+          this.onStreamHandlers.forEach((handler) => handler(streamToUse, callId, callId));
         }
       };
     }
@@ -650,7 +682,7 @@ export class WebRTCService {
   /**
    * Register stream handler
    */
-  onStream(handler: (stream: MediaStream, callId: string) => void): () => void {
+  onStream(handler: (stream: MediaStream, callId: string, peerId?: string) => void): () => void {
     this.onStreamHandlers.add(handler);
     return () => this.onStreamHandlers.delete(handler);
   }

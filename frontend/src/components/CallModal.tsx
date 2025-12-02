@@ -2,9 +2,17 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '@/store';
 import { webRTCService } from '@/lib/webrtc';
 import { webSocketService } from '@/lib/websocket';
-import { PhoneOff, Mic, MicOff, Video, VideoOff } from 'lucide-react';
+import { PhoneOff, Mic, MicOff, Video, VideoOff, Users } from 'lucide-react';
 import { truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
+import { resolveProfile, type BlockStarProfile } from '@/lib/profileResolver';
 import toast from 'react-hot-toast';
+
+interface ParticipantStream {
+  address: string;
+  stream: MediaStream | null;
+  profile: BlockStarProfile | null;
+  isConnected: boolean;
+}
 
 export default function CallModal() {
   const { activeCall, setActiveCall, isCallModalOpen, setCallModalOpen, currentUser } = useAppStore();
@@ -14,12 +22,54 @@ export default function CallModal() {
   const [callStatus, setCallStatus] = useState<'connecting' | 'ringing' | 'active' | 'ended'>('connecting');
   const [hasRemoteStream, setHasRemoteStream] = useState(false);
   const [remoteAudioPlaying, setRemoteAudioPlaying] = useState(false);
+  const [participantStreams, setParticipantStreams] = useState<Map<string, ParticipantStream>>(new Map());
   
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const groupAudioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
   const hasEnded = useRef(false);
   const audioContextRef = useRef<AudioContext | null>(null);
+
+  const isGroupCall = activeCall?.isGroupCall || Array.isArray(activeCall?.recipientId);
+  const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
+
+  // Load participant profiles for group calls
+  useEffect(() => {
+    if (!isGroupCall || !activeCall?.participants) return;
+
+    const loadProfiles = async () => {
+      const newStreams = new Map<string, ParticipantStream>();
+      
+      for (const address of activeCall.participants) {
+        if (address.toLowerCase() === currentUser?.walletAddress.toLowerCase()) continue;
+        
+        let profile: BlockStarProfile | null = null;
+        try {
+          const response = await fetch(`${API_URL}/api/profile/${address.toLowerCase()}`);
+          if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.profile?.nftName) {
+              profile = await resolveProfile(data.profile.nftName);
+            }
+          }
+        } catch (error) {
+          console.error('Error loading profile:', error);
+        }
+
+        newStreams.set(address.toLowerCase(), {
+          address: address.toLowerCase(),
+          stream: null,
+          profile,
+          isConnected: false,
+        });
+      }
+      
+      setParticipantStreams(newStreams);
+    };
+
+    loadProfiles();
+  }, [activeCall?.participants, isGroupCall, currentUser?.walletAddress]);
 
   // Set up local video when modal opens
   useEffect(() => {
@@ -67,14 +117,16 @@ export default function CallModal() {
     };
   }, [callStatus]);
 
-  // Listen for remote stream - SIMPLIFIED AND DIRECT
+  // Listen for remote streams
   useEffect(() => {
     if (!activeCall || !isCallModalOpen) return;
 
-    const unsubscribeStream = webRTCService.onStream((stream, callId) => {
+    const unsubscribeStream = webRTCService.onStream((stream, callId, peerId) => {
       console.log('========================================');
       console.log('CallModal: REMOTE STREAM RECEIVED');
       console.log('CallModal: Stream ID:', stream.id);
+      console.log('CallModal: Call ID:', callId);
+      console.log('CallModal: Peer ID:', peerId);
       console.log('CallModal: Active:', stream.active);
       console.log('========================================');
       
@@ -84,55 +136,119 @@ export default function CallModal() {
       console.log('Audio tracks:', audioTracks.length);
       console.log('Video tracks:', videoTracks.length);
       
-      audioTracks.forEach((track, i) => {
-        console.log('Audio track ' + i + ':', {
-          enabled: track.enabled,
-          muted: track.muted,
-          readyState: track.readyState,
-        });
-      });
-      
       setHasRemoteStream(true);
       
-      // For video calls, set video element (which also handles audio)
-      if (remoteVideoRef.current && activeCall.type === 'video') {
-        remoteVideoRef.current.srcObject = stream;
-        // Video element handles audio too, so just play it
-        remoteVideoRef.current.play().catch(e => console.warn('Video play failed:', e));
-      }
-      
-      // ALWAYS set the audio element with the ORIGINAL stream (no cloning!)
-      if (remoteAudioRef.current) {
-        console.log('Setting audio element srcObject...');
+      if (isGroupCall && peerId) {
+        // Group call - handle per-participant streams
+        // Extract participant address from peerId (format: callId-address)
+        const parts = peerId.split('-');
+        const participantAddress = parts[parts.length - 1]?.toLowerCase();
         
-        // Use the original stream directly - no cloning!
-        remoteAudioRef.current.srcObject = stream;
-        remoteAudioRef.current.volume = 1.0;
-        remoteAudioRef.current.muted = false;
-        
-        // Try to play immediately
-        remoteAudioRef.current.play()
-          .then(() => {
-            console.log('✅ Audio element playing!');
-            setRemoteAudioPlaying(true);
-          })
-          .catch((e) => {
-            console.warn('Audio autoplay blocked:', e);
-            toast('Click "Play Audio" to hear the caller', { icon: '🔊', duration: 5000 });
+        if (participantAddress) {
+          setParticipantStreams(prev => {
+            const newMap = new Map(prev);
+            const existing = newMap.get(participantAddress) || {
+              address: participantAddress,
+              stream: null,
+              profile: null,
+              isConnected: false,
+            };
+            newMap.set(participantAddress, {
+              ...existing,
+              stream,
+              isConnected: true,
+            });
+            return newMap;
           });
-      }
-      
-      // Set call to active
-      setCallStatus('active');
-      if (activeCall && callId === activeCall.id) {
-        setActiveCall({ ...activeCall, status: 'active' });
+
+          // Create audio element for this participant
+          let audioEl = groupAudioRefs.current.get(participantAddress);
+          if (!audioEl) {
+            audioEl = document.createElement('audio');
+            audioEl.autoplay = true;
+            audioEl.playsInline = true;
+            groupAudioRefs.current.set(participantAddress, audioEl);
+          }
+          audioEl.srcObject = stream;
+          audioEl.volume = 1.0;
+          audioEl.play().catch(e => console.warn('Audio play failed:', e));
+        }
+
+        // Set call to active when we have connections
+        setCallStatus('active');
+        if (activeCall) {
+          setActiveCall({ ...activeCall, status: 'active' });
+        }
+      } else {
+        // Direct call - existing logic
+        if (remoteVideoRef.current && activeCall.type === 'video') {
+          remoteVideoRef.current.srcObject = stream;
+          remoteVideoRef.current.play().catch(e => console.warn('Video play failed:', e));
+        }
+        
+        if (remoteAudioRef.current) {
+          console.log('Setting audio element srcObject...');
+          remoteAudioRef.current.srcObject = stream;
+          remoteAudioRef.current.volume = 1.0;
+          remoteAudioRef.current.muted = false;
+          
+          remoteAudioRef.current.play()
+            .then(() => {
+              console.log('✅ Audio element playing!');
+              setRemoteAudioPlaying(true);
+            })
+            .catch((e) => {
+              console.warn('Audio autoplay blocked:', e);
+              toast('Click "Play Audio" to hear the caller', { icon: '🔊', duration: 5000 });
+            });
+        }
+        
+        setCallStatus('active');
+        if (activeCall && callId === activeCall.id) {
+          setActiveCall({ ...activeCall, status: 'active' });
+        }
       }
     });
 
     return () => {
       unsubscribeStream();
     };
-  }, [activeCall?.id, activeCall?.type, isCallModalOpen, setActiveCall]);
+  }, [activeCall?.id, activeCall?.type, isCallModalOpen, isGroupCall, setActiveCall]);
+
+  // Listen for group call events
+  useEffect(() => {
+    if (!activeCall || !isCallModalOpen || !isGroupCall) return;
+
+    // Listen for participant joined
+    const unsubJoined = webSocketService.on('group:call:participant:joined', (data: any) => {
+      console.log('Participant joined group call:', data);
+      toast.success(`${truncateAddress(data.participantAddress)} joined the call`);
+    });
+
+    // Listen for participant left
+    const unsubLeft = webSocketService.on('group:call:participant:left', (data: any) => {
+      console.log('Participant left group call:', data);
+      toast(`${truncateAddress(data.participantAddress)} left the call`, { icon: '👋' });
+      
+      setParticipantStreams(prev => {
+        const newMap = new Map(prev);
+        const existing = newMap.get(data.participantAddress.toLowerCase());
+        if (existing) {
+          newMap.set(data.participantAddress.toLowerCase(), {
+            ...existing,
+            stream: null,
+            isConnected: false,
+          });
+        }
+        return newMap;
+      });
+    });
+
+    return () => {
+      unsubJoined();
+      unsubLeft();
+    };
+  }, [activeCall?.id, isCallModalOpen, isGroupCall]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -141,6 +257,11 @@ export default function CallModal() {
         audioContextRef.current.close();
         audioContextRef.current = null;
       }
+      // Cleanup group audio elements
+      groupAudioRefs.current.forEach(audio => {
+        audio.srcObject = null;
+      });
+      groupAudioRefs.current.clear();
     };
   }, []);
 
@@ -155,7 +276,15 @@ export default function CallModal() {
   };
 
   const handlePlayAudio = () => {
-    if (remoteAudioRef.current) {
+    if (isGroupCall) {
+      // Play all group audio elements
+      groupAudioRefs.current.forEach(audio => {
+        audio.volume = 1.0;
+        audio.play().catch(e => console.warn('Play failed:', e));
+      });
+      setRemoteAudioPlaying(true);
+      toast.success('Audio enabled!');
+    } else if (remoteAudioRef.current) {
       remoteAudioRef.current.volume = 1.0;
       remoteAudioRef.current.muted = false;
       remoteAudioRef.current.play()
@@ -172,25 +301,25 @@ export default function CallModal() {
   };
 
   const handleBoostAudio = () => {
-    if (remoteAudioRef.current?.srcObject) {
+    const stream = isGroupCall 
+      ? Array.from(participantStreams.values()).find(p => p.stream)?.stream
+      : (remoteAudioRef.current?.srcObject as MediaStream);
+    
+    if (stream) {
       try {
-        const stream = remoteAudioRef.current.srcObject as MediaStream;
-        
-        // Create or reuse audio context
         if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
           audioContextRef.current = new AudioContext();
         }
         
         const audioContext = audioContextRef.current;
         
-        // Resume if suspended
         if (audioContext.state === 'suspended') {
           audioContext.resume();
         }
         
         const source = audioContext.createMediaStreamSource(stream);
         const gainNode = audioContext.createGain();
-        gainNode.gain.value = 3.0; // 3x boost
+        gainNode.gain.value = 3.0;
         source.connect(gainNode);
         gainNode.connect(audioContext.destination);
         
@@ -208,7 +337,15 @@ export default function CallModal() {
     hasEnded.current = true;
 
     if (activeCall && !fromRemote) {
-      webSocketService.endCall(activeCall.id);
+      if (isGroupCall) {
+        // Notify all participants
+        webSocketService.emit('group:call:end', {
+          callId: activeCall.id,
+          participantAddress: currentUser?.walletAddress,
+        });
+      } else {
+        webSocketService.endCall(activeCall.id);
+      }
     }
     
     // Cleanup audio context
@@ -216,12 +353,19 @@ export default function CallModal() {
       audioContextRef.current.close();
       audioContextRef.current = null;
     }
+
+    // Cleanup group audio elements
+    groupAudioRefs.current.forEach(audio => {
+      audio.srcObject = null;
+    });
+    groupAudioRefs.current.clear();
     
     webRTCService.cleanup();
     setActiveCall(null);
     setCallModalOpen(false);
     setCallDuration(0);
     setCallStatus('ended');
+    setParticipantStreams(new Map());
   };
 
   const formatDuration = (seconds: number): string => {
@@ -234,46 +378,139 @@ export default function CallModal() {
 
   const isVideoCall = activeCall.type === 'video';
   const isCaller = activeCall?.callerId?.toLowerCase() === currentUser?.walletAddress?.toLowerCase();
-  const otherParty = isCaller ? (activeCall?.recipientId || 'Unknown') : (activeCall?.callerId || 'Unknown');
+  
+  // For direct calls
+  const otherParty = !isGroupCall 
+    ? (isCaller ? (activeCall?.recipientId || 'Unknown') : (activeCall?.callerId || 'Unknown'))
+    : null;
+
+  // Count connected participants for group calls
+  const connectedCount = Array.from(participantStreams.values()).filter(p => p.isConnected).length;
+  const totalParticipants = participantStreams.size;
 
   return (
     <div className="fixed inset-0 bg-midnight z-50 flex items-center justify-center">
-      {/* Audio element - CRITICAL for receiving remote audio */}
-      <audio
-        ref={remoteAudioRef}
-        autoPlay
-        playsInline
-        style={{ display: 'none' }}
-      />
+      {/* Audio element for direct calls */}
+      {!isGroupCall && (
+        <audio
+          ref={remoteAudioRef}
+          autoPlay
+          playsInline
+          style={{ display: 'none' }}
+        />
+      )}
       
       <div className="w-full h-full relative">
-        {/* Remote Video/Avatar */}
+        {/* Remote Video/Avatar Area */}
         <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-dark-300 to-midnight">
-          {isVideoCall ? (
-            <video
-              ref={remoteVideoRef}
-              autoPlay
-              playsInline
-              className="w-full h-full object-cover"
-            />
-          ) : null}
-          
-          {/* Show avatar when no video or audio call */}
-          {(!isVideoCall || callStatus !== 'active') && (
-            <div className="flex flex-col items-center">
-              <div className="w-32 h-32 rounded-full bg-gradient-to-br from-primary-500 to-cyan-500 flex items-center justify-center text-white text-4xl font-semibold mb-6 shadow-glow-lg">
-                {getInitials(otherParty || '')}
+          {isGroupCall ? (
+            // Group call layout
+            <div className="w-full h-full p-6">
+              {/* Group call header */}
+              <div className="text-center mb-6">
+                <div className="flex items-center justify-center gap-2 mb-2">
+                  <Users size={24} className="text-primary-400" />
+                  <h2 className="text-2xl font-bold text-white">
+                    {activeCall.groupName || 'Group Call'}
+                  </h2>
+                </div>
+                <p className="text-secondary">
+                  {callStatus === 'ringing' && `Calling ${totalParticipants} participants...`}
+                  {callStatus === 'active' && `${connectedCount} of ${totalParticipants} connected • ${formatDuration(callDuration)}`}
+                  {callStatus === 'connecting' && 'Connecting...'}
+                </p>
               </div>
-              <p className="text-white text-2xl font-semibold mb-2">
-                {truncateAddress(otherParty || '')}
-              </p>
-              <p className="text-secondary text-lg">
-                {callStatus === 'connecting' && 'Connecting...'}
-                {callStatus === 'ringing' && 'Ringing...'}
-                {callStatus === 'active' && formatDuration(callDuration)}
-                {callStatus === 'ended' && 'Call ended'}
-              </p>
+
+              {/* Participants grid */}
+              <div className={`grid gap-4 max-w-4xl mx-auto ${
+                totalParticipants <= 2 ? 'grid-cols-2' :
+                totalParticipants <= 4 ? 'grid-cols-2' :
+                totalParticipants <= 6 ? 'grid-cols-3' :
+                'grid-cols-4'
+              }`}>
+                {Array.from(participantStreams.values()).map((participant) => (
+                  <div
+                    key={participant.address}
+                    className={`relative aspect-video bg-dark-200 rounded-2xl overflow-hidden border-2 ${
+                      participant.isConnected ? 'border-success-500' : 'border-midnight'
+                    }`}
+                  >
+                    {isVideoCall && participant.stream ? (
+                      <video
+                        autoPlay
+                        playsInline
+                        ref={(el) => {
+                          if (el && participant.stream) {
+                            el.srcObject = participant.stream;
+                          }
+                        }}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex flex-col items-center justify-center">
+                        {participant.profile?.avatar ? (
+                          <img
+                            src={participant.profile.avatar}
+                            alt=""
+                            className="w-20 h-20 rounded-full object-cover mb-3"
+                          />
+                        ) : (
+                          <div
+                            className="w-20 h-20 rounded-full flex items-center justify-center text-white text-2xl font-semibold mb-3"
+                            style={{ backgroundColor: getAvatarColor(participant.address) }}
+                          >
+                            {getInitials(participant.profile?.username || participant.address)}
+                          </div>
+                        )}
+                        <p className="text-white font-medium">
+                          {participant.profile?.username 
+                            ? `@${participant.profile.username}`
+                            : truncateAddress(participant.address)
+                          }
+                        </p>
+                        <p className="text-sm text-secondary mt-1">
+                          {participant.isConnected ? '🟢 Connected' : '⏳ Connecting...'}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Connection status indicator */}
+                    <div className={`absolute top-3 right-3 w-3 h-3 rounded-full ${
+                      participant.isConnected ? 'bg-success-500 shadow-glow-green' : 'bg-warning-500 animate-pulse'
+                    }`} />
+                  </div>
+                ))}
+              </div>
             </div>
+          ) : (
+            // Direct call layout (existing)
+            <>
+              {isVideoCall ? (
+                <video
+                  ref={remoteVideoRef}
+                  autoPlay
+                  playsInline
+                  className="w-full h-full object-cover"
+                />
+              ) : null}
+              
+              {(!isVideoCall || callStatus !== 'active') && (
+                <div className="flex flex-col items-center">
+                  <div className="w-32 h-32 rounded-full bg-gradient-to-br from-primary-500 to-cyan-500 flex items-center justify-center text-white text-4xl font-semibold mb-6 shadow-glow-lg">
+                    {getInitials(otherParty as string || '')}
+                  </div>
+                  <p className="text-white text-2xl font-semibold mb-2">
+                    {truncateAddress(otherParty as string || '')}
+                  </p>
+                  <p className="text-secondary text-lg">
+                    {callStatus === 'connecting' && 'Connecting...'}
+                    {callStatus === 'ringing' && 'Ringing...'}
+                    {callStatus === 'active' && formatDuration(callDuration)}
+                    {callStatus === 'ended' && 'Call ended'}
+                  </p>
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -287,13 +524,18 @@ export default function CallModal() {
               muted
               className="w-full h-full object-cover"
             />
+            <div className="absolute bottom-2 left-2 text-xs text-white bg-black/50 px-2 py-1 rounded">
+              You
+            </div>
           </div>
         )}
 
         {/* Audio Status & Controls Panel */}
         {callStatus === 'active' && (
           <div className="absolute top-6 left-6 bg-card/95 backdrop-blur-sm text-white px-4 py-3 rounded-xl text-sm max-w-xs border border-midnight">
-            <div className="font-bold mb-2 text-primary-400">🔊 Audio Status</div>
+            <div className="font-bold mb-2 text-primary-400">
+              🔊 {isGroupCall ? 'Group Call' : 'Audio Status'}
+            </div>
             
             <div className="space-y-2 text-xs">
               <div className="flex items-center justify-between">
@@ -303,24 +545,35 @@ export default function CallModal() {
                 </span>
               </div>
               
-              <div className="flex items-center justify-between">
-                <span>Remote stream:</span>
-                <span className={hasRemoteStream ? 'text-success-500' : 'text-warning-500'}>
-                  {hasRemoteStream ? '✅ Connected' : '⏳ Waiting...'}
-                </span>
-              </div>
-              
-              <div className="flex items-center justify-between">
-                <span>Audio playing:</span>
-                <span className={remoteAudioPlaying ? 'text-success-500' : 'text-danger-500'}>
-                  {remoteAudioPlaying ? '✅ Yes' : '❌ No'}
-                </span>
-              </div>
+              {isGroupCall ? (
+                <div className="flex items-center justify-between">
+                  <span>Connected:</span>
+                  <span className="text-success-500">
+                    {connectedCount}/{totalParticipants} participants
+                  </span>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span>Remote stream:</span>
+                    <span className={hasRemoteStream ? 'text-success-500' : 'text-warning-500'}>
+                      {hasRemoteStream ? '✅ Connected' : '⏳ Waiting...'}
+                    </span>
+                  </div>
+                  
+                  <div className="flex items-center justify-between">
+                    <span>Audio playing:</span>
+                    <span className={remoteAudioPlaying ? 'text-success-500' : 'text-danger-500'}>
+                      {remoteAudioPlaying ? '✅ Yes' : '❌ No'}
+                    </span>
+                  </div>
+                </>
+              )}
             </div>
             
             {/* Action buttons */}
             <div className="mt-3 space-y-2">
-              {!remoteAudioPlaying && hasRemoteStream && (
+              {!remoteAudioPlaying && (hasRemoteStream || connectedCount > 0) && (
                 <button
                   onClick={handlePlayAudio}
                   className="w-full bg-success-600 hover:bg-success-500 px-3 py-2 rounded-lg text-white font-medium transition text-sm"
@@ -329,7 +582,7 @@ export default function CallModal() {
                 </button>
               )}
               
-              {hasRemoteStream && (
+              {(hasRemoteStream || connectedCount > 0) && (
                 <button
                   onClick={handleBoostAudio}
                   className="w-full bg-primary-600 hover:bg-primary-500 px-3 py-2 rounded-lg text-white font-medium transition text-sm"
@@ -337,31 +590,6 @@ export default function CallModal() {
                   🔊 Boost Audio (3x)
                 </button>
               )}
-              
-              <button
-                onClick={() => {
-                  console.log('=== AUDIO DEBUG ===');
-                  console.log('Audio element:', remoteAudioRef.current);
-                  console.log('srcObject:', remoteAudioRef.current?.srcObject);
-                  console.log('paused:', remoteAudioRef.current?.paused);
-                  console.log('volume:', remoteAudioRef.current?.volume);
-                  console.log('muted:', remoteAudioRef.current?.muted);
-                  if (remoteAudioRef.current?.srcObject) {
-                    const s = remoteAudioRef.current.srcObject as MediaStream;
-                    console.log('Stream active:', s.active);
-                    console.log('Tracks:', s.getTracks().map(t => ({
-                      kind: t.kind,
-                      enabled: t.enabled,
-                      muted: t.muted,
-                      readyState: t.readyState,
-                    })));
-                  }
-                  toast.success('Check browser console (F12)');
-                }}
-                className="w-full bg-dark-200 hover:bg-dark-100 px-3 py-2 rounded-lg text-white font-medium transition text-sm"
-              >
-                🔍 Debug Info
-              </button>
             </div>
           </div>
         )}

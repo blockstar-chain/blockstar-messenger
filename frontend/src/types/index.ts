@@ -91,7 +91,7 @@ export interface GroupChat extends Conversation {
 export interface Call {
   id: string;
   callerId: string;
-  recipientId: string;
+  recipientId: string | string[]; // Single address or array for group calls
   recipientAddress?: string; // Optional backwards compatibility
   type: 'audio' | 'video';
   status: 'calling' | 'ringing' | 'active' | 'ended' | 'missed';
@@ -99,6 +99,21 @@ export interface Call {
   endTime?: number;
   localStream?: MediaStream;
   remoteStream?: MediaStream;
+  // Group call properties
+  isGroupCall?: boolean;
+  participants?: string[]; // All participants including caller
+  connectedPeers?: string[]; // Peers that have connected
+  groupName?: string; // Group name for display
+}
+
+export interface GroupCallParticipant {
+  address: string;
+  username?: string;
+  avatar?: string;
+  stream?: MediaStream;
+  isConnected: boolean;
+  isMuted: boolean;
+  isVideoOff: boolean;
 }
 
 export interface SignalKeys {

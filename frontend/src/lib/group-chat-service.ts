@@ -21,10 +21,8 @@ export class GroupChatService {
   ): Promise<GroupChat> {
     const currentUser = await this.getCurrentUser();
     
-    const groupId = generateConversationId(
-      currentUser.walletAddress,
-      ...members
-    );
+    // Generate a unique group ID that won't conflict
+    const groupId = `group_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
     const group: GroupChat = {
       id: groupId,
@@ -32,9 +30,9 @@ export class GroupChatService {
       groupName: name,
       groupDescription: description,
       groupAvatar: avatar,
-      participants: [currentUser.walletAddress, ...members],
-      admins: [currentUser.walletAddress],
-      createdBy: currentUser.walletAddress,
+      participants: [currentUser.walletAddress.toLowerCase(), ...members.map(m => m.toLowerCase())],
+      admins: [currentUser.walletAddress.toLowerCase()],
+      createdBy: currentUser.walletAddress.toLowerCase(),
       unreadCount: 0,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -47,7 +45,7 @@ export class GroupChatService {
     // Notify server and members
     webSocketService.emit('group:create', {
       group,
-      members,
+      members: members.map(m => m.toLowerCase()),
     });
 
     return group;

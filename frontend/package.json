@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@noble/curves": "^1.9.7",
     "@signalapp/libsignal-client": "^0.32.0",
     "axios": "^1.13.2",
     "circomlibjs": "^0.1.7",
@@ -20,6 +21,7 @@
     "ipfs-http-client": "^60.0.1",
     "lucide-react": "^0.555.0",
     "next": "^14.0.4",
+    "qrcode": "^1.5.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-hot-toast": "^2.4.1",
@@ -33,6 +35,7 @@
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/qrcode": "^1.5.5",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "@types/uuid": "^9.0.0",

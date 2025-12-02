@@ -19,6 +19,7 @@ let conversationsCollection: Collection;
 let offlineMessagesCollection: Collection;
 let sessionsCollection: Collection;
 let filesCollection: Collection;
+let contactsCollection: Collection;
 
 // ============================================
 // DATABASE CONNECTION
@@ -38,6 +39,7 @@ export async function initializeDatabase(): Promise<boolean> {
     offlineMessagesCollection = db.collection('offline_messages');
     sessionsCollection = db.collection('sessions');
     filesCollection = db.collection('files');
+    contactsCollection = db.collection('contacts');
     
     // Create indexes for performance
     await createIndexes();
@@ -72,6 +74,10 @@ async function createIndexes(): Promise<void> {
     // Sessions indexes
     await sessionsCollection.createIndex({ user_id: 1 });
     await sessionsCollection.createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 }); // TTL index
+    
+    // Contacts indexes
+    await contactsCollection.createIndex({ owner_wallet: 1, contact_wallet: 1 }, { unique: true });
+    await contactsCollection.createIndex({ owner_wallet: 1 });
     
     console.log('📦 MongoDB indexes created');
   } catch (error) {
@@ -222,41 +228,44 @@ export async function getConversationById(conversationId: string): Promise<DBCon
 }
 
 export async function getUserConversations(walletAddress: string): Promise<DBConversation[]> {
+  const normalizedAddress = walletAddress.toLowerCase();
+  
+  // Get conversations where user is a participant AND not hidden for this user
   const conversations = await conversationsCollection.find({
-    participants: walletAddress.toLowerCase()
+    participants: normalizedAddress,
+    $or: [
+      { hidden_for: { $exists: false } },
+      { hidden_for: { $nin: [normalizedAddress] } }
+    ]
   }).sort({ updated_at: -1 }).toArray();
+  
   return conversations as DBConversation[];
 }
 
 export async function createGroupConversation(group: any): Promise<string> {
   const now = new Date();
   
-  // Build query to check if group already exists
-  const queryConditions: any[] = [{ group_id: group.id }];
+  // Use the frontend-provided group ID
+  const groupId = group.id;
   
-  // Only add ObjectId check if we have a valid ObjectId string
-  if (group.id && ObjectId.isValid(group.id)) {
-    queryConditions.push({ _id: new ObjectId(group.id) });
-  }
-  
-  // Check if group already exists
+  // Check if group already exists by the group_id
   const existing = await conversationsCollection.findOne({
     type: 'group',
-    $or: queryConditions
+    group_id: groupId
   });
   
   if (existing) {
-    console.log('Group conversation already exists:', existing._id);
-    return existing._id!.toString();
+    console.log('Group conversation already exists:', groupId);
+    return groupId;
   }
   
   // Normalize participants to lowercase
   const participants = (group.participants || []).map((p: string) => p.toLowerCase());
   
-  // Create new group conversation
-  const result = await conversationsCollection.insertOne({
+  // Create new group conversation - use frontend ID as group_id
+  await conversationsCollection.insertOne({
     type: 'group',
-    group_id: group.id,  // Store the frontend-generated ID for reference
+    group_id: groupId,  // Store the frontend-generated ID
     participants,
     name: group.groupName || group.name,
     avatar_url: group.groupAvatar || group.avatar,
@@ -266,8 +275,8 @@ export async function createGroupConversation(group: any): Promise<string> {
     updated_at: now,
   });
   
-  console.log('Created group conversation:', result.insertedId.toString());
-  return result.insertedId.toString();
+  console.log('Created group conversation with ID:', groupId);
+  return groupId;
 }
 
 // ============================================
@@ -293,7 +302,8 @@ export async function saveMessage(
   senderWallet: string,
   content: string | object,  // Accept both string and object
   messageType: string = 'text',
-  clientId?: string  // Client-generated message ID
+  clientId?: string,  // Client-generated message ID
+  encryptedPayloads?: Record<string, string>  // Per-recipient encrypted content for groups
 ): Promise<DBMessage> {
   const now = new Date();
   
@@ -320,6 +330,11 @@ export async function saveMessage(
     updated_at: now,
     client_id: clientId,
   };
+  
+  // Store encrypted payloads for group messages
+  if (encryptedPayloads) {
+    (message as any).encrypted_payloads = encryptedPayloads;
+  }
   
   const result = await messagesCollection.insertOne(message);
   message._id = result.insertedId;
@@ -658,6 +673,483 @@ export async function getStats(): Promise<any> {
 }
 
 // ============================================
+// GROUP MANAGEMENT OPERATIONS
+// ============================================
+
+export async function addGroupMember(
+  conversationId: string,
+  memberWallet: string,
+  adminWallet: string
+): Promise<boolean> {
+  const normalizedMember = memberWallet.toLowerCase();
+  const normalizedAdmin = adminWallet.toLowerCase();
+  
+  // Get the conversation first
+  let conversation;
+  try {
+    conversation = await conversationsCollection.findOne({ 
+      _id: new ObjectId(conversationId) 
+    });
+  } catch {
+    // Try by group_id if ObjectId fails
+    conversation = await conversationsCollection.findOne({ 
+      group_id: conversationId 
+    });
+  }
+  
+  if (!conversation) {
+    console.error('Group not found:', conversationId);
+    return false;
+  }
+  
+  // Check if requester is admin
+  const admins = conversation.admins || [];
+  const createdBy = (conversation.created_by || '').toLowerCase();
+  const isAdmin = admins.includes(normalizedAdmin) || createdBy === normalizedAdmin;
+  
+  if (!isAdmin) {
+    console.error('User is not admin:', normalizedAdmin);
+    return false;
+  }
+  
+  // Check if member already in group
+  if (conversation.participants.includes(normalizedMember)) {
+    console.log('Member already in group:', normalizedMember);
+    return true;
+  }
+  
+  // Add member
+  await conversationsCollection.updateOne(
+    { _id: conversation._id },
+    { 
+      $push: { participants: normalizedMember } as any,
+      $set: { updated_at: new Date() }
+    }
+  );
+  
+  console.log(`Added ${normalizedMember} to group ${conversationId}`);
+  return true;
+}
+
+export async function removeGroupMember(
+  conversationId: string,
+  memberWallet: string,
+  adminWallet: string
+): Promise<boolean> {
+  const normalizedMember = memberWallet.toLowerCase();
+  const normalizedAdmin = adminWallet.toLowerCase();
+  
+  // Get the conversation first
+  let conversation;
+  try {
+    conversation = await conversationsCollection.findOne({ 
+      _id: new ObjectId(conversationId) 
+    });
+  } catch {
+    // Try by group_id if ObjectId fails
+    conversation = await conversationsCollection.findOne({ 
+      group_id: conversationId 
+    });
+  }
+  
+  if (!conversation) {
+    console.error('Group not found:', conversationId);
+    return false;
+  }
+  
+  // Check if requester is admin (or removing themselves)
+  const admins = conversation.admins || [];
+  const createdBy = (conversation.created_by || '').toLowerCase();
+  const isAdmin = admins.includes(normalizedAdmin) || createdBy === normalizedAdmin;
+  const isSelfRemoval = normalizedMember === normalizedAdmin;
+  
+  if (!isAdmin && !isSelfRemoval) {
+    console.error('User is not authorized to remove members:', normalizedAdmin);
+    return false;
+  }
+  
+  // Can't remove the creator
+  if (normalizedMember === createdBy) {
+    console.error('Cannot remove group creator:', normalizedMember);
+    return false;
+  }
+  
+  // Remove member from participants and admins
+  await conversationsCollection.updateOne(
+    { _id: conversation._id },
+    { 
+      $pull: { 
+        participants: normalizedMember,
+        admins: normalizedMember 
+      } as any,
+      $set: { updated_at: new Date() }
+    }
+  );
+  
+  console.log(`Removed ${normalizedMember} from group ${conversationId}`);
+  return true;
+}
+
+export async function addGroupAdmin(
+  conversationId: string,
+  memberWallet: string,
+  adminWallet: string
+): Promise<boolean> {
+  const normalizedMember = memberWallet.toLowerCase();
+  const normalizedAdmin = adminWallet.toLowerCase();
+  
+  // Get the conversation first
+  let conversation;
+  try {
+    conversation = await conversationsCollection.findOne({ 
+      _id: new ObjectId(conversationId) 
+    });
+  } catch {
+    conversation = await conversationsCollection.findOne({ 
+      group_id: conversationId 
+    });
+  }
+  
+  if (!conversation) {
+    return false;
+  }
+  
+  // Check if requester is admin
+  const admins = conversation.admins || [];
+  const createdBy = (conversation.created_by || '').toLowerCase();
+  const isAdmin = admins.includes(normalizedAdmin) || createdBy === normalizedAdmin;
+  
+  if (!isAdmin) {
+    return false;
+  }
+  
+  // Check if member is in the group
+  if (!conversation.participants.includes(normalizedMember)) {
+    return false;
+  }
+  
+  // Add as admin
+  await conversationsCollection.updateOne(
+    { _id: conversation._id },
+    { 
+      $addToSet: { admins: normalizedMember },
+      $set: { updated_at: new Date() }
+    }
+  );
+  
+  return true;
+}
+
+export async function removeGroupAdmin(
+  conversationId: string,
+  memberWallet: string,
+  adminWallet: string
+): Promise<boolean> {
+  const normalizedMember = memberWallet.toLowerCase();
+  const normalizedAdmin = adminWallet.toLowerCase();
+  
+  // Get the conversation first
+  let conversation;
+  try {
+    conversation = await conversationsCollection.findOne({ 
+      _id: new ObjectId(conversationId) 
+    });
+  } catch {
+    conversation = await conversationsCollection.findOne({ 
+      group_id: conversationId 
+    });
+  }
+  
+  if (!conversation) {
+    return false;
+  }
+  
+  // Check if requester is admin
+  const admins = conversation.admins || [];
+  const createdBy = (conversation.created_by || '').toLowerCase();
+  const isAdmin = admins.includes(normalizedAdmin) || createdBy === normalizedAdmin;
+  
+  if (!isAdmin) {
+    return false;
+  }
+  
+  // Can't remove admin from creator
+  if (normalizedMember === createdBy) {
+    return false;
+  }
+  
+  // Remove from admins
+  await conversationsCollection.updateOne(
+    { _id: conversation._id },
+    { 
+      $pull: { admins: normalizedMember } as any,
+      $set: { updated_at: new Date() }
+    }
+  );
+  
+  return true;
+}
+
+/**
+ * Get a group by ID
+ */
+export async function getGroup(conversationId: string): Promise<any | null> {
+  let conversation;
+  try {
+    conversation = await conversationsCollection.findOne({ 
+      _id: new ObjectId(conversationId) 
+    });
+  } catch {
+    conversation = await conversationsCollection.findOne({ 
+      group_id: conversationId 
+    });
+  }
+  
+  return conversation;
+}
+
+/**
+ * Update group avatar
+ */
+export async function updateGroupAvatar(conversationId: string, avatarUrl: string): Promise<boolean> {
+  let result;
+  try {
+    result = await conversationsCollection.updateOne(
+      { _id: new ObjectId(conversationId) },
+      { 
+        $set: { 
+          avatar_url: avatarUrl,
+          updated_at: new Date()
+        }
+      }
+    );
+  } catch {
+    result = await conversationsCollection.updateOne(
+      { group_id: conversationId },
+      { 
+        $set: { 
+          avatar_url: avatarUrl,
+          updated_at: new Date()
+        }
+      }
+    );
+  }
+  
+  return result.modifiedCount > 0;
+}
+
+export async function getGroupMembers(conversationId: string): Promise<string[]> {
+  let conversation;
+  try {
+    conversation = await conversationsCollection.findOne({ 
+      _id: new ObjectId(conversationId) 
+    });
+  } catch {
+    conversation = await conversationsCollection.findOne({ 
+      group_id: conversationId 
+    });
+  }
+  
+  if (!conversation) {
+    return [];
+  }
+  
+  return conversation.participants || [];
+}
+
+// ============================================
+// CONTACTS
+// ============================================
+
+interface Contact {
+  id: string;
+  owner_wallet: string;
+  contact_wallet: string;
+  nickname?: string;
+  is_favorite: boolean;
+  added_at: number;
+  updated_at: number;
+}
+
+/**
+ * Get all contacts for a user
+ */
+export async function getContacts(ownerWallet: string): Promise<Contact[]> {
+  const normalizedWallet = ownerWallet.toLowerCase();
+  
+  const contacts = await contactsCollection
+    .find({ owner_wallet: normalizedWallet })
+    .sort({ is_favorite: -1, added_at: -1 })
+    .toArray();
+  
+  return contacts.map(c => ({
+    id: c._id.toString(),
+    owner_wallet: c.owner_wallet,
+    contact_wallet: c.contact_wallet,
+    nickname: c.nickname,
+    is_favorite: c.is_favorite || false,
+    added_at: c.added_at,
+    updated_at: c.updated_at,
+  }));
+}
+
+/**
+ * Add a new contact
+ */
+export async function addContact(
+  ownerWallet: string,
+  contactWallet: string,
+  nickname?: string
+): Promise<Contact | null> {
+  const normalizedOwner = ownerWallet.toLowerCase();
+  const normalizedContact = contactWallet.toLowerCase();
+  
+  // Don't allow adding self
+  if (normalizedOwner === normalizedContact) {
+    return null;
+  }
+  
+  const now = Date.now();
+  
+  try {
+    const result = await contactsCollection.insertOne({
+      owner_wallet: normalizedOwner,
+      contact_wallet: normalizedContact,
+      nickname: nickname || undefined,
+      is_favorite: false,
+      added_at: now,
+      updated_at: now,
+    });
+    
+    return {
+      id: result.insertedId.toString(),
+      owner_wallet: normalizedOwner,
+      contact_wallet: normalizedContact,
+      nickname,
+      is_favorite: false,
+      added_at: now,
+      updated_at: now,
+    };
+  } catch (error: any) {
+    // Duplicate key error (contact already exists)
+    if (error.code === 11000) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Update a contact (nickname, favorite status)
+ */
+export async function updateContact(
+  ownerWallet: string,
+  contactWallet: string,
+  updates: { nickname?: string; is_favorite?: boolean }
+): Promise<boolean> {
+  const normalizedOwner = ownerWallet.toLowerCase();
+  const normalizedContact = contactWallet.toLowerCase();
+  
+  const updateFields: any = { updated_at: Date.now() };
+  
+  if (updates.nickname !== undefined) {
+    updateFields.nickname = updates.nickname || null;
+  }
+  if (updates.is_favorite !== undefined) {
+    updateFields.is_favorite = updates.is_favorite;
+  }
+  
+  const result = await contactsCollection.updateOne(
+    { owner_wallet: normalizedOwner, contact_wallet: normalizedContact },
+    { $set: updateFields }
+  );
+  
+  return result.modifiedCount > 0;
+}
+
+/**
+ * Remove a contact
+ */
+export async function removeContact(
+  ownerWallet: string,
+  contactWallet: string
+): Promise<boolean> {
+  const normalizedOwner = ownerWallet.toLowerCase();
+  const normalizedContact = contactWallet.toLowerCase();
+  
+  const result = await contactsCollection.deleteOne({
+    owner_wallet: normalizedOwner,
+    contact_wallet: normalizedContact,
+  });
+  
+  return result.deletedCount > 0;
+}
+
+/**
+ * Check if a contact exists
+ */
+export async function isContactExists(
+  ownerWallet: string,
+  contactWallet: string
+): Promise<boolean> {
+  const normalizedOwner = ownerWallet.toLowerCase();
+  const normalizedContact = contactWallet.toLowerCase();
+  
+  const contact = await contactsCollection.findOne({
+    owner_wallet: normalizedOwner,
+    contact_wallet: normalizedContact,
+  });
+  
+  return !!contact;
+}
+
+/**
+ * Hide a conversation for a specific user (soft delete)
+ * The conversation still exists but won't be returned for this user
+ */
+export async function hideConversationForUser(
+  conversationId: string,
+  walletAddress: string
+): Promise<boolean> {
+  const normalizedAddress = walletAddress.toLowerCase();
+  
+  try {
+    // Add this user to the hidden_for array
+    await conversationsCollection.updateOne(
+      { _id: new ObjectId(conversationId) },
+      { 
+        $addToSet: { hidden_for: normalizedAddress },
+        $set: { updated_at: new Date() }
+      }
+    );
+    return true;
+  } catch (error) {
+    console.error('Error hiding conversation:', error);
+    return false;
+  }
+}
+
+/**
+ * Check if a conversation is hidden for a user
+ */
+export async function isConversationHiddenForUser(
+  conversationId: string,
+  walletAddress: string
+): Promise<boolean> {
+  const normalizedAddress = walletAddress.toLowerCase();
+  
+  try {
+    const conversation = await conversationsCollection.findOne({
+      _id: new ObjectId(conversationId),
+      hidden_for: normalizedAddress
+    });
+    return !!conversation;
+  } catch (error) {
+    return false;
+  }
+}
+
+// ============================================
 // EXPORTS
 // ============================================
 
@@ -676,6 +1168,14 @@ export default {
   getConversationById,
   getUserConversations,
   createGroupConversation,
+  // Group management
+  addGroupMember,
+  removeGroupMember,
+  addGroupAdmin,
+  removeGroupAdmin,
+  getGroupMembers,
+  getGroup,
+  updateGroupAvatar,
   // Message operations
   saveMessage,
   getMessages,
@@ -699,5 +1199,13 @@ export default {
   deleteConversation,
   deleteConversationMessages,
   softDeleteMessage,
+  hideConversationForUser,
+  isConversationHiddenForUser,
   getUser,
+  // Contact operations
+  getContacts,
+  addContact,
+  updateContact,
+  removeContact,
+  isContactExists,
 };
