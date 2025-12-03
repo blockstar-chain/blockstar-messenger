@@ -51,15 +51,18 @@ export const dbHelpers = {
     // Note: Actual persistence is handled by WebSocket/API when sending
   },
 
-  async getConversationMessages(conversationId: string): Promise<Message[]> {
+  async getConversationMessages(conversationId: string, walletAddress?: string): Promise<Message[]> {
     // Return from cache if available
     if (messageCache.has(conversationId)) {
       return [...(messageCache.get(conversationId) || [])];
     }
     
-    // Fetch from backend API
+    // Fetch from backend API - include wallet address for encrypted group message decryption
     try {
-      const response = await fetch(`${API_URL}/api/conversations/${conversationId}/messages`);
+      const url = walletAddress 
+        ? `${API_URL}/api/conversations/${conversationId}/messages?walletAddress=${encodeURIComponent(walletAddress)}`
+        : `${API_URL}/api/conversations/${conversationId}/messages`;
+      const response = await fetch(url);
       if (response.ok) {
         const data = await response.json();
         if (data.success && data.messages) {
@@ -74,6 +77,7 @@ export const dbHelpers = {
             delivered: msg.delivered !== false,
             read: false, // Will be properly set by ChatArea based on readBy
             readBy: msg.readBy || [], // Include readBy for processing
+            reactions: msg.reactions || [], // Include reactions
           }));
           
           // Cache the messages

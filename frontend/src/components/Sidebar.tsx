@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useAppStore } from '@/store';
 import { db, dbHelpers } from '@/lib/database';
 import { Conversation } from '@/types';
-import { Search, Plus, Settings, LogOut, X, MessageSquarePlus, Lock, ExternalLink, Globe, Mail, Twitter, MessageSquare, Trash2, Users, ExternalLinkIcon, BookUser, Radio } from 'lucide-react';
+import { Search, Plus, Settings, LogOut, X, MessageSquarePlus, Lock, ExternalLink, Globe, Mail, Twitter, MessageSquare, Trash2, Users, ExternalLinkIcon, BookUser, Radio, RefreshCw, Bell } from 'lucide-react';
 import { truncateAddress, formatTimestamp, getInitials, getAvatarColor, generateConversationId } from '@/utils/helpers';
 import { blockchainService } from '@/lib/blockchain';
 import { resolveProfile, getProfileByWallet, type BlockStarProfile } from '@/lib/profileResolver';
@@ -17,6 +17,7 @@ import UserProfileModal from './UserProfileModal';
 import { addToContacts, isContact } from './ContactsSection';
 import MeshStatusIndicator from './MeshStatusIndicator';
 import MeshQRConnect from './MeshQRConnect';
+import NotificationSettingsPanel from './NotificationSettings';
 
 // Cache for decrypted message previews
 const decryptedPreviewCache = new Map<string, string>();
@@ -75,6 +76,7 @@ export default function Sidebar() {
   const [filteredConversations, setFilteredConversations] = useState<Conversation[]>([]);
   const [showNewChatModal, setShowNewChatModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [newChatAddress, setNewChatAddress] = useState('');
   const [userProfile, setUserProfile] = useState<BlockStarProfile | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(false);
@@ -158,13 +160,54 @@ export default function Sidebar() {
 
   // Listen for group:created events when another user adds us to a group
   useEffect(() => {
-    const unsubscribe = webSocketService.on('group:created', (data: { group: any; createdBy: string }) => {
+    const unsubscribe = webSocketService.on('group:created', async (data: { group: any; createdBy: string }) => {
       console.log('📢 Received group:created event:', data);
 
-      // Check if we're already have this group
-      const existingConv = conversations.find(c => c.id === data.group.id);
-      if (existingConv) {
-        console.log('Group already exists in conversations');
+      // Check if we already have this group by ID
+      const existingById = conversations.find(c => c.id === data.group.id);
+      if (existingById) {
+        console.log('Group already exists by ID:', data.group.id);
+        // Update with new info in case it was created from a message with incomplete data
+        if (data.group.groupName && data.group.groupName !== 'Group Chat') {
+          useAppStore.getState().updateConversation(existingById.id, {
+            groupName: data.group.groupName,
+            groupAvatar: data.group.groupAvatar,
+            admins: data.group.admins,
+            createdBy: data.group.createdBy,
+          });
+          db.conversations.update(existingById.id, {
+            groupName: data.group.groupName,
+            groupAvatar: data.group.groupAvatar,
+            admins: data.group.admins,
+            createdBy: data.group.createdBy,
+          });
+        }
+        return;
+      }
+      
+      // Also check by participants to avoid duplicates
+      const newParticipants = (data.group.participants || []).map((p: string) => p.toLowerCase()).sort().join(',');
+      const existingByParticipants = conversations.find(c => {
+        if (c.type !== 'group') return false;
+        const existingParticipants = (c.participants || []).map(p => p.toLowerCase()).sort().join(',');
+        return existingParticipants === newParticipants;
+      });
+      
+      if (existingByParticipants) {
+        console.log('Group already exists by participants:', newParticipants);
+        // Update the existing group with the new info - this group has the authoritative name
+        useAppStore.getState().updateConversation(existingByParticipants.id, {
+          groupName: data.group.groupName,
+          groupAvatar: data.group.groupAvatar,
+          admins: data.group.admins,
+          createdBy: data.group.createdBy,
+        });
+        db.conversations.update(existingByParticipants.id, {
+          groupName: data.group.groupName,
+          groupAvatar: data.group.groupAvatar,
+          admins: data.group.admins,
+          createdBy: data.group.createdBy,
+        });
         return;
       }
 
@@ -183,7 +226,19 @@ export default function Sidebar() {
       };
 
       // Save locally
-      db.conversations.put(newGroup);
+      await db.conversations.put(newGroup);
+
+      // Check if there are any pending messages for this group (messages that arrived before the group:created event)
+      try {
+        const pendingMessages = await db.messages.where('conversationId').equals(data.group.id).toArray();
+        if (pendingMessages.length > 0) {
+          console.log(`📨 Found ${pendingMessages.length} pending messages for new group ${data.group.groupName}`);
+          newGroup.lastMessage = pendingMessages[pendingMessages.length - 1];
+          newGroup.unreadCount = pendingMessages.length;
+        }
+      } catch (error) {
+        console.warn('Could not check for pending messages:', error);
+      }
 
       // Add to state
       addConversation(newGroup);
@@ -335,25 +390,87 @@ export default function Sidebar() {
       const deletedIds = getDeletedConversations(currentUser.walletAddress);
       let allConversations = await db.conversations.toArray();
       
+      // CRITICAL: Remove any groups named "Group Chat" that shouldn't exist
+      // These are created by bugs and should never be shown to users
+      const groupChatGroups = allConversations.filter(c => 
+        c.type === 'group' && (c as any).groupName === 'Group Chat'
+      );
+      
+      for (const badGroup of groupChatGroups) {
+        // Check if there's a properly named group with the same participants
+        const participants = (badGroup.participants || []).map(p => p.toLowerCase()).sort().join(',');
+        const properGroup = allConversations.find(c => 
+          c.type === 'group' && 
+          c.id !== badGroup.id &&
+          (c as any).groupName !== 'Group Chat' &&
+          (c.participants || []).map(p => p.toLowerCase()).sort().join(',') === participants
+        );
+        
+        if (properGroup) {
+          // There's a proper group with same participants, delete the "Group Chat" one
+          console.log(`🗑️ Removing duplicate "Group Chat" group, proper group exists: ${(properGroup as any).groupName}`);
+          await db.conversations.delete(badGroup.id);
+        } else {
+          // No proper group exists - this group shouldn't exist at all
+          // Check if it has any messages
+          const messages = await db.messages.where('conversationId').equals(badGroup.id).count();
+          if (messages === 0) {
+            console.log(`🗑️ Removing empty "Group Chat" group with no proper alternative`);
+            await db.conversations.delete(badGroup.id);
+          }
+        }
+      }
+      
+      // Reload after cleanup
+      allConversations = await db.conversations.toArray();
+      
       // Filter out deleted conversations
       allConversations = allConversations.filter(c => !deletedIds.has(c.id));
 
       // Always try to sync from server to catch conversations from other devices
       const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
 
+      // First, cleanup any duplicate groups on the server
+      try {
+        await fetch(`${API_URL}/api/conversations/cleanup-duplicates`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ walletAddress: currentUser.walletAddress }),
+        });
+      } catch (cleanupError) {
+        console.warn('Could not cleanup duplicates:', cleanupError);
+      }
+
       try {
         const response = await fetch(`${API_URL}/api/conversations/${currentUser.walletAddress}`);
 
         if (response.ok) {
           const data = await response.json();
-          console.log('Server conversations:', data.conversations);
+          console.log('Server conversations:', data.conversations?.length);
+          
           if (data.success && data.conversations?.length > 0) {
             for (const serverConv of data.conversations) {
               // Skip if deleted locally
               if (deletedIds.has(serverConv.id)) continue;
               
-              // Check if we already have this conversation locally
-              const existingLocal = allConversations.find(c => c.id === serverConv.id);
+              // Check if we already have this conversation locally by ID
+              let existingLocal = allConversations.find(c => c.id === serverConv.id);
+              
+              // For groups, also check if we have a local group with same participants (deduplication)
+              if (!existingLocal && serverConv.type === 'group') {
+                const serverParticipants = (serverConv.participants || []).map((p: string) => p.toLowerCase()).sort().join(',');
+                existingLocal = allConversations.find(c => {
+                  if (c.type !== 'group') return false;
+                  const localParticipants = (c.participants || []).map((p: string) => p.toLowerCase()).sort().join(',');
+                  return localParticipants === serverParticipants;
+                });
+                
+                if (existingLocal) {
+                  console.log(`📋 Found duplicate group by participants, using local ID: ${existingLocal.id}`);
+                  // Skip this server conversation - we already have it locally
+                  continue;
+                }
+              }
               
               const conversation: Conversation = {
                 id: serverConv.id,
@@ -381,7 +498,10 @@ export default function Sidebar() {
                 } : existingLocal?.lastMessage,
               };
 
-              await db.conversations.put(conversation);
+              // Only add if we don't already have this conversation
+              if (!existingLocal) {
+                await db.conversations.put(conversation);
+              }
             }
 
             allConversations = await db.conversations.toArray();
@@ -391,6 +511,52 @@ export default function Sidebar() {
         }
       } catch (fetchError) {
         console.warn('Could not fetch from server:', fetchError);
+      }
+
+      // Deduplicate groups in IndexedDB by participants
+      const seenGroupParticipants = new Map<string, Conversation>();
+      const duplicatesToRemove: string[] = [];
+      
+      for (const conv of allConversations) {
+        if (conv.type === 'group') {
+          const participantsKey = (conv.participants || []).map(p => p.toLowerCase()).sort().join(',');
+          const existing = seenGroupParticipants.get(participantsKey);
+          
+          if (existing) {
+            // We have a duplicate - keep the one with proper groupName or more recent
+            const existingHasName = (existing as any).groupName && (existing as any).groupName !== 'Group Chat';
+            const convHasName = (conv as any).groupName && (conv as any).groupName !== 'Group Chat';
+            
+            if (convHasName && !existingHasName) {
+              // New one has better name, remove old
+              duplicatesToRemove.push(existing.id);
+              seenGroupParticipants.set(participantsKey, conv);
+            } else if (!convHasName && existingHasName) {
+              // Old one has better name, remove new
+              duplicatesToRemove.push(conv.id);
+            } else if (conv.updatedAt > existing.updatedAt) {
+              // New one is more recent
+              duplicatesToRemove.push(existing.id);
+              seenGroupParticipants.set(participantsKey, conv);
+            } else {
+              // Old one is more recent or same
+              duplicatesToRemove.push(conv.id);
+            }
+          } else {
+            seenGroupParticipants.set(participantsKey, conv);
+          }
+        }
+      }
+      
+      // Remove duplicates from IndexedDB
+      if (duplicatesToRemove.length > 0) {
+        console.log(`🧹 Removing ${duplicatesToRemove.length} duplicate groups from IndexedDB`);
+        for (const id of duplicatesToRemove) {
+          await db.conversations.delete(id);
+        }
+        // Refresh the list
+        allConversations = await db.conversations.toArray();
+        allConversations = allConversations.filter(c => !deletedIds.has(c.id));
       }
 
       const sorted = allConversations.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -749,6 +915,30 @@ export default function Sidebar() {
     window.location.reload();
   };
 
+  const handleRefresh = async () => {
+    if (isRefreshing) return;
+    
+    setIsRefreshing(true);
+    try {
+      // Clear message cache to force fresh fetch
+      const { dbHelpers } = await import('@/lib/database');
+      dbHelpers.clearMessageCache(); // Clear all cache
+      
+      // Reload conversations
+      await loadConversations();
+      
+      // Dispatch a custom event so ChatArea can reload messages
+      window.dispatchEvent(new CustomEvent('blockstar:refresh'));
+      
+      toast.success('Refreshed!', { duration: 2000 });
+    } catch (error) {
+      console.error('Error refreshing:', error);
+      toast.error('Failed to refresh');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   const handleDeleteConversation = async (e: React.MouseEvent, conversationId: string) => {
     e.stopPropagation();
 
@@ -826,6 +1016,14 @@ export default function Sidebar() {
                 title="New Chat"
               >
                 <Plus size={18} />
+              </button>
+              <button
+                onClick={handleRefresh}
+                disabled={isRefreshing}
+                className={`p-2 hover:bg-dark-200 text-secondary hover:text-white rounded-lg transition ${isRefreshing ? 'animate-spin' : ''}`}
+                title="Refresh"
+              >
+                <RefreshCw size={18} />
               </button>
               <button
                 onClick={() => setShowSettingsModal(true)}
@@ -1040,6 +1238,10 @@ export default function Sidebar() {
                             if (typeof content !== 'string') {
                               return '📎 Attachment';
                             }
+                            // Handle encrypted group message marker
+                            if (content === '__ENCRYPTED_GROUP__') {
+                              return '🔒 Encrypted message';
+                            }
                             // Check if it's a JSON voice/file message
                             if (content.startsWith('{"type":"voice"')) {
                               return '🎤 Voice message';
@@ -1201,9 +1403,9 @@ export default function Sidebar() {
 
                 <div className="text-xs text-muted mb-4 space-y-1">
                   <p>Examples:</p>
-                  <p className="font-mono text-cyan-500">david@blockstar</p>
-                  <p className="font-mono text-cyan-500">david</p>
-                  <p className="font-mono text-cyan-500">0x1234...abcd</p>
+                  <p className="font-mono text-cyan-500">user@blockstar</p>
+                  <p className="font-mono text-cyan-500">user</p>
+                  <p className="font-mono text-cyan-500">0x123...abcd</p>
                 </div>
 
                 <input
@@ -1535,6 +1737,15 @@ export default function Sidebar() {
                   </div>
                   <span className="text-xs text-success-500 font-semibold px-2 py-1 bg-success-500/20 rounded">ACTIVE</span>
                 </div>
+              </div>
+
+              {/* Notifications Section */}
+              <div>
+                <h4 className="font-semibold text-white mb-3 flex items-center gap-2">
+                  <Bell size={18} className="text-primary-500" />
+                  Notifications
+                </h4>
+                <NotificationSettingsPanel />
               </div>
 
               {/* About Section */}

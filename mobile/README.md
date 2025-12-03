@@ -1,4 +1,4 @@
-# BlockStar Messenger Mobile App
+# BlockStar Cypher Mobile App
 
 Complete React Native mobile app with mesh networking.
 

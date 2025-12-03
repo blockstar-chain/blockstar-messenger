@@ -111,6 +111,7 @@ const socketToWallet = new Map<string, string>(); // socketId -> walletAddress
 
 // User statuses (cached in memory, backed by DB)
 const userStatuses = new Map<string, string>(); // walletAddress -> status
+const lastSeenTimes = new Map<string, number>(); // walletAddress -> timestamp
 
 // ============================================
 // REST API ENDPOINTS
@@ -202,12 +203,14 @@ app.get('/api/keys/:walletAddress', async (req, res) => {
 
     if (!user) {
       return res.status(404).json({ 
+        success: false,
         error: 'User not found',
         walletAddress 
       });
     }
 
     res.json({
+      success: true,
       walletAddress: user.wallet_address,
       publicKey: user.public_key,
       username: user.username,
@@ -216,7 +219,7 @@ app.get('/api/keys/:walletAddress', async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching key:', error);
-    res.status(500).json({ error: 'Failed to fetch key' });
+    res.status(500).json({ success: false, error: 'Failed to fetch key' });
   }
 });
 
@@ -279,12 +282,13 @@ app.get('/api/users/:walletAddress/status', (req, res) => {
   try {
     const { walletAddress } = req.params;
     const address = walletAddress.toLowerCase();
+    const isOnline = activeConnections.has(address);
 
     res.json({
       walletAddress: address,
-      isOnline: activeConnections.has(address),
+      isOnline,
       status: userStatuses.get(address) || 'offline',
-      lastSeen: Date.now(), // In production, track actual last seen
+      lastSeen: isOnline ? Date.now() : (lastSeenTimes.get(address) || null),
     });
   } catch (error) {
     console.error('Error fetching status:', error);
@@ -481,19 +485,44 @@ app.get('/api/conversations/:walletAddress', async (req, res) => {
     
     const conversations = await db.getUserConversations(address);
     
+    // Deduplicate groups by participants (in case of old data without group_id)
+    const seenGroupParticipants = new Set<string>();
+    const deduplicatedConversations = conversations.filter(conv => {
+      if (conv.type === 'group') {
+        const participantsKey = conv.participants.sort().join(',');
+        if (seenGroupParticipants.has(participantsKey)) {
+          console.log(`🔄 Skipping duplicate group with participants: ${participantsKey}`);
+          return false;
+        }
+        seenGroupParticipants.add(participantsKey);
+      }
+      return true;
+    });
+    
     // Enrich conversations with last message
     const enrichedConversations = await Promise.all(
-      conversations.map(async (conv) => {
+      deduplicatedConversations.map(async (conv) => {
         // Cast to any to access group-specific fields
         const convAny = conv as any;
         
         // For groups, use group_id for messages; for direct, use _id
-        const messageConversationId = convAny.group_id || conv._id!.toString();
-        const messages = await db.getMessages(messageConversationId, 1);
+        const conversationId = convAny.group_id || conv._id!.toString();
+        const messages = await db.getMessages(conversationId, 1);
         const lastMessage = messages.length > 0 ? messages[0] : null;
         
+        // Process lastMessage content for encrypted group messages
+        let lastMessageContent = lastMessage?.content;
+        if (lastMessage && lastMessageContent === '__ENCRYPTED_GROUP__') {
+          const msgAny = lastMessage as any;
+          if (msgAny.encrypted_payloads && msgAny.encrypted_payloads[address]) {
+            // We have the user's encrypted payload, but can't decrypt on server
+            // Just indicate it's encrypted
+            lastMessageContent = '__ENCRYPTED_GROUP__';
+          }
+        }
+        
         return {
-          id: convAny.group_id || conv._id!.toString(),  // Use frontend group_id if available
+          id: conversationId,  // Use group_id if available
           type: conv.type,
           participants: conv.participants,
           name: conv.name,
@@ -507,7 +536,7 @@ app.get('/api/conversations/:walletAddress', async (req, res) => {
           createdBy: convAny.created_by || '',
           lastMessage: lastMessage ? {
             id: lastMessage._id!.toString(),
-            content: lastMessage.content,
+            content: lastMessageContent,
             senderWallet: lastMessage.sender_wallet,
             timestamp: lastMessage.created_at.getTime(),
             type: lastMessage.message_type,
@@ -530,21 +559,40 @@ app.get('/api/conversations/:walletAddress', async (req, res) => {
 app.get('/api/conversations/:conversationId/messages', async (req, res) => {
   try {
     const { conversationId } = req.params;
-    const { limit = '50', before } = req.query;
+    const { limit = '50', before, walletAddress } = req.query;
+    const userAddress = walletAddress ? (walletAddress as string).toLowerCase() : null;
     
     const beforeDate = before ? new Date(parseInt(before as string)) : undefined;
     const messages = await db.getMessages(conversationId, parseInt(limit as string), beforeDate);
     
-    const formattedMessages = messages.map(msg => ({
-      id: msg.client_id || msg._id!.toString(),  // Use client_id for frontend consistency
-      conversationId: msg.conversation_id,
-      senderWallet: msg.sender_wallet,
-      content: msg.content,
-      type: msg.message_type,
-      delivered: msg.delivered,
-      readBy: msg.read_by || [],  // Ensure array even if empty
-      timestamp: msg.created_at.getTime(),
-    }));
+    const formattedMessages = messages.map(msg => {
+      const msgAny = msg as any;
+      let content = msg.content;
+      
+      // For encrypted group messages, get the user's specific encrypted content
+      if (content === '__ENCRYPTED_GROUP__' && msgAny.encrypted_payloads && userAddress) {
+        // Look up this user's encrypted payload
+        const userPayload = msgAny.encrypted_payloads[userAddress];
+        if (userPayload) {
+          content = userPayload;
+          console.log(`🔐 Found encrypted payload for ${userAddress} in message ${msg.client_id}`);
+        } else {
+          console.log(`⚠️ No encrypted payload for ${userAddress} in message ${msg.client_id}`);
+        }
+      }
+      
+      return {
+        id: msg.client_id || msg._id!.toString(),  // Use client_id for frontend consistency
+        conversationId: msg.conversation_id,
+        senderWallet: msg.sender_wallet,
+        content: content,
+        type: msg.message_type,
+        delivered: msg.delivered,
+        readBy: msg.read_by || [],  // Ensure array even if empty
+        reactions: msg.reactions || [],  // Include reactions
+        timestamp: msg.created_at.getTime(),
+      };
+    });
     
     res.json({
       success: true,
@@ -600,6 +648,60 @@ app.post('/api/conversations/:conversationId/read', async (req, res) => {
   } catch (error) {
     console.error('Error marking messages as read:', error);
     res.status(500).json({ error: 'Failed to mark messages as read' });
+  }
+});
+
+// Cleanup duplicate groups for a user
+app.post('/api/conversations/cleanup-duplicates', async (req, res) => {
+  try {
+    const { walletAddress } = req.body;
+    
+    if (!walletAddress) {
+      return res.status(400).json({ error: 'walletAddress is required' });
+    }
+    
+    const result = await db.cleanupDuplicateGroups(walletAddress.toLowerCase());
+    
+    console.log(`🧹 Cleaned up ${result.removed} duplicate groups for ${walletAddress}`);
+    res.json({ success: true, removed: result.removed, kept: result.kept });
+  } catch (error) {
+    console.error('Error cleaning up duplicates:', error);
+    res.status(500).json({ error: 'Failed to cleanup duplicates' });
+  }
+});
+
+// Get a single conversation by ID
+app.get('/api/conversations/:conversationId', async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    
+    const conversation = await db.getConversationById(conversationId);
+    
+    if (!conversation) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+    
+    const convAny = conversation as any;
+    
+    res.json({
+      success: true,
+      conversation: {
+        id: convAny.group_id || conversation._id!.toString(),
+        type: conversation.type,
+        participants: conversation.participants,
+        name: conversation.name,
+        groupName: conversation.name,
+        avatarUrl: conversation.avatar_url,
+        groupAvatar: conversation.avatar_url,
+        admins: convAny.admins || [],
+        createdBy: convAny.created_by || '',
+        createdAt: conversation.created_at.getTime(),
+        updatedAt: conversation.updated_at.getTime(),
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching conversation:', error);
+    res.status(500).json({ error: 'Failed to fetch conversation' });
   }
 });
 
@@ -1138,7 +1240,7 @@ io.on('connection', (socket: Socket) => {
     if (queued && queued.length > 0) {
       console.log(`Delivering ${queued.length} offline messages to ${address}`);
       queued.forEach((msg) => {
-        socket.emit('message', {
+        const messageData: any = {
           // Use client_id if available, otherwise fall back to MongoDB _id
           id: msg.client_id || msg._id?.toString(),
           senderId: msg.sender_wallet,
@@ -1146,7 +1248,19 @@ io.on('connection', (socket: Socket) => {
           content: msg.content,
           timestamp: new Date(msg.created_at).getTime(),
           type: msg.message_type,
-        });
+        };
+        
+        // Include conversation ID if available
+        if (msg.conversation_id) {
+          messageData.conversationId = msg.conversation_id;
+        }
+        
+        // Include group info if this is a group message
+        if (msg.group_info) {
+          messageData.groupInfo = msg.group_info;
+        }
+        
+        socket.emit('message', messageData);
       });
       db.clearOfflineMessages(address).catch(console.error);
     }
@@ -1254,7 +1368,8 @@ io.on('connection', (socket: Socket) => {
             address,
             message.content, // Plaintext content
             message.type || 'text',
-            message.id  // Pass client-generated ID for read receipt tracking
+            message.id,  // Pass client-generated ID for read receipt tracking
+            conversationId || undefined  // Include conversation ID
           );
           console.log(`Message queued in DB for offline user ${recipientAddress}`);
         } catch (dbError) {
@@ -1323,6 +1438,47 @@ io.on('connection', (socket: Socket) => {
       }
     } catch (error) {
       console.error('Error handling message:read:', error);
+    }
+  });
+
+  // ----------------------
+  // Message Reactions
+  // ----------------------
+
+  socket.on('message:reaction', async ({ messageId, emoji, conversationId, userId }: { 
+    messageId: string; 
+    emoji: string;
+    conversationId: string;
+    userId: string;
+  }) => {
+    try {
+      console.log('Reaction:', { messageId, emoji, userId });
+      
+      // Toggle reaction in database (add or remove)
+      const { action, reactions } = await db.toggleMessageReaction(messageId, emoji, userId);
+      
+      // Get conversation to find participants
+      const conversation = await db.getConversationById(conversationId);
+      if (!conversation) {
+        console.log('Conversation not found for reaction');
+        return;
+      }
+      
+      // Broadcast to all participants (including sender for confirmation)
+      for (const participant of conversation.participants) {
+        const participantSocketId = activeConnections.get(participant.toLowerCase());
+        if (participantSocketId) {
+          io.to(participantSocketId).emit('message:reaction', {
+            messageId,
+            emoji,
+            userId,
+            action,
+            reactions, // Send full reactions list for sync
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error handling message:reaction:', error);
     }
   });
 
@@ -1449,18 +1605,42 @@ io.on('connection', (socket: Socket) => {
       console.log(`📢 Group "${group.groupName}" created by ${address} with members:`, members);
       
       // Notify all members about the new group
-      members.forEach((memberAddress: string) => {
-        const memberSocketId = activeConnections.get(memberAddress.toLowerCase());
-        if (memberSocketId && memberAddress.toLowerCase() !== address) {
+      for (const memberAddress of members) {
+        const memberLower = memberAddress.toLowerCase();
+        if (memberLower === address) continue; // Skip creator
+        
+        const memberSocketId = activeConnections.get(memberLower);
+        if (memberSocketId) {
+          // Member is online - send immediately
           io.to(memberSocketId).emit('group:created', { group, createdBy: address });
+        } else {
+          // Member is offline - queue a system message that will trigger group creation
+          // We use a special message type 'group:invite' that the frontend will handle
+          await db.queueOfflineMessage(
+            memberLower,
+            address,
+            JSON.stringify({ type: 'group:created', group, createdBy: address }),
+            'system:group_invite',
+            `group_invite_${group.id}_${memberLower}`,
+            group.id,
+            {
+              id: group.id,
+              groupName: group.groupName,
+              participants: group.participants,
+              admins: group.admins,
+              createdBy: group.createdBy,
+              groupAvatar: group.groupAvatar,
+            }
+          );
+          console.log(`   → Queued group invite for offline member ${memberLower}`);
         }
-      });
+      }
     } catch (error) {
       console.error('Error creating group:', error);
     }
   });
 
-  socket.on('group:message', async ({ groupId, message, recipients }: any) => {
+  socket.on('group:message', async ({ groupId, message, recipients, groupInfo }: any) => {
     try {
       console.log(`📢 Group message in ${groupId} from ${address}:`, message.content?.substring(0, 30));
       
@@ -1494,6 +1674,7 @@ io.on('connection', (socket: Socket) => {
           conversationId: groupId,
           senderId: address,
           encryptedPayloads: undefined, // Don't send all payloads to each recipient
+          groupInfo, // Include group metadata so recipient can create group if needed
         };
         
         if (recipientSocketId) {
@@ -1501,7 +1682,15 @@ io.on('connection', (socket: Socket) => {
           console.log(`   → Sent to ${recipientAddress} (encrypted: ${isEncrypted})`);
         } else {
           // Queue for offline delivery with their specific encrypted content
-          await db.queueOfflineMessage(recipientAddress, message.id, recipientMessage);
+          await db.queueOfflineMessage(
+            recipientAddress,
+            address,  // sender wallet
+            recipientContent,  // their encrypted content
+            message.type || 'text',
+            message.id,  // client ID
+            groupId,  // conversation ID
+            groupInfo  // group metadata
+          );
           console.log(`   → Queued offline for ${recipientAddress}`);
         }
       }
@@ -1746,11 +1935,13 @@ io.on('connection', (socket: Socket) => {
       activeConnections.delete(address);
       socketToWallet.delete(socket.id);
       userStatuses.set(address, 'offline');
+      lastSeenTimes.set(address, Date.now()); // Track last seen time
 
-      // Broadcast offline status
+      // Broadcast offline status with last seen
       socket.broadcast.emit('user:status', {
         address,
         status: 'offline',
+        lastSeen: Date.now(),
       });
     }
   });

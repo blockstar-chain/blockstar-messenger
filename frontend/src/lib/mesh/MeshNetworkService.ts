@@ -1,5 +1,5 @@
 // frontend/src/lib/mesh/MeshNetworkService.ts
-// BlockStar Messenger - Enhanced Mesh Networking with QR Code Exchange
+// BlockStar Cypher - Enhanced Mesh Networking with QR Code Exchange
 // Works offline via WebRTC peer-to-peer connections
 
 import { encryptionService } from '../encryption';

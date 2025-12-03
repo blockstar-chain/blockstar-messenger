@@ -93,7 +93,7 @@ export class BlockchainService {
 
     try {
       const balance = await this.nftContract.balanceOf(address);
-
+      
       if (Number(balance.toString()) === 0) {
         return null; // No NFT owned
       }

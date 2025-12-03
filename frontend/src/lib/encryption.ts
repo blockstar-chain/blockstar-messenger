@@ -28,7 +28,7 @@ const NEGATIVE_CACHE_TTL = 30 * 1000; // 30 seconds for "not found" results
 
 // The message we ask users to sign to derive keys
 // This MUST stay constant - changing it would invalidate all keys!
-const KEY_DERIVATION_MESSAGE = 'BlockStar Messenger - Secure Key Derivation v2\n\nSigning this message generates your encryption keys.\nThis does NOT cost any gas or make any transactions.\n\nYour keys will be the same on all your devices.';
+const KEY_DERIVATION_MESSAGE = 'BlockStar Cypher - Secure Key Derivation v2\n\nSigning this message generates your encryption keys.\nThis does NOT cost any gas or make any transactions.\n\nYour keys will be the same on all your devices.';
 
 // Browser-compatible base64 utilities
 function uint8ArrayToBase64(array: Uint8Array): string {
@@ -64,6 +64,13 @@ export class EncryptionService {
   private userAddress: string | null = null;
   private publicKeyBase64: string | null = null;
   private signMessageFn: ((message: string) => Promise<string>) | null = null;
+
+  /**
+   * Check if encryption service is initialized and ready
+   */
+  isReady(): boolean {
+    return this.privateKey !== null && this.publicKey !== null;
+  }
 
   /**
    * Set the wallet sign function (from wagmi/ethers)
@@ -565,13 +572,6 @@ export class EncryptionService {
       console.error('Decryption error:', error);
       throw new Error('Failed to decrypt message');
     }
-  }
-
-  /**
-   * Check if encryption is ready
-   */
-  isReady(): boolean {
-    return this.privateKey !== null && this.userAddress !== null;
   }
 
   /**

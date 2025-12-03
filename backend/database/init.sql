@@ -1,5 +1,5 @@
 -- backend/database/init.sql
--- BlockStar Messenger Production Database Schema
+-- BlockStar Cypher Production Database Schema
 
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";

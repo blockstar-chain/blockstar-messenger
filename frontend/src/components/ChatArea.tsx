@@ -5,8 +5,9 @@ import { webSocketService } from '@/lib/websocket';
 import { webRTCService } from '@/lib/webrtc';
 import { encryptionService } from '@/lib/encryption';
 import { voiceMessageService } from '@/lib/voice-message-service';
-import { Message } from '@/types';
-import { Send, Phone, Video, MoreVertical, Menu, Paperclip, Mic, MicOff, Lock, LockOpen, Search, X, Bell, BellOff, Smile, Check, CheckCheck, Trash2, Shield, ShieldAlert, MessageSquare, Users, RefreshCw, Settings, UserPlus } from 'lucide-react';
+import { notificationService } from '@/lib/notifications';
+import { Message, Conversation } from '@/types';
+import { Send, Phone, Video, MoreVertical, Menu, Paperclip, Mic, MicOff, Lock, LockOpen, Search, X, Bell, BellOff, Smile, Check, CheckCheck, Trash2, Shield, ShieldAlert, MessageSquare, Users, RefreshCw, Settings, UserPlus, VolumeX, Volume2 } from 'lucide-react';
 import { generateMessageId, generateConversationId, formatMessageTime, truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
 import { resolveProfile, getProfileByWallet, type BlockStarProfile } from '@/lib/profileResolver';
 import toast from 'react-hot-toast';
@@ -115,7 +116,7 @@ export default function ChatArea() {
 
   const [messageText, setMessageText] = useState('');
   const [isSending, setIsSending] = useState(false);
-  const [userStatuses, setUserStatuses] = useState<Map<string, string>>(new Map());
+  const [userStatuses, setUserStatuses] = useState<Map<string, { status: string; lastSeen?: number }>>(new Map());
   const [showChatMenu, setShowChatMenu] = useState(false);
   const [searchMode, setSearchMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -133,6 +134,9 @@ export default function ChatArea() {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [isUserContact, setIsUserContact] = useState(false);
   const [encryptionStatus, setEncryptionStatus] = useState<'encrypted' | 'unencrypted' | 'checking'>('checking');
+  const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
+  const [messageReactions, setMessageReactions] = useState<Map<string, Array<{ emoji: string; userId: string }>>>(new Map());
+  const [showReactionPicker, setShowReactionPicker] = useState<string | null>(null);
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -168,8 +172,28 @@ export default function ChatArea() {
   }, [contactProfile, otherParticipant, conversations.length]);
 
   const getStatus = (address: string) => {
-    const status = userStatuses.get(address.toLowerCase());
-    return status || 'offline';
+    const statusInfo = userStatuses.get(address.toLowerCase());
+    return statusInfo?.status || 'offline';
+  };
+
+  const getLastSeen = (address: string): number | null => {
+    const statusInfo = userStatuses.get(address.toLowerCase());
+    return statusInfo?.lastSeen || null;
+  };
+
+  const formatLastSeen = (timestamp: number | null): string => {
+    if (!timestamp) return '';
+    const now = Date.now();
+    const diff = now - timestamp;
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+    
+    if (minutes < 1) return 'Just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    if (hours < 24) return `${hours}h ago`;
+    if (days < 7) return `${days}d ago`;
+    return new Date(timestamp).toLocaleDateString();
   };
 
   // Cleanup recording on conversation change or unmount
@@ -202,17 +226,20 @@ export default function ChatArea() {
           const response = await fetch(`${API_URL}/api/users/${otherParticipant.toLowerCase()}/status`);
           if (response.ok) {
             const data = await response.json();
-            const status = data.isOnline ? 'online' : 'offline';
+            const statusInfo = {
+              status: data.isOnline ? 'online' : 'offline',
+              lastSeen: data.lastSeen || null,
+            };
             setUserStatuses((prev) => {
               const newMap = new Map(prev);
-              newMap.set(otherParticipant.toLowerCase(), status);
+              newMap.set(otherParticipant.toLowerCase(), statusInfo);
               return newMap;
             });
           }
         } catch (error) {
           setUserStatuses((prev) => {
             const newMap = new Map(prev);
-            newMap.set(otherParticipant.toLowerCase(), 'offline');
+            newMap.set(otherParticipant.toLowerCase(), { status: 'offline', lastSeen: null });
             return newMap;
           });
         }
@@ -269,31 +296,45 @@ export default function ChatArea() {
   useEffect(() => {
     const checkEncryptionStatus = async () => {
       if (isGroupChat) {
-        // Group chats: Check if we have keys for any members
+        // Group chats: Check if we have keys for ALL members (not just any)
         setEncryptionStatus('checking');
         
         const participants = activeConversation?.participants || [];
-        let hasAnyKey = false;
+        const otherParticipants = participants.filter(
+          p => p.toLowerCase() !== currentUser?.walletAddress.toLowerCase()
+        );
         
-        for (const participant of participants) {
-          if (participant.toLowerCase() === currentUser?.walletAddress.toLowerCase()) continue;
-          
+        if (otherParticipants.length === 0) {
+          setEncryptionStatus('unencrypted');
+          return;
+        }
+        
+        let allHaveKeys = true;
+        let checkedCount = 0;
+        
+        for (const participant of otherParticipants) {
           try {
             const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
             const response = await fetch(`${API_URL}/api/keys/${participant.toLowerCase()}`);
             if (response.ok) {
               const data = await response.json();
               if (data.success && data.publicKey) {
-                hasAnyKey = true;
-                break; // At least one member has encryption key
+                checkedCount++;
+              } else {
+                allHaveKeys = false;
               }
+            } else {
+              allHaveKeys = false;
             }
           } catch (error) {
-            // Continue checking other members
+            allHaveKeys = false;
           }
         }
         
-        setEncryptionStatus(hasAnyKey ? 'encrypted' : 'unencrypted');
+        // Encrypted if all other participants have keys
+        const isEncrypted = allHaveKeys && checkedCount === otherParticipants.length;
+        console.log(`🔐 Group encryption check: ${checkedCount}/${otherParticipants.length} members have keys, encrypted: ${isEncrypted}`);
+        setEncryptionStatus(isEncrypted ? 'encrypted' : 'unencrypted');
         return;
       }
       
@@ -325,7 +366,7 @@ export default function ChatArea() {
     };
     
     checkEncryptionStatus();
-  }, [otherParticipant, isGroupChat]);
+  }, [otherParticipant, isGroupChat, activeConversation?.participants]);
 
   // Load member profiles for group chats
   useEffect(() => {
@@ -373,6 +414,19 @@ export default function ChatArea() {
     loadMemberProfiles();
   }, [isGroupChat, activeConversation?.id, activeConversation?.participants.length]);
 
+  // Listen for refresh requests from Sidebar
+  useEffect(() => {
+    const handleRefresh = async () => {
+      console.log('🔄 Refresh requested, reloading messages...');
+      if (activeConversationId) {
+        await loadMessages(true);
+      }
+    };
+    
+    window.addEventListener('blockstar:refresh', handleRefresh);
+    return () => window.removeEventListener('blockstar:refresh', handleRefresh);
+  }, [activeConversationId]);
+
   useEffect(() => {
     if (activeConversationId) {
       // Always fetch fresh data when switching conversations to ensure read states are accurate
@@ -401,8 +455,7 @@ export default function ChatArea() {
 
   useEffect(() => {
     if (activeConversationId) {
-      const mutedConvos = JSON.parse(localStorage.getItem('mutedConversations') || '[]');
-      setIsMuted(mutedConvos.includes(activeConversationId));
+      setIsMuted(notificationService.isConversationMuted(activeConversationId));
       setSearchMode(false);
       setSearchQuery('');
     }
@@ -411,11 +464,15 @@ export default function ChatArea() {
   useEffect(() => {
     const unsubscribe = webSocketService.onStatus((data) => {
       const address = data.address.toLowerCase();
-      const prevStatus = userStatuses.get(address);
+      const prevStatusInfo = userStatuses.get(address);
+      const prevStatus = prevStatusInfo?.status;
       
       setUserStatuses((prev) => {
         const newMap = new Map(prev);
-        newMap.set(address, data.status);
+        newMap.set(address, { 
+          status: data.status, 
+          lastSeen: data.lastSeen || (data.status === 'offline' ? Date.now() : null)
+        });
         return newMap;
       });
       
@@ -452,6 +509,40 @@ export default function ChatArea() {
   useEffect(() => {
     const unsubscribe = webSocketService.onMessage(async (message) => {
       try {
+        // Handle special system messages for group invites (from offline queue)
+        if (message.type === 'system:group_invite' && message.groupInfo) {
+          console.log('📢 Processing offline group invite:', message.groupInfo.groupName);
+          
+          const { conversations, addConversation } = useAppStore.getState();
+          
+          // Check if group already exists
+          const existingGroup = conversations.find(c => c.id === message.groupInfo.id);
+          if (existingGroup) {
+            console.log('Group already exists, skipping invite');
+            return;
+          }
+          
+          // Create the group from the invite
+          const newGroup: Conversation = {
+            id: message.groupInfo.id,
+            type: 'group',
+            participants: message.groupInfo.participants || [],
+            groupName: message.groupInfo.groupName,
+            groupAvatar: message.groupInfo.groupAvatar,
+            admins: message.groupInfo.admins || [],
+            createdBy: message.groupInfo.createdBy || '',
+            unreadCount: 0,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          };
+          
+          await db.conversations.put(newGroup);
+          addConversation(newGroup);
+          
+          toast.success(`You were added to group "${message.groupInfo.groupName}"`, { duration: 4000 });
+          return; // Don't process as regular message
+        }
+        
         // Skip if we've already processed this message
         if (decryptedContentCache.has(message.id)) {
           console.log('Skipping already processed message:', message.id);
@@ -509,8 +600,68 @@ export default function ChatArea() {
         await dbHelpers.saveMessage(displayMessage);
         
         const { conversations, addConversation, updateConversation, activeConversationId: currentActiveId } = useAppStore.getState();
-        const conv = conversations.find(c => c.id === conversationId);
-        const isActiveConversation = currentActiveId === conversationId;
+        
+        // For direct messages, check if conversation exists by ID or by participants
+        let conv = conversations.find(c => c.id === conversationId);
+        
+        // If not found by ID, try to find by participants
+        if (!conv) {
+          if (isGroupMessage) {
+            // For group messages, check if we have a group with these participants
+            // The message might reference a group_id we don't have locally
+            const messageParticipants = Array.isArray(message.recipientId) 
+              ? [...message.recipientId, senderId].map(p => p.toLowerCase()).sort()
+              : [senderId, recipientId].map(p => p.toLowerCase()).sort();
+            
+            conv = conversations.find(c => {
+              if (c.type !== 'group') return false;
+              const convParticipants = (c.participants || []).map(p => p.toLowerCase()).sort();
+              return convParticipants.join(',') === messageParticipants.join(',');
+            });
+            
+            if (conv) {
+              console.log(`📨 Found existing group by participants: ${conv.id} (${(conv as any).groupName})`);
+              displayMessage.conversationId = conv.id;
+              // Use the existing conversation ID for further processing
+              const existingConvId = conv.id;
+              
+              // Update the existing conversation
+              const updates: any = {
+                lastMessage: displayMessage,
+                updatedAt: Date.now()
+              };
+              
+              const isActiveConv = currentActiveId === existingConvId;
+              if (!isActiveConv) {
+                updates.unreadCount = (conv.unreadCount || 0) + 1;
+              }
+              
+              useAppStore.getState().updateConversation(existingConvId, updates);
+              await db.conversations.update(existingConvId, updates);
+              
+              addMessage(displayMessage);
+              webSocketService.markDelivered(message.id);
+              return; // Don't continue to create a new conversation
+            }
+          } else {
+            // For direct messages
+            const participants = [senderId, recipientId].map(p => p.toLowerCase()).sort();
+            conv = conversations.find(c => {
+              if (c.type !== 'direct') return false;
+              const convParticipants = (c.participants || []).map(p => p.toLowerCase()).sort();
+              return convParticipants.length === 2 && 
+                convParticipants[0] === participants[0] && 
+                convParticipants[1] === participants[1];
+            });
+            
+            if (conv) {
+              console.log(`📨 Found existing direct conversation by participants: ${conv.id}`);
+              displayMessage.conversationId = conv.id;
+            }
+          }
+        }
+        
+        const isActiveConversation = currentActiveId === conversationId || currentActiveId === conv?.id;
         
         // Check if this conversation was deleted by the user
         // If so, remove from deleted list so it reappears with the new message
@@ -520,19 +671,56 @@ export default function ChatArea() {
         }
         
         if (!conv) {
-          // Conversation doesn't exist yet - create it
-          const newConv = {
-            id: conversationId,
-            type: isGroupMessage ? 'group' as const : 'direct' as const,
-            participants: isGroupMessage ? [senderId, recipientId] : [senderId, recipientId],
-            unreadCount: isActiveConversation ? 0 : 1,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            lastMessage: displayMessage,
-          };
-          
-          await db.conversations.put(newConv);
-          addConversation(newConv);
+          // Conversation doesn't exist yet
+          if (isGroupMessage) {
+            // For group messages, try to create the group from groupInfo if available
+            // This handles the case where group:created event was missed
+            if (message.groupInfo && message.groupInfo.groupName) {
+              console.log(`📨 Creating group from message groupInfo: ${message.groupInfo.groupName}`);
+              
+              const newGroup: Conversation = {
+                id: conversationId,
+                type: 'group',
+                participants: message.groupInfo.participants || [],
+                groupName: message.groupInfo.groupName,
+                groupAvatar: message.groupInfo.groupAvatar,
+                admins: message.groupInfo.admins || [],
+                createdBy: message.groupInfo.createdBy || '',
+                unreadCount: isActiveConversation ? 0 : 1,
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+                lastMessage: displayMessage,
+              };
+              
+              await db.conversations.put(newGroup);
+              addConversation(newGroup);
+              conv = newGroup;
+            } else {
+              // No groupInfo available - wait for group:created event
+              console.log(`📨 Received message for unknown group ${conversationId}, waiting for group:created event`);
+              
+              // Save message to IndexedDB so it appears when group is created
+              await dbHelpers.saveMessage(displayMessage);
+              
+              // Don't add to UI yet - the group:created handler will load conversations
+              // which will pick up this message
+              return;
+            }
+          } else {
+            // For direct messages, create the conversation
+            const newConv = {
+              id: conversationId,
+              type: 'direct' as const,
+              participants: [senderId, recipientId],
+              unreadCount: isActiveConversation ? 0 : 1,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+              lastMessage: displayMessage,
+            };
+            
+            await db.conversations.put(newConv);
+            addConversation(newConv);
+          }
         } else {
           // Update existing conversation - increment unread if not the active conversation
           const updates: any = {
@@ -544,12 +732,43 @@ export default function ChatArea() {
             updates.unreadCount = (conv.unreadCount || 0) + 1;
           }
           
-          useAppStore.getState().updateConversation(conversationId, updates);
-          await db.conversations.update(conversationId, updates);
+          useAppStore.getState().updateConversation(conv.id, updates);
+          await db.conversations.update(conv.id, updates);
         }
         
         addMessage(displayMessage);
         webSocketService.markDelivered(message.id);
+        
+        // Trigger notification for incoming messages
+        // Get sender name for notification
+        let senderName = truncateAddress(senderId);
+        try {
+          const senderProfile = await getProfileByWallet(senderId);
+          if (senderProfile?.name || senderProfile?.username) {
+            senderName = senderProfile.name || senderProfile.username || senderName;
+          }
+        } catch (e) {
+          // Use address if profile fetch fails
+        }
+        
+        // Get group name if it's a group message
+        const groupConv = isGroupMessage ? conversations.find(c => c.id === conversationId) : null;
+        const groupName = groupConv ? (groupConv as any).groupName : undefined;
+        
+        // Send notification
+        notificationService.notifyNewMessage(
+          senderName,
+          displayContent.length > 100 ? displayContent.substring(0, 100) + '...' : displayContent,
+          {
+            conversationId: conv?.id || conversationId,
+            isGroup: isGroupMessage,
+            groupName,
+            onClick: () => {
+              // Focus the conversation when notification is clicked
+              useAppStore.getState().setActiveConversationId(conv?.id || conversationId);
+            }
+          }
+        );
       } catch (error) {
         console.error('Error processing message:', error);
       }
@@ -586,7 +805,8 @@ export default function ChatArea() {
         dbHelpers.clearMessageCache(activeConversationId);
       }
       
-      let msgs = await dbHelpers.getConversationMessages(activeConversationId);
+      // Pass wallet address to get user-specific encrypted content for group messages
+      let msgs = await dbHelpers.getConversationMessages(activeConversationId, myAddress);
       
       // Process read states for all messages based on readBy array
       // This works whether messages came from cache or fresh API fetch
@@ -610,15 +830,37 @@ export default function ChatArea() {
       // Try to decrypt messages
       // In ECDH, the shared secret is derived from your private key + other party's public key
       // So for BOTH sent and received messages, we need the OTHER participant's public key
+      
+      // Only attempt decryption if encryption service is ready
+      const canDecrypt = encryptionService.isReady();
+      if (!canDecrypt) {
+        console.warn('⚠️ Encryption service not ready, messages may appear encrypted');
+      }
+      
       for (const msg of msgs) {
         if (!decryptedContentCache.has(msg.id) && (msg.type === 'text' || !msg.type)) {
+          // Skip decryption if encryption service isn't ready
+          if (!canDecrypt) continue;
+          
           try {
             // Determine the other party's address for key derivation
             const isMySentMessage = msg.senderId.toLowerCase() === myAddress;
+            
             // Handle recipientId being string or string[]
-            const recipientAddr = Array.isArray(msg.recipientId) 
+            let recipientAddr = Array.isArray(msg.recipientId) 
               ? msg.recipientId[0] 
               : msg.recipientId;
+            
+            // If recipientId is missing (common when loading from server), derive from conversation participants
+            if (!recipientAddr && activeConversation?.participants) {
+              const otherParticipants = activeConversation.participants.filter(
+                p => p.toLowerCase() !== myAddress
+              );
+              if (otherParticipants.length > 0) {
+                recipientAddr = otherParticipants[0];
+              }
+            }
+            
             const otherPartyAddress = isMySentMessage 
               ? recipientAddr  // For sent messages, use recipient's key
               : msg.senderId;  // For received messages, use sender's key
@@ -649,6 +891,19 @@ export default function ChatArea() {
         await dbHelpers.saveMessage(msg);
       }
       
+      // Populate reactions from loaded messages
+      const newReactions = new Map<string, Array<{ emoji: string; userId: string }>>();
+      for (const msg of msgs) {
+        const msgWithReactions = msg as any;
+        if (msgWithReactions.reactions && msgWithReactions.reactions.length > 0) {
+          newReactions.set(msg.id, msgWithReactions.reactions.map((r: any) => ({
+            emoji: r.emoji,
+            userId: r.userId,
+          })));
+        }
+      }
+      setMessageReactions(newReactions);
+      
       setMessages(activeConversationId, msgs);
     } catch (error) {
       console.error('Error loading messages:', error);
@@ -664,19 +919,16 @@ export default function ChatArea() {
   const handleToggleMute = () => {
     if (!activeConversationId) return;
     
-    const mutedConvos = JSON.parse(localStorage.getItem('mutedConversations') || '[]');
     const newMuted = !isMuted;
     
     if (newMuted) {
-      mutedConvos.push(activeConversationId);
+      notificationService.muteConversation(activeConversationId);
       toast.success('Notifications muted for this chat');
     } else {
-      const index = mutedConvos.indexOf(activeConversationId);
-      if (index > -1) mutedConvos.splice(index, 1);
+      notificationService.unmuteConversation(activeConversationId);
       toast.success('Notifications unmuted for this chat');
     }
     
-    localStorage.setItem('mutedConversations', JSON.stringify(mutedConvos));
     setIsMuted(newMuted);
     setShowChatMenu(false);
   };
@@ -772,6 +1024,86 @@ export default function ChatArea() {
     setMessageMenuPosition({ x: e.clientX, y: e.clientY });
     setShowMessageMenu(true);
   };
+
+  // Quick emoji reactions
+  const quickReactions = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
+  
+  const handleAddReaction = async (messageId: string, emoji: string) => {
+    if (!currentUser?.walletAddress) return;
+    
+    const userId = currentUser.walletAddress.toLowerCase();
+    
+    // Update local state
+    setMessageReactions(prev => {
+      const newMap = new Map(prev);
+      const existing = newMap.get(messageId) || [];
+      
+      // Check if user already reacted with this emoji
+      const existingReaction = existing.find(r => r.userId === userId && r.emoji === emoji);
+      if (existingReaction) {
+        // Remove reaction
+        newMap.set(messageId, existing.filter(r => !(r.userId === userId && r.emoji === emoji)));
+      } else {
+        // Add reaction
+        newMap.set(messageId, [...existing, { emoji, userId }]);
+      }
+      
+      return newMap;
+    });
+    
+    // Send to server
+    try {
+      webSocketService.emit('message:reaction', {
+        messageId,
+        emoji,
+        conversationId: activeConversationId,
+        userId,
+      });
+    } catch (error) {
+      console.error('Error sending reaction:', error);
+    }
+    
+    setShowReactionPicker(null);
+  };
+
+  // Listen for reaction updates
+  useEffect(() => {
+    const unsubscribe = webSocketService.on('message:reaction', (data: { 
+      messageId: string; 
+      emoji: string; 
+      userId: string;
+      action: 'add' | 'remove';
+      reactions?: Array<{ emoji: string; userId: string }>;
+    }) => {
+      setMessageReactions(prev => {
+        const newMap = new Map(prev);
+        
+        // If server sent full reactions list, use it directly
+        if (data.reactions) {
+          newMap.set(data.messageId, data.reactions.map(r => ({
+            emoji: r.emoji,
+            userId: r.userId,
+          })));
+        } else {
+          // Fallback to add/remove logic
+          const existing = newMap.get(data.messageId) || [];
+          
+          if (data.action === 'remove') {
+            newMap.set(data.messageId, existing.filter(r => !(r.userId === data.userId && r.emoji === data.emoji)));
+          } else {
+            // Check if already exists
+            if (!existing.find(r => r.userId === data.userId && r.emoji === data.emoji)) {
+              newMap.set(data.messageId, [...existing, { emoji: data.emoji, userId: data.userId }]);
+            }
+          }
+        }
+        
+        return newMap;
+      });
+    });
+    
+    return () => unsubscribe();
+  }, []);
 
   // Voice recording handlers
   const handleVoiceRecordToggle = async () => {
@@ -1071,7 +1403,8 @@ export default function ChatArea() {
 
       const fileInfo = JSON.stringify({
         url: data.file.url,
-        filename: data.file.filename,
+        filename: data.file.originalName || file.name, // Use original filename
+        storedFilename: data.file.filename, // Keep server filename for URL
         mimetype: data.file.mimetype,
         size: data.file.size,
       });
@@ -1205,6 +1538,15 @@ export default function ChatArea() {
           }
         }
         
+        // IMPORTANT: Also encrypt for the sender so they can decrypt their own messages later
+        // This is needed when messages are loaded from the server after cache is cleared
+        if (hasEncryption) {
+          // For sender's own copy, encrypt using first recipient's key (we'll decrypt with same key)
+          // Actually, we store plaintext for sender since they sent it
+          encryptedPayloads[senderId] = plainText;
+          console.log('📢 Added sender payload for self-decryption');
+        }
+        
         // Update encryption status based on results
         if (hasEncryption) {
           setEncryptionStatus('encrypted');
@@ -1237,6 +1579,15 @@ export default function ChatArea() {
           updatedAt: Date.now()
         });
 
+        // Get group info to include in message (for recipients who might not have the group yet)
+        const groupInfo = {
+          id: activeConversationId,
+          groupName: (activeConversation as any)?.groupName || 'Group Chat',
+          participants: activeConversation?.participants || [],
+          admins: (activeConversation as any)?.admins || [],
+          createdBy: (activeConversation as any)?.createdBy || senderId,
+        };
+
         // Send to group with encrypted payloads for each recipient
         webSocketService.emit('group:message', {
           groupId: activeConversationId,
@@ -1246,6 +1597,7 @@ export default function ChatArea() {
             encryptedPayloads, // Each recipient's encrypted copy
           },
           recipients,
+          groupInfo, // Include group metadata for recipients
         });
         
         console.log('✅ Group message sent with E2E encryption for', Object.keys(encryptedPayloads).length, 'recipients');
@@ -1588,7 +1940,11 @@ export default function ChatArea() {
                         : 'bg-muted'
                     }`} />
                     <span className="text-secondary">
-                      {getStatus(otherParticipant || '') === 'online' ? 'Online' : 'Offline'}
+                      {getStatus(otherParticipant || '') === 'online' 
+                        ? 'Online' 
+                        : getLastSeen(otherParticipant || '') 
+                          ? `Last seen ${formatLastSeen(getLastSeen(otherParticipant || ''))}`
+                          : 'Offline'}
                     </span>
                     <span className="text-muted">•</span>
                   </>
@@ -2040,14 +2396,42 @@ export default function ChatArea() {
                 } catch {}
               }
 
+              // Handle encrypted group message marker that couldn't be decrypted
+              if (message.content === '__ENCRYPTED_GROUP__') {
+                return (
+                  <div className="flex items-center gap-2 text-muted italic">
+                    <Lock size={14} />
+                    <span>Encrypted message</span>
+                  </div>
+                );
+              }
+              
+              // Handle encrypted direct messages that couldn't be decrypted
+              // They appear as base64 strings (no spaces, mostly alphanumeric with +/=)
+              const looksEncrypted = /^[A-Za-z0-9+/=]{20,}$/.test(message.content) && 
+                                    !message.content.includes(' ');
+              if (looksEncrypted) {
+                return (
+                  <div className="flex items-center gap-2 text-muted italic">
+                    <Lock size={14} />
+                    <span>Encrypted message</span>
+                  </div>
+                );
+              }
+
               return <p className="break-words">{renderTextWithLinks(message.content)}</p>;
             };
 
             return (
               <div
                 key={message.id}
-                className={`flex items-end gap-2 ${isSender ? 'flex-row-reverse' : 'flex-row'}`}
+                className={`flex items-end gap-2 ${isSender ? 'flex-row-reverse' : 'flex-row'} group relative`}
                 onContextMenu={(e) => handleMessageContextMenu(e, message.id, isSender)}
+                onMouseEnter={() => setHoveredMessageId(message.id)}
+                onMouseLeave={() => {
+                  setHoveredMessageId(null);
+                  setShowReactionPicker(null);
+                }}
               >
                 {showAvatar && !isSender && (
                   <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500/50 to-cyan-500/50 flex items-center justify-center text-white text-xs font-semibold flex-shrink-0 overflow-hidden">
@@ -2067,45 +2451,100 @@ export default function ChatArea() {
                 )}
                 {!showAvatar && !isSender && <div className="w-8" />}
 
-                <div
-                  className={`max-w-md px-4 py-2.5 rounded-2xl ${
-                    isSender
-                      ? 'bg-gradient-to-br from-primary-500 to-primary-600 text-white'
-                      : 'bg-card border border-midnight text-white'
-                  } ${selectedMessageId === message.id ? 'ring-2 ring-primary-400' : ''}`}
-                >
-                  {/* Show sender name in group chats for received messages */}
-                  {isGroupChat && !isSender && showAvatar && (
-                    <p className="text-xs font-medium text-primary-400 mb-1">
-                      {(() => {
-                        const senderProfile = memberProfiles.get(message.senderId.toLowerCase());
-                        if (senderProfile?.username) {
-                          return `@${senderProfile.username}`;
-                        }
-                        return truncateAddress(message.senderId);
-                      })()}
-                    </p>
+                <div className="relative">
+                  {/* Quick reaction button on hover */}
+                  {hoveredMessageId === message.id && (
+                    <div className={`absolute ${isSender ? 'left-0 -translate-x-full pr-2' : 'right-0 translate-x-full pl-2'} top-1/2 -translate-y-1/2 z-10`}>
+                      <button
+                        onClick={() => setShowReactionPicker(showReactionPicker === message.id ? null : message.id)}
+                        className="p-1.5 bg-dark-200 hover:bg-dark-100 rounded-full text-muted hover:text-white transition opacity-0 group-hover:opacity-100"
+                        title="Add reaction"
+                      >
+                        <Smile size={16} />
+                      </button>
+                    </div>
                   )}
-                  {renderMessageContent()}
-                  <div className={`flex items-center gap-1.5 mt-1 ${isSender ? 'justify-end' : 'justify-start'}`}>
-                    <span className={`text-xs ${isSender ? 'text-white/60' : 'text-muted'}`}>
-                      {formatMessageTime(message.timestamp)}
-                    </span>
-                    {isSender && (
-                      <span className="flex items-center">
-                        {message.read ? (
-                          // Read by recipient - double cyan checkmark
-                          <CheckCheck size={14} className="text-cyan-300" />
-                        ) : message.delivered ? (
-                          // Delivered but not read - single white checkmark
-                          <Check size={14} className="text-white/60" />
-                        ) : (
-                          // Sent but not yet delivered - single gray checkmark
-                          <Check size={14} className="text-white/40" />
-                        )}
-                      </span>
+                  
+                  {/* Reaction picker */}
+                  {showReactionPicker === message.id && (
+                    <div className={`absolute ${isSender ? 'right-0' : 'left-0'} -top-10 z-20 bg-card border border-midnight rounded-full px-2 py-1 flex gap-1 shadow-lg`}>
+                      {quickReactions.map(emoji => (
+                        <button
+                          key={emoji}
+                          onClick={() => handleAddReaction(message.id, emoji)}
+                          className="p-1 hover:bg-dark-200 rounded-full transition text-lg"
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <div
+                    className={`max-w-md px-4 py-2.5 rounded-2xl ${
+                      isSender
+                        ? 'bg-gradient-to-br from-primary-500 to-primary-600 text-white'
+                        : 'bg-card border border-midnight text-white'
+                    } ${selectedMessageId === message.id ? 'ring-2 ring-primary-400' : ''}`}
+                  >
+                    {/* Show sender name in group chats for received messages */}
+                    {isGroupChat && !isSender && showAvatar && (
+                      <p className="text-xs font-medium text-primary-400 mb-1">
+                        {(() => {
+                          const senderProfile = memberProfiles.get(message.senderId.toLowerCase());
+                          if (senderProfile?.username) {
+                            return `@${senderProfile.username}`;
+                          }
+                          return truncateAddress(message.senderId);
+                        })()}
+                      </p>
                     )}
+                    {renderMessageContent()}
+                    <div className={`flex items-center gap-1.5 mt-1 ${isSender ? 'justify-end' : 'justify-start'}`}>
+                      <span className={`text-xs ${isSender ? 'text-white/60' : 'text-muted'}`}>
+                        {formatMessageTime(message.timestamp)}
+                      </span>
+                      {isSender && (
+                        <span className="flex items-center">
+                          {message.read ? (
+                            // Read by recipient - double cyan checkmark
+                            <CheckCheck size={14} className="text-cyan-300" />
+                          ) : message.delivered ? (
+                            // Delivered but not read - single white checkmark
+                            <Check size={14} className="text-white/60" />
+                          ) : (
+                            // Sent but not yet delivered - single gray checkmark
+                            <Check size={14} className="text-white/40" />
+                          )}
+                        </span>
+                      )}
+                    </div>
                   </div>
+                  
+                  {/* Display reactions */}
+                  {messageReactions.get(message.id)?.length > 0 && (
+                    <div className={`flex flex-wrap gap-1 mt-1 ${isSender ? 'justify-end' : 'justify-start'}`}>
+                      {Object.entries(
+                        (messageReactions.get(message.id) || []).reduce((acc, r) => {
+                          acc[r.emoji] = (acc[r.emoji] || 0) + 1;
+                          return acc;
+                        }, {} as Record<string, number>)
+                      ).map(([emoji, count]) => (
+                        <button
+                          key={emoji}
+                          onClick={() => handleAddReaction(message.id, emoji)}
+                          className={`px-1.5 py-0.5 rounded-full text-xs flex items-center gap-1 transition ${
+                            messageReactions.get(message.id)?.find(r => r.emoji === emoji && r.userId === currentUser?.walletAddress.toLowerCase())
+                              ? 'bg-primary-500/30 border border-primary-500/50'
+                              : 'bg-dark-200 border border-midnight hover:bg-dark-100'
+                          }`}
+                        >
+                          <span>{emoji}</span>
+                          {count > 1 && <span className="text-muted">{count}</span>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             );

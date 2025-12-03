@@ -1,4 +1,4 @@
-rootProject.name = 'BlockStar Messenger'
+rootProject.name = 'BlockStar Cypher'
 
 dependencyResolutionManagement {
   versionCatalogs {

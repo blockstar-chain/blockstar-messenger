@@ -221,9 +221,22 @@ export async function getOrCreateDirectConversation(
 }
 
 export async function getConversationById(conversationId: string): Promise<DBConversation | null> {
-  const conv = await conversationsCollection.findOne({ 
-    _id: new ObjectId(conversationId) 
+  // First try to find by group_id (for groups)
+  let conv = await conversationsCollection.findOne({ 
+    group_id: conversationId 
   });
+  
+  // If not found, try by ObjectId
+  if (!conv) {
+    try {
+      conv = await conversationsCollection.findOne({ 
+        _id: new ObjectId(conversationId) 
+      });
+    } catch {
+      // Invalid ObjectId format, that's ok
+    }
+  }
+  
   return conv as DBConversation | null;
 }
 
@@ -248,26 +261,68 @@ export async function createGroupConversation(group: any): Promise<string> {
   // Use the frontend-provided group ID
   const groupId = group.id;
   
+  // Group name should ALWAYS be provided - if not, something is wrong
+  if (!group.groupName && !group.name) {
+    console.error('⚠️ WARNING: createGroupConversation called without group name! This should not happen.');
+    console.error('Group data:', JSON.stringify(group, null, 2));
+  }
+  
+  const groupName = group.groupName || group.name;
+  
+  if (!groupName) {
+    throw new Error('Cannot create group without a name');
+  }
+  
+  console.log(`📝 createGroupConversation called with:`, {
+    id: groupId,
+    groupName: group.groupName,
+    name: group.name,
+    resolvedName: groupName
+  });
+  
   // Check if group already exists by the group_id
-  const existing = await conversationsCollection.findOne({
+  let existing = await conversationsCollection.findOne({
     type: 'group',
     group_id: groupId
   });
   
   if (existing) {
-    console.log('Group conversation already exists:', groupId);
+    console.log('Group conversation already exists by group_id:', groupId);
     return groupId;
   }
   
   // Normalize participants to lowercase
   const participants = (group.participants || []).map((p: string) => p.toLowerCase());
   
+  // Also check if a group with same participants exists (to prevent duplicates)
+  const sortedParticipants = [...participants].sort();
+  existing = await conversationsCollection.findOne({
+    type: 'group',
+    participants: { $all: sortedParticipants, $size: sortedParticipants.length }
+  });
+  
+  if (existing) {
+    const existingAny = existing as any;
+    console.log('Group conversation already exists by participants, updating group_id:', existingAny.group_id || existing._id);
+    
+    // Update the existing group with the new group_id if it doesn't have one
+    if (!existingAny.group_id) {
+      await conversationsCollection.updateOne(
+        { _id: existing._id },
+        { $set: { group_id: groupId, name: groupName, updated_at: now } }
+      );
+      console.log('Updated existing group with new group_id:', groupId);
+    }
+    
+    return existingAny.group_id || existing._id!.toString();
+  }
+  
   // Create new group conversation - use frontend ID as group_id
   await conversationsCollection.insertOne({
     type: 'group',
     group_id: groupId,  // Store the frontend-generated ID
     participants,
-    name: group.groupName || group.name,
+    name: groupName,  // Use resolved name
     avatar_url: group.groupAvatar || group.avatar,
     created_by: (group.createdBy || '').toLowerCase(),
     admins: (group.admins || []).map((a: string) => a.toLowerCase()),
@@ -275,7 +330,7 @@ export async function createGroupConversation(group: any): Promise<string> {
     updated_at: now,
   });
   
-  console.log('Created group conversation with ID:', groupId);
+  console.log(`✅ Created group "${groupName}" with ID:`, groupId);
   return groupId;
 }
 
@@ -291,6 +346,7 @@ export interface DBMessage {
   message_type: string;
   delivered: boolean;
   read_by: string[];
+  reactions?: Array<{ emoji: string; userId: string; timestamp: number }>;
   created_at: Date;
   updated_at: Date;
   deleted_at?: Date;
@@ -394,6 +450,65 @@ export async function markMessagesRead(
   );
 }
 
+export async function toggleMessageReaction(
+  messageId: string,
+  emoji: string,
+  userId: string
+): Promise<{ action: 'add' | 'remove'; reactions: Array<{ emoji: string; userId: string; timestamp: number }> }> {
+  const normalizedUserId = userId.toLowerCase();
+  
+  // Try to find message by client_id first
+  let message = await messagesCollection.findOne({ 
+    client_id: messageId 
+  }) as DBMessage | null;
+  
+  // Fallback: try as MongoDB ObjectId
+  if (!message) {
+    try {
+      message = await messagesCollection.findOne({ 
+        _id: new ObjectId(messageId) 
+      }) as DBMessage | null;
+    } catch {}
+  }
+  
+  if (!message) {
+    console.log('Message not found for reaction:', messageId);
+    return { action: 'add', reactions: [] };
+  }
+  
+  const currentReactions = message.reactions || [];
+  const existingIndex = currentReactions.findIndex(
+    r => r.emoji === emoji && r.userId === normalizedUserId
+  );
+  
+  let action: 'add' | 'remove';
+  let newReactions: Array<{ emoji: string; userId: string; timestamp: number }>;
+  
+  if (existingIndex >= 0) {
+    // Remove reaction
+    action = 'remove';
+    newReactions = currentReactions.filter((_, i) => i !== existingIndex);
+  } else {
+    // Add reaction
+    action = 'add';
+    newReactions = [...currentReactions, { emoji, userId: normalizedUserId, timestamp: Date.now() }];
+  }
+  
+  // Update in database
+  const query = message.client_id 
+    ? { client_id: messageId }
+    : { _id: message._id };
+    
+  await messagesCollection.updateOne(
+    query,
+    { $set: { reactions: newReactions, updated_at: new Date() } }
+  );
+  
+  console.log(`💬 Reaction ${action}: ${emoji} by ${normalizedUserId} on message ${messageId}`);
+  
+  return { action, reactions: newReactions };
+}
+
 export async function markSingleMessageRead(
   messageId: string,
   readerWallet: string
@@ -491,6 +606,14 @@ export interface DBOfflineMessage {
   content: string;
   message_type: string;
   client_id?: string;  // Client-generated message ID for read receipt tracking
+  conversation_id?: string;  // For group messages
+  group_info?: {  // Group metadata for creating group on delivery
+    id: string;
+    groupName: string;
+    participants: string[];
+    admins?: string[];
+    createdBy?: string;
+  };
   created_at: Date;
 }
 
@@ -499,14 +622,18 @@ export async function queueOfflineMessage(
   senderWallet: string,
   content: string,
   messageType: string = 'text',
-  clientId?: string  // Client-generated message ID for read receipt tracking
+  clientId?: string,
+  conversationId?: string,
+  groupInfo?: any
 ): Promise<void> {
   await offlineMessagesCollection.insertOne({
     recipient_wallet: recipientWallet.toLowerCase(),
     sender_wallet: senderWallet.toLowerCase(),
     content,
     message_type: messageType,
-    client_id: clientId,  // Store for later delivery
+    client_id: clientId,
+    conversation_id: conversationId,
+    group_info: groupInfo,
     created_at: new Date(),
   });
 }
@@ -1149,6 +1276,77 @@ export async function isConversationHiddenForUser(
   }
 }
 
+/**
+ * Cleanup duplicate groups for a user
+ * Keeps the group with the most recent update or the one with group_id set
+ */
+export async function cleanupDuplicateGroups(
+  walletAddress: string
+): Promise<{ removed: number; kept: number }> {
+  const normalizedAddress = walletAddress.toLowerCase();
+  
+  // Get all groups the user is a participant in
+  const groups = await conversationsCollection.find({
+    type: 'group',
+    participants: normalizedAddress
+  }).toArray();
+  
+  // Group by participants (sorted)
+  const groupsByParticipants = new Map<string, any[]>();
+  
+  for (const group of groups) {
+    const participantsKey = group.participants.sort().join(',');
+    if (!groupsByParticipants.has(participantsKey)) {
+      groupsByParticipants.set(participantsKey, []);
+    }
+    groupsByParticipants.get(participantsKey)!.push(group);
+  }
+  
+  let removed = 0;
+  let kept = 0;
+  
+  // For each set of duplicates, keep the best one and remove the rest
+  for (const [participantsKey, duplicates] of groupsByParticipants) {
+    if (duplicates.length <= 1) {
+      kept++;
+      continue;
+    }
+    
+    // Sort to find the best one to keep:
+    // 1. Prefer ones with group_id set (frontend-generated)
+    // 2. Prefer ones with a proper name (not null or "Group Chat")
+    // 3. Prefer most recently updated
+    duplicates.sort((a, b) => {
+      // Prefer ones with group_id
+      const aHasGroupId = !!a.group_id;
+      const bHasGroupId = !!b.group_id;
+      if (aHasGroupId && !bHasGroupId) return -1;
+      if (!aHasGroupId && bHasGroupId) return 1;
+      
+      // Prefer ones with a proper name
+      const aHasName = a.name && a.name !== 'Group Chat';
+      const bHasName = b.name && b.name !== 'Group Chat';
+      if (aHasName && !bHasName) return -1;
+      if (!aHasName && bHasName) return 1;
+      
+      // Prefer most recently updated
+      return (b.updated_at?.getTime() || 0) - (a.updated_at?.getTime() || 0);
+    });
+    
+    // Keep the first one, delete the rest
+    const [toKeep, ...toRemove] = duplicates;
+    console.log(`🧹 Keeping group "${toKeep.name}" (${toKeep.group_id || toKeep._id}), removing ${toRemove.length} duplicates`);
+    
+    for (const dup of toRemove) {
+      await conversationsCollection.deleteOne({ _id: dup._id });
+      removed++;
+    }
+    kept++;
+  }
+  
+  return { removed, kept };
+}
+
 // ============================================
 // EXPORTS
 // ============================================
@@ -1183,6 +1381,7 @@ export default {
   markMessageDelivered,
   markMessagesRead,
   markSingleMessageRead,
+  toggleMessageReaction,
   searchMessages,
   // Offline messages
   queueOfflineMessage,
@@ -1201,6 +1400,7 @@ export default {
   softDeleteMessage,
   hideConversationForUser,
   isConversationHiddenForUser,
+  cleanupDuplicateGroups,
   getUser,
   // Contact operations
   getContacts,
