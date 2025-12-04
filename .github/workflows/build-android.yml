@@ -11,40 +11,30 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ---------------------------------------------
-      # 1. Checkout repo
-      # ---------------------------------------------
+      # 1) Checkout repo
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ---------------------------------------------
-      # 2. Install Node.js
-      # ---------------------------------------------
+      # 2) Setup Node
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: 18
 
-      # ---------------------------------------------
-      # 3. Install dependencies
-      # ---------------------------------------------
+      # 3) Install dependencies in frontend
       - name: Install npm dependencies
         run: |
           cd frontend
           npm install
 
-      # ---------------------------------------------
-      # 4. Build & Sync Capacitor
-      # ---------------------------------------------
+      # 4) Build Next.js + sync Capacitor (android)
       - name: Build frontend & sync Capacitor
         run: |
           cd frontend
           npm run build
           npx cap sync android
 
-      # ---------------------------------------------
-      # 5. Set up Android SDK
-      # ---------------------------------------------
+      # 5) Setup Java + Android SDK
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -54,30 +44,23 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      # ---------------------------------------------
-      # 6. Restore keystore from secret
-      # ---------------------------------------------
-      - name: Decode Keystore
+      # 6) Restore keystore into android/app/
+      - name: Decode keystore into android/app
         run: |
-          echo "$KEYSTORE_FILE" | base64 --decode > frontend/android/app/release.keystore
+          mkdir -p frontend/android/app
+          echo "$KEYSTORE_FILE" | base64 --decode > frontend/android/app/blockstar-cypher.keystore
+          echo "Contents of frontend/android/app:"
+          ls -al frontend/android/app
         env:
           KEYSTORE_FILE: ${{ secrets.KEYSTORE_FILE }}
 
-      # ---------------------------------------------
-      # 7. Build Signed APK
-      # ---------------------------------------------
+      # 7) Build signed release APK (Gradle uses signingConfigs from build.gradle)
       - name: Build signed release APK
         run: |
           cd frontend/android
-          ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=app/release.keystore \
-            -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
-            -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
-            -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
+          ./gradlew assembleRelease
 
-      # ---------------------------------------------
-      # 8. Upload APK Artifact (v4)
-      # ---------------------------------------------
+      # 8) Upload APK artifact
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
