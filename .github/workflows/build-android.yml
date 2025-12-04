@@ -15,18 +15,18 @@ jobs:
       # 1. Checkout repo
       # ---------------------------------------------
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       # ---------------------------------------------
       # 2. Install Node.js
       # ---------------------------------------------
       - name: Set up Node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: 18
 
       # ---------------------------------------------
-      # 3. Install dependencies in frontend folder
+      # 3. Install dependencies
       # ---------------------------------------------
       - name: Install npm dependencies
         run: |
@@ -34,7 +34,7 @@ jobs:
           npm install
 
       # ---------------------------------------------
-      # 4. Build the web app + sync Capacitor
+      # 4. Build & Sync Capacitor
       # ---------------------------------------------
       - name: Build frontend & sync Capacitor
         run: |
@@ -43,10 +43,10 @@ jobs:
           npx cap sync android
 
       # ---------------------------------------------
-      # 5. Install JDK + Android SDK (CLI only)
+      # 5. Set up Android SDK
       # ---------------------------------------------
       - name: Set up Java 17
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
@@ -55,7 +55,7 @@ jobs:
         uses: android-actions/setup-android@v3
 
       # ---------------------------------------------
-      # 6. Recreate keystore from GitHub secret
+      # 6. Restore keystore from secret
       # ---------------------------------------------
       - name: Decode Keystore
         run: |
@@ -64,7 +64,7 @@ jobs:
           KEYSTORE_FILE: ${{ secrets.KEYSTORE_FILE }}
 
       # ---------------------------------------------
-      # 7. Build signed APK using Gradle
+      # 7. Build Signed APK
       # ---------------------------------------------
       - name: Build signed release APK
         run: |
@@ -76,10 +76,10 @@ jobs:
             -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
 
       # ---------------------------------------------
-      # 8. Upload built APK as artifact
+      # 8. Upload APK Artifact (v4)
       # ---------------------------------------------
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: BlockStar-release-apk
           path: frontend/android/app/build/outputs/apk/release/app-release.apk
