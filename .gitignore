@@ -15,8 +15,6 @@ mobile-app
 # Next.js
 frontend/.next/
 frontend/out/
-frontend/ios/
-frontend/android/
 backend/out/
 
 # Production
