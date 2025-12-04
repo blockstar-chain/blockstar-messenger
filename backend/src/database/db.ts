@@ -20,6 +20,7 @@ let offlineMessagesCollection: Collection;
 let sessionsCollection: Collection;
 let filesCollection: Collection;
 let contactsCollection: Collection;
+let pushTokensCollection: Collection;
 
 // ============================================
 // DATABASE CONNECTION
@@ -40,6 +41,7 @@ export async function initializeDatabase(): Promise<boolean> {
     sessionsCollection = db.collection('sessions');
     filesCollection = db.collection('files');
     contactsCollection = db.collection('contacts');
+    pushTokensCollection = db.collection('push_tokens');
     
     // Create indexes for performance
     await createIndexes();
@@ -78,6 +80,10 @@ async function createIndexes(): Promise<void> {
     // Contacts indexes
     await contactsCollection.createIndex({ owner_wallet: 1, contact_wallet: 1 }, { unique: true });
     await contactsCollection.createIndex({ owner_wallet: 1 });
+    
+    // Push tokens indexes
+    await pushTokensCollection.createIndex({ wallet_address: 1 });
+    await pushTokensCollection.createIndex({ wallet_address: 1, push_token: 1 }, { unique: true });
     
     console.log('📦 MongoDB indexes created');
   } catch (error) {
@@ -829,18 +835,21 @@ export async function addGroupMember(
     return false;
   }
   
-  // Check if requester is admin
-  const admins = conversation.admins || [];
+  // Check if requester is admin - normalize all addresses for comparison
+  const admins = (conversation.admins || []).map((a: string) => a.toLowerCase());
   const createdBy = (conversation.created_by || '').toLowerCase();
   const isAdmin = admins.includes(normalizedAdmin) || createdBy === normalizedAdmin;
+  
+  console.log('addGroupMember check:', { normalizedAdmin, admins, createdBy, isAdmin });
   
   if (!isAdmin) {
     console.error('User is not admin:', normalizedAdmin);
     return false;
   }
   
-  // Check if member already in group
-  if (conversation.participants.includes(normalizedMember)) {
+  // Check if member already in group - normalize participants too
+  const normalizedParticipants = conversation.participants.map((p: string) => p.toLowerCase());
+  if (normalizedParticipants.includes(normalizedMember)) {
     console.log('Member already in group:', normalizedMember);
     return true;
   }
@@ -884,11 +893,13 @@ export async function removeGroupMember(
     return false;
   }
   
-  // Check if requester is admin (or removing themselves)
-  const admins = conversation.admins || [];
+  // Check if requester is admin (or removing themselves) - normalize all addresses
+  const admins = (conversation.admins || []).map((a: string) => a.toLowerCase());
   const createdBy = (conversation.created_by || '').toLowerCase();
   const isAdmin = admins.includes(normalizedAdmin) || createdBy === normalizedAdmin;
   const isSelfRemoval = normalizedMember === normalizedAdmin;
+  
+  console.log('removeGroupMember check:', { normalizedAdmin, normalizedMember, admins, createdBy, isAdmin, isSelfRemoval });
   
   if (!isAdmin && !isSelfRemoval) {
     console.error('User is not authorized to remove members:', normalizedAdmin);
@@ -941,8 +952,8 @@ export async function addGroupAdmin(
     return false;
   }
   
-  // Check if requester is admin
-  const admins = conversation.admins || [];
+  // Check if requester is admin - normalize all addresses
+  const admins = (conversation.admins || []).map((a: string) => a.toLowerCase());
   const createdBy = (conversation.created_by || '').toLowerCase();
   const isAdmin = admins.includes(normalizedAdmin) || createdBy === normalizedAdmin;
   
@@ -950,8 +961,9 @@ export async function addGroupAdmin(
     return false;
   }
   
-  // Check if member is in the group
-  if (!conversation.participants.includes(normalizedMember)) {
+  // Check if member is in the group - normalize participants
+  const normalizedParticipants = conversation.participants.map((p: string) => p.toLowerCase());
+  if (!normalizedParticipants.includes(normalizedMember)) {
     return false;
   }
   
@@ -991,8 +1003,8 @@ export async function removeGroupAdmin(
     return false;
   }
   
-  // Check if requester is admin
-  const admins = conversation.admins || [];
+  // Check if requester is admin - normalize all addresses
+  const admins = (conversation.admins || []).map((a: string) => a.toLowerCase());
   const createdBy = (conversation.created_by || '').toLowerCase();
   const isAdmin = admins.includes(normalizedAdmin) || createdBy === normalizedAdmin;
   
@@ -1348,6 +1360,87 @@ export async function cleanupDuplicateGroups(
 }
 
 // ============================================
+// PUSH TOKEN OPERATIONS
+// ============================================
+
+interface PushToken {
+  wallet_address: string;
+  push_token: string;
+  platform: 'ios' | 'android';
+  device_id: string;
+  updated_at: Date;
+  created_at: Date;   // add this
+}
+/**
+ * Save or update a push token for a user
+ */
+export async function savePushToken(tokenData: PushToken): Promise<boolean> {
+  const normalizedAddress = tokenData.wallet_address.toLowerCase();
+  
+  try {
+    await pushTokensCollection.updateOne(
+      { 
+        wallet_address: normalizedAddress,
+        push_token: tokenData.push_token 
+      },
+      {
+        $set: {
+          wallet_address: normalizedAddress,
+          push_token: tokenData.push_token,
+          platform: tokenData.platform,
+          updated_at: tokenData.updated_at,
+        }
+      },
+      { upsert: true }
+    );
+    return true;
+  } catch (error) {
+    console.error('Error saving push token:', error);
+    return false;
+  }
+}
+
+/**
+ * Get all push tokens for a user
+ */
+export async function getPushTokens(walletAddress: string): Promise<PushToken[]> {
+  const normalizedAddress = walletAddress.toLowerCase();
+  
+  const tokens = await pushTokensCollection.find({
+    wallet_address: normalizedAddress
+  }).toArray();
+  
+  return tokens as unknown as PushToken[];
+}
+
+/**
+ * Delete a specific push token
+ */
+export async function deletePushToken(walletAddress: string, pushToken: string): Promise<boolean> {
+  const normalizedAddress = walletAddress.toLowerCase();
+  
+  const result = await pushTokensCollection.deleteOne({
+    wallet_address: normalizedAddress,
+    push_token: pushToken
+  });
+  
+  return result.deletedCount > 0;
+}
+
+/**
+ * Delete all push tokens for a user
+ */
+export async function deleteAllPushTokens(walletAddress: string): Promise<number> {
+  const normalizedAddress = walletAddress.toLowerCase();
+  
+  const result = await pushTokensCollection.deleteMany({
+    wallet_address: normalizedAddress
+  });
+  
+  return result.deletedCount;
+}
+
+// ============================================
 // EXPORTS
 // ============================================
 
@@ -1408,4 +1501,9 @@ export default {
   updateContact,
   removeContact,
   isContactExists,
+  // Push token operations
+  savePushToken,
+  getPushTokens,
+  deletePushToken,
+  deleteAllPushTokens,
 };

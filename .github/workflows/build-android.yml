@@ -1,0 +1,85 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ---------------------------------------------
+      # 1. Checkout repo
+      # ---------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # ---------------------------------------------
+      # 2. Install Node.js
+      # ---------------------------------------------
+      - name: Set up Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      # ---------------------------------------------
+      # 3. Install dependencies in frontend folder
+      # ---------------------------------------------
+      - name: Install npm dependencies
+        run: |
+          cd frontend
+          npm install
+
+      # ---------------------------------------------
+      # 4. Build the web app + sync Capacitor
+      # ---------------------------------------------
+      - name: Build frontend & sync Capacitor
+        run: |
+          cd frontend
+          npm run build
+          npx cap sync android
+
+      # ---------------------------------------------
+      # 5. Install JDK + Android SDK (CLI only)
+      # ---------------------------------------------
+      - name: Set up Java 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # ---------------------------------------------
+      # 6. Recreate keystore from GitHub secret
+      # ---------------------------------------------
+      - name: Decode Keystore
+        run: |
+          echo "$KEYSTORE_FILE" | base64 --decode > frontend/android/app/release.keystore
+        env:
+          KEYSTORE_FILE: ${{ secrets.KEYSTORE_FILE }}
+
+      # ---------------------------------------------
+      # 7. Build signed APK using Gradle
+      # ---------------------------------------------
+      - name: Build signed release APK
+        run: |
+          cd frontend/android
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=app/release.keystore \
+            -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
+            -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
+            -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
+
+      # ---------------------------------------------
+      # 8. Upload built APK as artifact
+      # ---------------------------------------------
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: BlockStar-release-apk
+          path: frontend/android/app/build/outputs/apk/release/app-release.apk

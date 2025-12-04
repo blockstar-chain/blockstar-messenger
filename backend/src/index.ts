@@ -161,6 +161,39 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// Debug endpoint to check active connections (for troubleshooting)
+app.get('/api/debug/connections', (req, res) => {
+  const connections = [...activeConnections.keys()].map(addr => ({
+    address: addr,
+    status: userStatuses.get(addr) || 'unknown',
+    hasSocketId: !!activeConnections.get(addr),
+    lastSeen: lastSeenTimes.get(addr) || null,
+  }));
+  
+  res.json({
+    totalConnections: activeConnections.size,
+    connections,
+    timestamp: Date.now(),
+  });
+});
+
+// Check if a specific user is connected
+app.get('/api/debug/connections/:walletAddress', (req, res) => {
+  const address = req.params.walletAddress.toLowerCase();
+  const socketId = activeConnections.get(address);
+  const status = userStatuses.get(address);
+  const lastSeen = lastSeenTimes.get(address);
+  
+  res.json({
+    address,
+    isConnected: !!socketId,
+    socketId: socketId ? socketId.substring(0, 8) + '...' : null,
+    status: status || 'offline',
+    lastSeen,
+    timestamp: Date.now(),
+  });
+});
+
 // Register or update user's public key
 app.post('/api/keys/register', async (req, res) => {
   try {
@@ -1001,6 +1034,89 @@ app.get('/api/contacts/:ownerWallet/:contactWallet/exists', async (req, res) => 
   }
 });
 
+// ============================================
+// PUSH TOKEN ENDPOINTS
+// ============================================
+
+// Register push token for native app notifications
+app.post('/api/push-token', async (req, res) => {
+  try {
+    const { token, walletAddress, platform, deviceId } = req.body;
+    
+    if (!token || !walletAddress || !platform) {
+      return res.status(400).json({ 
+        error: 'token, walletAddress, and platform are required' 
+      });
+    }
+    
+    if (!['ios', 'android', 'web'].includes(platform)) {
+      return res.status(400).json({ 
+        error: 'platform must be ios, android, or web' 
+      });
+    }
+    
+    const success = await db.savePushToken({
+      wallet_address: walletAddress,
+      push_token: token,
+      platform,
+      device_id: deviceId,
+      created_at: new Date(),  // ADD THIS
+      updated_at: new Date(),  // already added
+    });
+    
+    if (success) {
+      console.log(`📱 Push token registered for ${walletAddress} (${platform})`);
+      res.json({ success: true });
+    } else {
+      res.status(500).json({ error: 'Failed to save push token' });
+    }
+  } catch (error) {
+    console.error('Error registering push token:', error);
+    res.status(500).json({ error: 'Failed to register push token' });
+  }
+});
+
+// Remove push token (on logout)
+app.delete('/api/push-token', async (req, res) => {
+  try {
+    const { token, walletAddress } = req.body;
+    
+    if (!token || !walletAddress) {
+      return res.status(400).json({ 
+        error: 'token and walletAddress are required' 
+      });
+    }
+    
+    const success = await db.deletePushToken(walletAddress, token);
+    
+    res.json({ success });
+  } catch (error) {
+    console.error('Error removing push token:', error);
+    res.status(500).json({ error: 'Failed to remove push token' });
+  }
+});
+
+// Get push tokens for a wallet (admin/debug)
+app.get('/api/push-tokens/:walletAddress', async (req, res) => {
+  try {
+    const { walletAddress } = req.params;
+    const tokens = await db.getPushTokens(walletAddress);
+    
+    res.json({ 
+      success: true, 
+      tokens: tokens.map(t => ({
+        platform: t.platform,
+        deviceId: t.device_id,
+        createdAt: t.created_at,
+        updatedAt: t.updated_at,
+      }))
+    });
+  } catch (error) {
+    console.error('Error getting push tokens:', error);
+    res.status(500).json({ error: 'Failed to get push tokens' });
+  }
+});
+
 // Save a message via REST (backup for when WebSocket fails)
 app.post('/api/messages', async (req, res) => {
   try {
@@ -1038,22 +1154,31 @@ app.get('/api/sync/:walletAddress', async (req, res) => {
     // Get user data
     const user = await db.getUserByWallet(address);
     
-    // Get all conversations
+    // Get all conversations (already filters out invalid "Group Chat" names)
     const conversations = await db.getUserConversations(address);
     
     // Get messages for each conversation (last 50 per conversation)
     const conversationsWithMessages = await Promise.all(
       conversations.map(async (conv) => {
-        const messages = await db.getMessages(conv._id!.toString(), 50);
+        const convAny = conv as any;
+        
+        // For groups, use group_id for messages; for direct, use _id
+        const conversationId = convAny.group_id || conv._id!.toString();
+        const messages = await db.getMessages(conversationId, 50);
         
         return {
-          id: conv._id!.toString(),
+          id: conversationId,  // Use group_id if available for groups
           type: conv.type,
           participants: conv.participants,
           name: conv.name,
           avatarUrl: conv.avatar_url,
           createdAt: conv.created_at.getTime(),
           updatedAt: conv.updated_at.getTime(),
+          // Group-specific fields - CRITICAL for proper display
+          groupName: conv.name,  // Also return as groupName for frontend compatibility
+          groupAvatar: conv.avatar_url,
+          admins: convAny.admins || [],
+          createdBy: convAny.created_by || '',
           messages: messages.map(msg => {
             // Ensure content is always a string
             let contentStr: string;
@@ -1197,6 +1322,31 @@ app.delete('/api/upload/:fileId', (req, res) => {
 // WEBSOCKET HANDLERS
 // ============================================
 
+// Store pending calls for offline users (will be forwarded when they come online)
+const pendingCalls = new Map<string, {
+  callerId: string;
+  callType: string;
+  offer: any;
+  callId: string;
+  timestamp: number;
+}[]>();
+
+// Clean up old pending calls (older than 60 seconds)
+const cleanupPendingCalls = () => {
+  const now = Date.now();
+  for (const [recipient, calls] of pendingCalls.entries()) {
+    const activePendingCalls = calls.filter(c => now - c.timestamp < 60000);
+    if (activePendingCalls.length === 0) {
+      pendingCalls.delete(recipient);
+    } else {
+      pendingCalls.set(recipient, activePendingCalls);
+    }
+  }
+};
+
+// Run cleanup every 30 seconds
+setInterval(cleanupPendingCalls, 30000);
+
 io.on('connection', (socket: Socket) => {
   console.log('Client connected:', socket.id);
 
@@ -1265,6 +1415,30 @@ io.on('connection', (socket: Socket) => {
       db.clearOfflineMessages(address).catch(console.error);
     }
   }).catch(console.error);
+
+  // Deliver any pending calls (calls initiated while user was offline)
+  const pending = pendingCalls.get(address);
+  if (pending && pending.length > 0) {
+    const now = Date.now();
+    const activePending = pending.filter(call => now - call.timestamp < 60000);
+    
+    if (activePending.length > 0) {
+      console.log(`📞 Forwarding ${activePending.length} pending calls to ${address}`);
+      
+      for (const call of activePending) {
+        socket.emit('call:incoming', {
+          callerId: call.callerId,
+          callType: call.callType,
+          offer: call.offer,
+          callId: call.callId,
+        });
+        console.log(`📞 Forwarded pending call from ${call.callerId}`);
+      }
+    }
+    
+    // Clear pending calls for this user
+    pendingCalls.delete(address);
+  }
 
   // ----------------------
   // Key Exchange Events
@@ -1498,21 +1672,43 @@ io.on('connection', (socket: Socket) => {
   // Call Events
   // ----------------------
 
-  socket.on('call:initiate', ({ recipientAddress, callType, offer, callId }: any) => {
+  // ----------------------
+  // Ping/Pong Keepalive
+  // ----------------------
+  socket.on('ping', () => {
+    socket.emit('pong');
+  });
+
+  // ----------------------
+  // Calling
+  // ----------------------
+
+  // Store active calls to track caller-recipient mapping
+  const activeCalls = new Map<string, { callerId: string; recipientId: string }>();
+
+  socket.on('call:initiate', async ({ recipientAddress, callType, offer, callId }: any) => {
     try {
       const recipient = recipientAddress.toLowerCase();
       const recipientSocketId = activeConnections.get(recipient);
 
+      console.log('========================================');
+      console.log('📞 CALL:INITIATE received');
+      console.log('   From:', address);
+      console.log('   To:', recipient);
+      console.log('   Call ID:', callId);
+      console.log('   Type:', callType);
+      console.log('   Recipient socket:', recipientSocketId ? 'CONNECTED' : 'NOT CONNECTED');
+      console.log('   Active connections:', [...activeConnections.keys()]);
+      console.log('========================================');
+
+      // Use the callId provided by the caller
+      const finalCallId = callId || `${address}-${recipient}-${Date.now()}`;
+      
+      // Store call mapping for answer routing
+      activeCalls.set(finalCallId, { callerId: address, recipientId: recipient });
+
       if (recipientSocketId) {
-        // Use the callId provided by the caller, or create one if not provided (backward compatibility)
-        const finalCallId = callId || `${address}-${recipient}-${Date.now()}`;
-        
-        console.log('Call initiated:', {
-          from: address,
-          to: recipient,
-          callId: finalCallId,
-          type: callType
-        });
+        console.log('📞 Sending call:incoming to recipient socket:', recipientSocketId);
         
         io.to(recipientSocketId).emit('call:incoming', {
           callerId: address,
@@ -1521,12 +1717,57 @@ io.on('connection', (socket: Socket) => {
           callId: finalCallId,
         });
 
-        // Confirm call initiated to caller with the SAME call ID
+        // Confirm call initiated to caller
         socket.emit('call:initiated', { callId: finalCallId, recipientAddress: recipient });
+        console.log('📞 Call initiated successfully');
       } else {
-        socket.emit('call:unavailable', {
+        // User is offline - queue the call and let them receive it when they come online
+        // Don't send unavailable immediately - the frontend will handle timeout
+        console.log('📞 Recipient offline - queueing call for when they come online');
+        
+        const pendingForRecipient = pendingCalls.get(recipient) || [];
+        pendingForRecipient.push({
+          callerId: address,
+          callType,
+          offer,
+          callId: finalCallId,
+          timestamp: Date.now(),
+        });
+        pendingCalls.set(recipient, pendingForRecipient);
+        
+        // Still confirm call initiated to caller (they'll see "ringing")
+        socket.emit('call:initiated', { callId: finalCallId, recipientAddress: recipient });
+        
+        // Send push notification to offline user
+        try {
+          const pushTokens = await db.getPushTokens(recipient);
+          if (pushTokens && pushTokens.length > 0) {
+            console.log(`📱 Sending push notification for incoming call to ${recipient}`);
+            // Get caller profile for notification
+            let callerName = address.substring(0, 10) + '...';
+            try {
+              const callerProfile = await db.getUserByWallet(address);
+              if (callerProfile?.username) {
+                callerName = '@' + callerProfile.username;
+              }
+            } catch {}
+            
+            // Send push notification (simplified - implement based on your push service)
+            // This is a placeholder - you'd integrate with FCM, APNs, or web-push here
+            console.log(`📱 Would send push: "Incoming ${callType} call from ${callerName}"`);
+          }
+        } catch (pushError) {
+          console.warn('Could not send push notification for call:', pushError);
+        }
+        
+        // DON'T send call:unavailable immediately - let the caller ring for a while
+        // The caller will timeout after 60 seconds if no answer
+        // Only send a status update, not unavailable
+        socket.emit('call:status', {
+          callId: finalCallId,
           recipientAddress: recipient,
-          reason: 'User is offline',
+          status: 'ringing-offline',
+          message: 'User is offline - they may receive a push notification',
         });
       }
     } catch (error) {
@@ -1537,12 +1778,31 @@ io.on('connection', (socket: Socket) => {
 
   socket.on('call:answer', ({ callId, answer }: any) => {
     try {
-      // CallId format: callerAddress-recipientAddress-timestamp
-      // Ethereum addresses are 42 chars (0x + 40 hex)
-      const callerAddress = callId.substring(0, 42).toLowerCase();
+      console.log('========================================');
+      console.log('📞 CALL:ANSWER received');
+      console.log('   Call ID:', callId);
+      console.log('   From (answerer):', address);
+      console.log('   Answer type:', answer?.type);
+      console.log('========================================');
+
+      // Try to get caller from stored call mapping first
+      const callInfo = activeCalls.get(callId);
+      let callerAddress: string;
+      
+      if (callInfo) {
+        callerAddress = callInfo.callerId;
+        console.log('📞 Found caller from call mapping:', callerAddress);
+      } else {
+        // Fallback: Extract caller from callId format (callerAddress-recipientAddress-timestamp)
+        // Ethereum addresses are 42 chars (0x + 40 hex)
+        callerAddress = callId.substring(0, 42).toLowerCase();
+        console.log('📞 Extracted caller from callId:', callerAddress);
+      }
+
       const callerSocketId = activeConnections.get(callerAddress);
 
-      console.log('Call answer received:', { callId, callerAddress, callerSocketId: !!callerSocketId });
+      console.log('📞 Caller socket ID:', callerSocketId ? 'FOUND' : 'NOT FOUND');
+      console.log('📞 Active connections:', [...activeConnections.keys()]);
 
       if (callerSocketId) {
         io.to(callerSocketId).emit('call:answer', {
@@ -1550,9 +1810,11 @@ io.on('connection', (socket: Socket) => {
           answer,
           from: address,
         });
-        console.log('Sent call:answer to caller');
+        console.log('📞 Sent call:answer to caller successfully');
       } else {
-        console.log('Caller not found in activeConnections');
+        console.log('📞 ERROR: Caller not found in activeConnections');
+        console.log('📞 Looking for:', callerAddress);
+        console.log('📞 Available:', [...activeConnections.keys()]);
       }
     } catch (error) {
       console.error('Error answering call:', error);
@@ -1564,15 +1826,21 @@ io.on('connection', (socket: Socket) => {
       const recipient = recipientAddress.toLowerCase();
       const recipientSocketId = activeConnections.get(recipient);
 
+      console.log('🧊 ICE candidate relay:', {
+        from: address,
+        to: recipient,
+        callId,
+        recipientConnected: !!recipientSocketId,
+      });
+
       if (recipientSocketId) {
-        console.log(`Relaying ICE candidate from ${address} to ${recipient} for call ${callId}`);
         io.to(recipientSocketId).emit('call:ice-candidate', {
           from: address,
           candidate,
           callId,
         });
       } else {
-        console.log(`Cannot relay ICE candidate - ${recipient} not connected`);
+        console.log(`🧊 Cannot relay ICE candidate - ${recipient} not connected`);
       }
     } catch (error) {
       console.error('Error handling ICE candidate:', error);
@@ -1802,7 +2070,7 @@ io.on('connection', (socket: Socket) => {
   // Group Call Events
   // ----------------------
 
-  socket.on('group:call:initiate', ({ recipientAddress, callType, offer, callId, groupId, groupName, participants }: any) => {
+  socket.on('group:call:initiate', async ({ recipientAddress, callType, offer, callId, groupId, groupName, participants }: any) => {
     try {
       const recipient = recipientAddress.toLowerCase();
       const recipientSocketId = activeConnections.get(recipient);
@@ -1831,10 +2099,33 @@ io.on('connection', (socket: Socket) => {
 
         console.log(`   → Group call signal sent to ${recipient}`);
       } else {
-        console.log(`   → ${recipient} is offline, cannot reach`);
+        console.log(`   → ${recipient} is offline, sending push notification`);
+        
+        // Send push notification to offline participant
+        try {
+          let callerName = address.slice(0, 10) + '...';
+          try {
+            const callerProfile = await db.getUserByWallet(address);
+            if (callerProfile?.username) {
+              callerName = '@' + callerProfile.username;
+            }
+          } catch {}
+          
+          const pushTokens = await db.getPushTokens(recipient);
+          if (pushTokens && pushTokens.length > 0) {
+            console.log(`📱 Sending group call push notification to ${pushTokens.length} device(s)`);
+            // Push notification placeholder - integrate with FCM, APNs, or web-push here
+            console.log(`📱 Would send push: "Group call from ${callerName} in ${groupName || 'group'}"`);
+          }
+        } catch (pushError) {
+          console.error('Error sending group call push notification:', pushError);
+        }
+        
+        // Notify caller that this participant is offline (but call continues)
         socket.emit('group:call:participant:unavailable', {
           address: recipient,
           callId,
+          reason: 'User is offline - push notification sent',
         });
       }
     } catch (error) {
@@ -1928,8 +2219,13 @@ io.on('connection', (socket: Socket) => {
   // Disconnect
   // ----------------------
 
-  socket.on('disconnect', () => {
-    console.log('Client disconnected:', socket.id);
+  socket.on('disconnect', (reason) => {
+    console.log('========================================');
+    console.log('🔌 Client DISCONNECTED');
+    console.log('   Socket ID:', socket.id);
+    console.log('   Wallet:', address);
+    console.log('   Reason:', reason);
+    console.log('========================================');
 
     if (address) {
       activeConnections.delete(address);

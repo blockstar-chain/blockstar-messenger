@@ -7,6 +7,7 @@ mobile/android/app/build/
 .expo/
 /.pnp
 .pnp.js
+mobile-app
 
 # Testing
 /coverage
@@ -14,6 +15,8 @@ mobile/android/app/build/
 # Next.js
 frontend/.next/
 frontend/out/
+frontend/ios/
+frontend/android/
 backend/out/
 
 # Production

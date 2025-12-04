@@ -158,6 +158,61 @@ export default function Sidebar() {
     }
   }, [currentUser?.walletAddress]);
 
+  // Periodic duplicate cleanup - runs every 30 seconds to catch any duplicates that slip through
+  useEffect(() => {
+    if (!currentUser?.walletAddress) return;
+
+    const cleanupDuplicates = async () => {
+      try {
+        const allConversations = await db.conversations.toArray();
+        
+        // Find and remove any "Group Chat" duplicates
+        const groupChatGroups = allConversations.filter(c => 
+          c.type === 'group' && (c as any).groupName === 'Group Chat'
+        );
+        
+        let removedCount = 0;
+        
+        for (const badGroup of groupChatGroups) {
+          const participants = (badGroup.participants || []).map(p => p.toLowerCase()).sort().join(',');
+          
+          // Check if there's a properly named group with the same participants
+          const properGroup = allConversations.find(c => 
+            c.type === 'group' && 
+            c.id !== badGroup.id &&
+            (c as any).groupName && 
+            (c as any).groupName !== 'Group Chat' &&
+            (c.participants || []).map(p => p.toLowerCase()).sort().join(',') === participants
+          );
+          
+          if (properGroup) {
+            console.log(`🧹 Auto-cleanup: Removing duplicate "Group Chat", proper group exists: ${(properGroup as any).groupName}`);
+            await db.conversations.delete(badGroup.id);
+            removedCount++;
+          }
+        }
+        
+        if (removedCount > 0) {
+          // Reload conversations to update UI
+          loadConversations();
+        }
+      } catch (error) {
+        // Silently ignore cleanup errors
+      }
+    };
+
+    // Run cleanup every 30 seconds
+    const interval = setInterval(cleanupDuplicates, 30000);
+    
+    // Also run once immediately after a short delay
+    const timeout = setTimeout(cleanupDuplicates, 5000);
+
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, [currentUser?.walletAddress]);
+
   // Listen for group:created events when another user adds us to a group
   useEffect(() => {
     const unsubscribe = webSocketService.on('group:created', async (data: { group: any; createdBy: string }) => {

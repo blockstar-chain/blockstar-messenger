@@ -675,7 +675,12 @@ export default function ChatArea() {
           if (isGroupMessage) {
             // For group messages, try to create the group from groupInfo if available
             // This handles the case where group:created event was missed
-            if (message.groupInfo && message.groupInfo.groupName) {
+            // IMPORTANT: Reject 'Group Chat' as it's the default fallback name - wait for proper group creation
+            const hasValidGroupName = message.groupInfo && 
+              message.groupInfo.groupName && 
+              message.groupInfo.groupName !== 'Group Chat';
+              
+            if (hasValidGroupName) {
               console.log(`📨 Creating group from message groupInfo: ${message.groupInfo.groupName}`);
               
               const newGroup: Conversation = {
@@ -696,8 +701,9 @@ export default function ChatArea() {
               addConversation(newGroup);
               conv = newGroup;
             } else {
-              // No groupInfo available - wait for group:created event
+              // No valid groupInfo available - wait for group:created event
               console.log(`📨 Received message for unknown group ${conversationId}, waiting for group:created event`);
+              console.log(`📨 groupInfo:`, message.groupInfo);
               
               // Save message to IndexedDB so it appears when group is created
               await dbHelpers.saveMessage(displayMessage);
@@ -1579,14 +1585,30 @@ export default function ChatArea() {
           updatedAt: Date.now()
         });
 
+        // Get the actual group name - NEVER use 'Group Chat' as a fallback
+        // This prevents creating duplicate groups with wrong names
+        const actualGroupName = (activeConversation as any)?.groupName;
+        
+        if (!actualGroupName) {
+          // Try to fetch from database
+          const dbConv = await db.conversations.get(activeConversationId);
+          if (dbConv && (dbConv as any).groupName) {
+            console.log('📨 Fetched group name from DB:', (dbConv as any).groupName);
+          }
+        }
+        
+        const finalGroupName = actualGroupName || 
+          (await db.conversations.get(activeConversationId))?.groupName;
+
         // Get group info to include in message (for recipients who might not have the group yet)
-        const groupInfo = {
+        // Only include groupInfo if we have a valid group name (not the default 'Group Chat')
+        const groupInfo = finalGroupName ? {
           id: activeConversationId,
-          groupName: (activeConversation as any)?.groupName || 'Group Chat',
+          groupName: finalGroupName,
           participants: activeConversation?.participants || [],
           admins: (activeConversation as any)?.admins || [],
           createdBy: (activeConversation as any)?.createdBy || senderId,
-        };
+        } : null;
 
         // Send to group with encrypted payloads for each recipient
         webSocketService.emit('group:message', {
@@ -1597,7 +1619,7 @@ export default function ChatArea() {
             encryptedPayloads, // Each recipient's encrypted copy
           },
           recipients,
-          groupInfo, // Include group metadata for recipients
+          groupInfo, // Include group metadata for recipients (null if no valid name)
         });
         
         console.log('✅ Group message sent with E2E encryption for', Object.keys(encryptedPayloads).length, 'recipients');

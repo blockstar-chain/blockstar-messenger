@@ -108,8 +108,15 @@ export default function ContactsSection() {
             })
           );
           
-          setContacts(contactsWithProfiles);
-          setFilteredContacts(contactsWithProfiles);
+          // Sort contacts alphabetically by display name (nickname > @username > wallet address)
+          const sortedContacts = contactsWithProfiles.sort((a, b) => {
+            const nameA = (a.nickname || a.profile?.username || a.walletAddress).toLowerCase();
+            const nameB = (b.nickname || b.profile?.username || b.walletAddress).toLowerCase();
+            return nameA.localeCompare(nameB);
+          });
+          
+          setContacts(sortedContacts);
+          setFilteredContacts(sortedContacts);
         }
       }
     } catch (error) {
@@ -127,19 +134,26 @@ export default function ContactsSection() {
 
   // Filter contacts based on search
   useEffect(() => {
+    let result = contacts;
+    
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
-      setFilteredContacts(
-        contacts.filter(
-          (contact) =>
-            contact.walletAddress.toLowerCase().includes(query) ||
-            contact.nickname?.toLowerCase().includes(query) ||
-            contact.profile?.username?.toLowerCase().includes(query)
-        )
+      result = contacts.filter(
+        (contact) =>
+          contact.walletAddress.toLowerCase().includes(query) ||
+          contact.nickname?.toLowerCase().includes(query) ||
+          contact.profile?.username?.toLowerCase().includes(query)
       );
-    } else {
-      setFilteredContacts(contacts);
     }
+    
+    // Always sort alphabetically by display name
+    const sorted = [...result].sort((a, b) => {
+      const nameA = (a.nickname || a.profile?.username || a.walletAddress).toLowerCase();
+      const nameB = (b.nickname || b.profile?.username || b.walletAddress).toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+    
+    setFilteredContacts(sorted);
   }, [searchQuery, contacts]);
 
   // Add new contact

@@ -43,15 +43,49 @@ export async function syncFromServer(walletAddress: string): Promise<SyncResult>
     
     // Process each conversation
     for (const serverConv of data.conversations) {
-      // Save/update conversation
+      // Check if this is a group without a proper name - skip it to prevent "Group Chat" duplicates
+      if (serverConv.type === 'group') {
+        const serverGroupName = serverConv.groupName || serverConv.name;
+        if (!serverGroupName || serverGroupName === 'Group Chat') {
+          console.log(`⚠️ Skipping group with invalid name from sync:`, serverConv.id);
+          continue;
+        }
+      }
+      
+      // Check if we already have this conversation locally with a proper name
+      const existingLocal = await db.conversations.get(serverConv.id);
+      
+      // For groups, also check by participants to avoid duplicates
+      let existingByParticipants: Conversation | undefined;
+      if (serverConv.type === 'group') {
+        const serverParticipants = (serverConv.participants || []).map((p: string) => p.toLowerCase()).sort().join(',');
+        const allConversations = await db.conversations.toArray();
+        existingByParticipants = allConversations.find(c => {
+          if (c.type !== 'group') return false;
+          const localParticipants = (c.participants || []).map(p => p.toLowerCase()).sort().join(',');
+          return localParticipants === serverParticipants && c.id !== serverConv.id;
+        });
+        
+        if (existingByParticipants) {
+          console.log(`📋 Sync: Found existing group by participants, skipping server conv ${serverConv.id}`);
+          continue;
+        }
+      }
+      
+      // Save/update conversation with ALL fields including group-specific ones
       const conversation: Conversation = {
         id: serverConv.id,
         type: serverConv.type,
         participants: serverConv.participants,
         name: serverConv.name,
-        unreadCount: 0,
+        unreadCount: existingLocal?.unreadCount || 0, // Preserve local unread count
         createdAt: serverConv.createdAt,
         updatedAt: serverConv.updatedAt,
+        // Group-specific fields - CRITICAL for proper group display
+        groupName: serverConv.groupName || serverConv.name,
+        groupAvatar: serverConv.groupAvatar || serverConv.avatarUrl,
+        admins: serverConv.admins,
+        createdBy: serverConv.createdBy,
       };
       
       // Process and decrypt messages
@@ -174,26 +208,43 @@ export async function fetchConversations(walletAddress: string): Promise<Convers
       throw new Error(data.error || 'Failed to fetch conversations');
     }
     
-    const conversations: Conversation[] = data.conversations.map((serverConv: any) => ({
-      id: serverConv.id,
-      type: serverConv.type,
-      participants: serverConv.participants,
-      name: serverConv.name,
-      unreadCount: 0,
-      createdAt: serverConv.createdAt,
-      updatedAt: serverConv.updatedAt,
-      lastMessage: serverConv.lastMessage ? {
-        id: serverConv.lastMessage.id,
-        conversationId: serverConv.id,
-        senderId: serverConv.lastMessage.senderWallet,
-        recipientId: serverConv.participants.find((p: string) => p !== serverConv.lastMessage.senderWallet) || '',
-        content: serverConv.lastMessage.content,
-        timestamp: serverConv.lastMessage.timestamp,
-        type: serverConv.lastMessage.type || 'text',
-        delivered: true,
-        read: false,
-      } : undefined,
-    }));
+    const conversations: Conversation[] = data.conversations
+      .filter((serverConv: any) => {
+        // Filter out groups with invalid names
+        if (serverConv.type === 'group') {
+          const name = serverConv.groupName || serverConv.name;
+          if (!name || name === 'Group Chat') {
+            console.log(`⚠️ Filtering out group with invalid name:`, serverConv.id);
+            return false;
+          }
+        }
+        return true;
+      })
+      .map((serverConv: any) => ({
+        id: serverConv.id,
+        type: serverConv.type,
+        participants: serverConv.participants,
+        name: serverConv.name,
+        unreadCount: 0,
+        createdAt: serverConv.createdAt,
+        updatedAt: serverConv.updatedAt,
+        // Include group-specific fields
+        groupName: serverConv.groupName || serverConv.name,
+        groupAvatar: serverConv.groupAvatar || serverConv.avatarUrl,
+        admins: serverConv.admins,
+        createdBy: serverConv.createdBy,
+        lastMessage: serverConv.lastMessage ? {
+          id: serverConv.lastMessage.id,
+          conversationId: serverConv.id,
+          senderId: serverConv.lastMessage.senderWallet,
+          recipientId: serverConv.participants.find((p: string) => p !== serverConv.lastMessage.senderWallet) || '',
+          content: serverConv.lastMessage.content,
+          timestamp: serverConv.lastMessage.timestamp,
+          type: serverConv.lastMessage.type || 'text',
+          delivered: true,
+          read: false,
+        } : undefined,
+      }));
     
     // Data comes from API - no local storage needed
     

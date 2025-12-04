@@ -2,12 +2,12 @@ import React, { useEffect, useRef } from 'react';
 import { useAppStore } from '@/store';
 import { webRTCService } from '@/lib/webrtc';
 import { webSocketService } from '@/lib/websocket';
-import { Phone, PhoneOff, Video } from 'lucide-react';
+import { Phone, PhoneOff, Video, Users } from 'lucide-react';
 import { truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
 import toast from 'react-hot-toast';
 
 export default function IncomingCallModal() {
-  const { incomingCall, setIncomingCall, setActiveCall, setCallModalOpen } = useAppStore();
+  const { incomingCall, setIncomingCall, setActiveCall, setCallModalOpen, currentUser } = useAppStore();
   const ringtoneRef = useRef<HTMLAudioElement | null>(null);
 
   // Play ringtone
@@ -40,6 +40,9 @@ export default function IncomingCallModal() {
 
   if (!incomingCall) return null;
 
+  const isGroupCall = incomingCall.isGroupCall || 
+    (Array.isArray(incomingCall.participants) && incomingCall.participants.length > 2);
+
   const handleAccept = async () => {
     // Stop ringtone
     if (ringtoneRef.current) {
@@ -53,9 +56,11 @@ export default function IncomingCallModal() {
       const audioOnly = incomingCall.type === 'audio';
       
       console.log('========================================');
-      console.log('ACCEPTING CALL');
-      console.log('Call ID:', incomingCall.id);
-      console.log('Call type:', incomingCall.type);
+      console.log('📞 ACCEPTING CALL');
+      console.log('   Call ID:', incomingCall.id);
+      console.log('   Call type:', incomingCall.type);
+      console.log('   Caller:', incomingCall.callerId);
+      console.log('   Is group call:', isGroupCall);
       console.log('========================================');
       
       // Initialize local media
@@ -63,9 +68,9 @@ export default function IncomingCallModal() {
       
       // Check if microphone is muted at system level
       const audioTracks = stream.getAudioTracks();
-      console.log('Local audio tracks:', audioTracks.length);
+      console.log('📞 Local audio tracks:', audioTracks.length);
       audioTracks.forEach((t, i) => {
-        console.log('Track ' + i + ':', { enabled: t.enabled, muted: t.muted, readyState: t.readyState });
+        console.log('   Track ' + i + ':', { enabled: t.enabled, muted: t.muted, readyState: t.readyState });
       });
       
       if (audioTracks.length > 0 && audioTracks[0].muted) {
@@ -79,46 +84,104 @@ export default function IncomingCallModal() {
       const offerJson = sessionStorage.getItem('incomingCallOffer');
       const offer = offerJson ? JSON.parse(offerJson) : null;
       
-      console.log('Retrieved offer from session:', !!offer);
+      console.log('📞 Retrieved offer from session:', !!offer);
       if (offer) {
-        console.log('Offer type:', offer.type);
-        console.log('Offer has SDP:', !!offer.sdp);
+        console.log('   Offer type:', offer.type);
+        console.log('   Offer has SDP:', !!offer.sdp);
       }
 
-      // Create answer peer connection
-      const peer = webRTCService.answerCall(
-        incomingCall.id,
-        audioOnly,
-        (signal) => {
-          // SimplePeer sends both SDP answer and ICE candidates via onSignal
-          if (signal.type === 'answer') {
-            console.log('📤 Sending ANSWER signal to caller');
-            webSocketService.answerCall(incomingCall.id, signal);
-          } else if (signal.candidate || signal.type === 'candidate') {
-            console.log('📤 Sending ICE candidate to caller');
-            webSocketService.sendIceCandidate(incomingCall.callerId, signal, incomingCall.id);
-          } else {
-            console.log('📤 Sending other signal:', signal.type);
-            webSocketService.sendIceCandidate(incomingCall.callerId, signal, incomingCall.id);
+      if (isGroupCall) {
+        // GROUP CALL ACCEPT
+        const peerId = (incomingCall as any).peerId || `${incomingCall.id}-${currentUser?.walletAddress?.toLowerCase()}`;
+        
+        const peer = webRTCService.answerCall(
+          peerId,
+          audioOnly,
+          (signal) => {
+            if (signal.type === 'answer') {
+              console.log('📤 Sending group call ANSWER to caller');
+              webSocketService.emit('group:call:answer', {
+                callId: incomingCall.id,
+                answer: signal,
+                peerId,
+                toAddress: incomingCall.callerId,
+              });
+            } else if (signal.candidate || signal.type === 'candidate') {
+              console.log('📤 Sending group call ICE candidate');
+              webSocketService.emit('group:call:ice-candidate', {
+                recipientAddress: incomingCall.callerId,
+                candidate: signal,
+                callId: incomingCall.id,
+                peerId,
+              });
+            }
+          },
+          (candidate) => {
+            webSocketService.emit('group:call:ice-candidate', {
+              recipientAddress: incomingCall.callerId,
+              candidate,
+              callId: incomingCall.id,
+              peerId,
+            });
           }
-        },
-        (candidate) => {
-          console.log('📤 Sending ICE candidate (separate callback)');
-          webSocketService.sendIceCandidate(incomingCall.callerId, candidate, incomingCall.id);
+        );
+
+        // Process the incoming offer
+        if (offer) {
+          console.log('📞 Processing incoming group call offer...');
+          webRTCService.processSignal(peerId, offer);
+          sessionStorage.removeItem('incomingCallOffer');
         }
-      );
 
-      // Process the incoming offer
-      if (offer) {
-        console.log('Processing incoming offer...');
-        webRTCService.processSignal(incomingCall.id, offer);
-        sessionStorage.removeItem('incomingCallOffer');
+        // Set active call with group properties
+        setActiveCall({ 
+          ...incomingCall, 
+          status: 'active',
+          isGroupCall: true,
+        });
       } else {
-        console.error('❌ No offer found in session storage!');
-      }
+        // DIRECT CALL ACCEPT
+        console.log('📞 Creating answer peer for direct call...');
+        
+        const peer = webRTCService.answerCall(
+          incomingCall.id,
+          audioOnly,
+          (signal) => {
+            if (signal.type === 'answer') {
+              console.log('========================================');
+              console.log('📤 Sending ANSWER signal to caller');
+              console.log('   Call ID:', incomingCall.id);
+              console.log('   Caller:', incomingCall.callerId);
+              console.log('   Answer type:', signal.type);
+              console.log('========================================');
+              webSocketService.answerCall(incomingCall.id, signal);
+            } else if (signal.candidate || signal.type === 'candidate') {
+              console.log('📤 Sending ICE candidate to caller:', incomingCall.callerId);
+              webSocketService.sendIceCandidate(incomingCall.callerId, signal, incomingCall.id);
+            } else {
+              console.log('📤 Sending other signal:', signal.type);
+              webSocketService.sendIceCandidate(incomingCall.callerId, signal, incomingCall.id);
+            }
+          },
+          (candidate) => {
+            console.log('📤 Sending ICE candidate (separate callback) to:', incomingCall.callerId);
+            webSocketService.sendIceCandidate(incomingCall.callerId, candidate, incomingCall.id);
+          }
+        );
 
-      // Set active call and open call modal
-      setActiveCall({ ...incomingCall, status: 'active' });
+        // Process the incoming offer
+        if (offer) {
+          console.log('📞 Processing incoming offer...');
+          webRTCService.processSignal(incomingCall.id, offer);
+          sessionStorage.removeItem('incomingCallOffer');
+        } else {
+          console.error('❌ No offer found in session storage!');
+        }
+
+        // Set active call
+        setActiveCall({ ...incomingCall, status: 'active' });
+      }
+      
       setIncomingCall(null);
       setCallModalOpen(true);
       
@@ -140,7 +203,14 @@ export default function IncomingCallModal() {
     }
 
     if (incomingCall) {
-      webSocketService.endCall(incomingCall.id);
+      if (isGroupCall) {
+        webSocketService.emit('group:call:leave', {
+          callId: incomingCall.id,
+          groupId: incomingCall.id.split('-')[0],
+        });
+      } else {
+        webSocketService.endCall(incomingCall.id);
+      }
     }
     
     sessionStorage.removeItem('incomingCallOffer');
@@ -148,6 +218,9 @@ export default function IncomingCallModal() {
   };
 
   const isVideoCall = incomingCall.type === 'video';
+  const displayName = isGroupCall 
+    ? ((incomingCall as any).groupName || 'Group Call')
+    : truncateAddress(incomingCall.callerId);
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center">
@@ -155,20 +228,32 @@ export default function IncomingCallModal() {
         <div className="text-center">
           {/* Caller avatar with animation */}
           <div className="relative inline-block mb-6">
-            <div className="w-28 h-28 rounded-full bg-gradient-to-br from-primary-500 to-cyan-500 flex items-center justify-center text-white text-3xl font-semibold shadow-glow-lg">
-              {getInitials(incomingCall.callerId)}
+            <div className={`w-28 h-28 rounded-full flex items-center justify-center text-white text-3xl font-semibold shadow-glow-lg ${
+              isGroupCall 
+                ? 'bg-gradient-to-br from-purple-500 to-pink-500' 
+                : 'bg-gradient-to-br from-primary-500 to-cyan-500'
+            }`}>
+              {isGroupCall ? <Users size={48} /> : getInitials(incomingCall.callerId)}
             </div>
             {/* Animated ring */}
             <div className="absolute inset-0 rounded-full border-4 border-primary-500 animate-ping opacity-30" />
           </div>
           
           <h2 className="text-2xl font-bold text-white mb-1">
-            Incoming {isVideoCall ? 'Video' : 'Voice'} Call
+            Incoming {isGroupCall ? 'Group ' : ''}{isVideoCall ? 'Video' : 'Voice'} Call
           </h2>
           
-          <p className="text-secondary mb-8">
-            {truncateAddress(incomingCall.callerId)}
+          <p className="text-secondary mb-2">
+            {displayName}
           </p>
+          
+          {isGroupCall && (
+            <p className="text-xs text-muted mb-6">
+              From: {truncateAddress(incomingCall.callerId)}
+            </p>
+          )}
+          
+          {!isGroupCall && <div className="mb-8" />}
 
           {/* Action buttons */}
           <div className="flex justify-center gap-8">

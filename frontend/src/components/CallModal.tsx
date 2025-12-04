@@ -23,6 +23,16 @@ export default function CallModal() {
   const [hasRemoteStream, setHasRemoteStream] = useState(false);
   const [remoteAudioPlaying, setRemoteAudioPlaying] = useState(false);
   const [participantStreams, setParticipantStreams] = useState<Map<string, ParticipantStream>>(new Map());
+  const [myProfile, setMyProfile] = useState<BlockStarProfile | null>(null);
+  const [otherPartyProfile, setOtherPartyProfile] = useState<BlockStarProfile | null>(null);
+  const [myAvatarFailed, setMyAvatarFailed] = useState(false);
+  
+  // Reset avatar failed state when call opens
+  useEffect(() => {
+    if (isCallModalOpen) {
+      setMyAvatarFailed(false);
+    }
+  }, [isCallModalOpen]);
   
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -34,12 +44,132 @@ export default function CallModal() {
   const isGroupCall = activeCall?.isGroupCall || Array.isArray(activeCall?.recipientId);
   const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
 
+  // Load current user's profile - use same method as other participants
+  useEffect(() => {
+    if (!currentUser?.walletAddress || !isCallModalOpen) return;
+    
+    // If currentUser already has an avatar, use it immediately
+    if (currentUser.avatar) {
+      console.log('✅ [MyProfile] Using currentUser.avatar:', currentUser.avatar);
+      setMyProfile({
+        username: currentUser.username || '',
+        fullUsername: `${currentUser.username}@blockstar`,
+        walletAddress: currentUser.walletAddress,
+        avatar: currentUser.avatar,
+        records: {},
+        subdomains: [],
+        isSubdomain: false,
+        mainDomain: currentUser.username || '',
+        subDomain: '',
+        resolvedAt: Date.now(),
+      });
+      return;
+    }
+    
+    const loadMyProfile = async () => {
+      console.log('🔍 [MyProfile] Starting profile load for:', currentUser.walletAddress);
+      console.log('🔍 [MyProfile] Username:', currentUser.username);
+      
+      try {
+        // Method 1: Use the same API call that works for other participants
+        const response = await fetch(`${API_URL}/api/profile/${currentUser.walletAddress.toLowerCase()}`);
+        console.log('📡 [MyProfile] API response status:', response.status);
+        
+        if (response.ok) {
+          const data = await response.json();
+          console.log('📦 [MyProfile] API data:', JSON.stringify(data));
+          
+          if (data.success && data.profile?.nftName) {
+            console.log('🔍 [MyProfile] Resolving nftName:', data.profile.nftName);
+            const profile = await resolveProfile(data.profile.nftName);
+            console.log('📦 [MyProfile] Resolved profile:', JSON.stringify(profile));
+            
+            if (profile) {
+              console.log('✅ [MyProfile] Setting myProfile with avatar:', profile.avatar);
+              setMyProfile(profile);
+              return;
+            }
+          }
+        }
+        
+        // Method 2: Try resolving by username directly
+        if (currentUser.username) {
+          const username = currentUser.username.replace('@', ''); // Remove @ if present
+          console.log('🔍 [MyProfile] Trying direct username resolve:', username);
+          
+          const profile = await resolveProfile(username);
+          console.log('📦 [MyProfile] Direct resolve result:', JSON.stringify(profile));
+          
+          if (profile?.avatar) {
+            console.log('✅ [MyProfile] Setting myProfile from direct resolve:', profile.avatar);
+            setMyProfile(profile);
+            return;
+          }
+        }
+        
+        console.log('⚠️ [MyProfile] No avatar found for current user');
+      } catch (error) {
+        console.error('❌ [MyProfile] Error loading profile:', error);
+      }
+    };
+    
+    loadMyProfile();
+  }, [currentUser?.walletAddress, currentUser?.username, currentUser?.avatar, isCallModalOpen, API_URL]);
+
+  // Load other party's profile for direct calls
+  useEffect(() => {
+    if (isGroupCall || !activeCall || !isCallModalOpen) return;
+    
+    const isCaller = activeCall.callerId?.toLowerCase() === currentUser?.walletAddress?.toLowerCase();
+    const otherAddress = isCaller ? activeCall.recipientId : activeCall.callerId;
+    
+    if (!otherAddress) return;
+    
+    const loadOtherProfile = async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/profile/${otherAddress.toLowerCase()}`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.profile?.nftName) {
+            const profile = await resolveProfile(data.profile.nftName);
+            setOtherPartyProfile(profile);
+          }
+        }
+      } catch (error) {
+        console.error('Error loading other party profile:', error);
+      }
+    };
+    
+    loadOtherProfile();
+  }, [activeCall, isGroupCall, isCallModalOpen, currentUser?.walletAddress]);
+
   // Load participant profiles for group calls
   useEffect(() => {
     if (!isGroupCall || !activeCall?.participants) return;
 
     const loadProfiles = async () => {
       const newStreams = new Map<string, ParticipantStream>();
+      
+      // Also load current user's profile at the same time
+      if (currentUser?.walletAddress && !currentUser?.avatar && !myProfile?.avatar) {
+        try {
+          console.log('🔍 [Participants] Loading myProfile for:', currentUser.walletAddress);
+          const myResponse = await fetch(`${API_URL}/api/profile/${currentUser.walletAddress.toLowerCase()}`);
+          if (myResponse.ok) {
+            const myData = await myResponse.json();
+            console.log('📦 [Participants] My profile API response:', myData);
+            if (myData.success && myData.profile?.nftName) {
+              const myProfileResolved = await resolveProfile(myData.profile.nftName);
+              console.log('📦 [Participants] My profile resolved:', myProfileResolved?.avatar);
+              if (myProfileResolved) {
+                setMyProfile(myProfileResolved);
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Error loading my profile in participants:', error);
+        }
+      }
       
       for (const address of activeCall.participants) {
         if (address.toLowerCase() === currentUser?.walletAddress.toLowerCase()) continue;
@@ -69,7 +199,7 @@ export default function CallModal() {
     };
 
     loadProfiles();
-  }, [activeCall?.participants, isGroupCall, currentUser?.walletAddress]);
+  }, [activeCall?.participants, isGroupCall, currentUser?.walletAddress, currentUser?.avatar, API_URL]);
 
   // Set up local video when modal opens
   useEffect(() => {
@@ -366,6 +496,8 @@ export default function CallModal() {
     setCallDuration(0);
     setCallStatus('ended');
     setParticipantStreams(new Map());
+    setMyProfile(null);
+    setOtherPartyProfile(null);
   };
 
   const formatDuration = (seconds: number): string => {
@@ -421,13 +553,72 @@ export default function CallModal() {
                 </p>
               </div>
 
-              {/* Participants grid */}
-              <div className={`grid gap-4 max-w-4xl mx-auto ${
-                totalParticipants <= 2 ? 'grid-cols-2' :
-                totalParticipants <= 4 ? 'grid-cols-2' :
-                totalParticipants <= 6 ? 'grid-cols-3' :
+              {/* Participants grid - includes YOU */}
+              <div className={`grid gap-4 max-w-5xl mx-auto ${
+                (totalParticipants + 1) <= 2 ? 'grid-cols-2' :
+                (totalParticipants + 1) <= 4 ? 'grid-cols-2' :
+                (totalParticipants + 1) <= 6 ? 'grid-cols-3' :
                 'grid-cols-4'
               }`}>
+                {/* Current user's tile (You) */}
+                <div
+                  className="relative aspect-video bg-dark-200 rounded-2xl overflow-hidden border-2 border-primary-500"
+                >
+                  {isVideoCall ? (
+                    <video
+                      ref={localVideoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex flex-col items-center justify-center">
+                      {/* Show avatar if URL exists AND image hasn't failed to load */}
+                      {((currentUser?.avatar || myProfile?.avatar) && !myAvatarFailed) ? (
+                        <img
+                          src={currentUser?.avatar || myProfile?.avatar}
+                          alt="Your avatar"
+                          className="w-20 h-20 rounded-full object-cover mb-3"
+                          onLoad={(e) => {
+                            console.log('✅ [Avatar] Image loaded successfully, dimensions:', e.currentTarget.naturalWidth, 'x', e.currentTarget.naturalHeight);
+                          }}
+                          onError={(e) => {
+                            console.error('❌ [Avatar] Image failed to load:', e.currentTarget.src);
+                            setMyAvatarFailed(true);
+                          }}
+                        />
+                      ) : (
+                        <div
+                          className={`w-20 h-20 rounded-full flex items-center justify-center text-white text-2xl font-semibold mb-3 ${getAvatarColor(currentUser?.walletAddress || '')}`}
+                        >
+                          {getInitials(currentUser?.username || myProfile?.username || currentUser?.walletAddress || '')}
+                        </div>
+                      )}
+                      <p className="text-white font-medium">
+                        {currentUser?.username 
+                          ? `@${currentUser.username}`
+                          : myProfile?.username 
+                            ? `@${myProfile.username}`
+                            : truncateAddress(currentUser?.walletAddress || '')
+                        }
+                      </p>
+                      <p className="text-sm text-primary-400 mt-1">You</p>
+                    </div>
+                  )}
+                  
+                  {/* "You" label for video mode */}
+                  {isVideoCall && (
+                    <div className="absolute bottom-2 left-2 text-xs text-white bg-primary-500/80 px-2 py-1 rounded">
+                      You
+                    </div>
+                  )}
+                  
+                  {/* Always connected indicator for self */}
+                  <div className="absolute top-3 right-3 w-3 h-3 rounded-full bg-success-500 shadow-glow-green" />
+                </div>
+                
+                {/* Other participants */}
                 {Array.from(participantStreams.values()).map((participant) => (
                   <div
                     key={participant.address}
@@ -456,8 +647,7 @@ export default function CallModal() {
                           />
                         ) : (
                           <div
-                            className="w-20 h-20 rounded-full flex items-center justify-center text-white text-2xl font-semibold mb-3"
-                            style={{ backgroundColor: getAvatarColor(participant.address) }}
+                            className={`w-20 h-20 rounded-full flex items-center justify-center text-white text-2xl font-semibold mb-3 ${getAvatarColor(participant.address)}`}
                           >
                             {getInitials(participant.profile?.username || participant.address)}
                           </div>
@@ -483,7 +673,7 @@ export default function CallModal() {
               </div>
             </div>
           ) : (
-            // Direct call layout (existing)
+            // Direct call layout - show both participants
             <>
               {isVideoCall ? (
                 <video
@@ -496,12 +686,74 @@ export default function CallModal() {
               
               {(!isVideoCall || callStatus !== 'active') && (
                 <div className="flex flex-col items-center">
-                  <div className="w-32 h-32 rounded-full bg-gradient-to-br from-primary-500 to-cyan-500 flex items-center justify-center text-white text-4xl font-semibold mb-6 shadow-glow-lg">
-                    {getInitials(otherParty as string || '')}
+                  {/* Both avatars side by side */}
+                  <div className="flex items-center justify-center gap-8 mb-8">
+                    {/* Your avatar */}
+                    <div className="flex flex-col items-center">
+                      {(currentUser?.avatar || myProfile?.avatar) ? (
+                        <img
+                          src={currentUser?.avatar || myProfile?.avatar}
+                          alt=""
+                          className="w-24 h-24 rounded-full object-cover mb-2 ring-4 ring-primary-500"
+                        />
+                      ) : (
+                        <div
+                          className={`w-24 h-24 rounded-full flex items-center justify-center text-white text-3xl font-semibold mb-2 ring-4 ring-primary-500 ${getAvatarColor(currentUser?.walletAddress || '')}`}
+                        >
+                          {getInitials(myProfile?.username || currentUser?.username || currentUser?.walletAddress || '')}
+                        </div>
+                      )}
+                      <p className="text-white font-medium text-sm">
+                        {myProfile?.username 
+                          ? `@${myProfile.username}`
+                          : currentUser?.username 
+                            ? `@${currentUser.username}`
+                            : truncateAddress(currentUser?.walletAddress || '')
+                        }
+                      </p>
+                      <p className="text-primary-400 text-xs">You</p>
+                    </div>
+                    
+                    {/* Call status indicator between avatars */}
+                    <div className="flex flex-col items-center">
+                      <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
+                        callStatus === 'active' ? 'bg-success-500/20' : 'bg-primary-500/20'
+                      }`}>
+                        {callStatus === 'active' ? (
+                          <span className="text-2xl">🔊</span>
+                        ) : callStatus === 'ringing' ? (
+                          <span className="text-2xl animate-pulse">📞</span>
+                        ) : (
+                          <span className="text-2xl animate-spin">⏳</span>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {/* Other party avatar */}
+                    <div className="flex flex-col items-center">
+                      {otherPartyProfile?.avatar ? (
+                        <img
+                          src={otherPartyProfile.avatar}
+                          alt=""
+                          className="w-24 h-24 rounded-full object-cover mb-2 ring-4 ring-cyan-500"
+                        />
+                      ) : (
+                        <div
+                          className={`w-24 h-24 rounded-full flex items-center justify-center text-white text-3xl font-semibold mb-2 ring-4 ring-cyan-500 ${getAvatarColor(otherParty as string || '')}`}
+                        >
+                          {getInitials(otherPartyProfile?.username || otherParty as string || '')}
+                        </div>
+                      )}
+                      <p className="text-white font-medium text-sm">
+                        {otherPartyProfile?.username 
+                          ? `@${otherPartyProfile.username}`
+                          : truncateAddress(otherParty as string || '')
+                        }
+                      </p>
+                    </div>
                   </div>
-                  <p className="text-white text-2xl font-semibold mb-2">
-                    {truncateAddress(otherParty as string || '')}
-                  </p>
+                  
+                  {/* Call status text */}
                   <p className="text-secondary text-lg">
                     {callStatus === 'connecting' && 'Connecting...'}
                     {callStatus === 'ringing' && 'Ringing...'}

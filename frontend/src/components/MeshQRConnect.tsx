@@ -31,15 +31,40 @@ export const MeshQRConnect: React.FC<MeshQRConnectProps> = ({
   const [connectedPeer, setConnectedPeer] = useState<MeshPeer | null>(null);
   const [scannedData, setScannedData] = useState<string>('');
   
+  const [cameraPermission, setCameraPermission] = useState<'prompt' | 'granted' | 'denied' | 'checking'>('checking');
+  
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Check camera permission status
+  const checkCameraPermission = async () => {
+    try {
+      // Check if permissions API is available
+      if (navigator.permissions && navigator.permissions.query) {
+        const result = await navigator.permissions.query({ name: 'camera' as PermissionName });
+        setCameraPermission(result.state as 'prompt' | 'granted' | 'denied');
+        
+        // Listen for changes
+        result.addEventListener('change', () => {
+          setCameraPermission(result.state as 'prompt' | 'granted' | 'denied');
+        });
+      } else {
+        // Permissions API not available, assume prompt
+        setCameraPermission('prompt');
+      }
+    } catch (err) {
+      // Some browsers don't support camera permission query
+      setCameraPermission('prompt');
+    }
+  };
+
   // Initialize mesh service if needed
   useEffect(() => {
     if (isOpen && walletAddress && publicKey) {
       meshNetworkService.initialize(walletAddress, publicKey, username);
+      checkCameraPermission();
     }
   }, [isOpen, walletAddress, publicKey, username]);
 
@@ -95,12 +120,22 @@ export const MeshQRConnect: React.FC<MeshQRConnectProps> = ({
 
   // Camera handling
   const startCamera = async () => {
+    setError('');
+    
     try {
+      // First check if getUserMedia is available
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setError('Camera not supported in this browser');
+        setCameraPermission('denied');
+        return;
+      }
+      
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment' },
       });
       
       streamRef.current = stream;
+      setCameraPermission('granted');
       
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -108,8 +143,40 @@ export const MeshQRConnect: React.FC<MeshQRConnectProps> = ({
         startScanning();
       }
     } catch (err: any) {
-      setError('Camera access denied. Please allow camera access to scan QR codes.');
+      console.error('Camera error:', err);
+      
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        setCameraPermission('denied');
+        setError('Camera access denied. Please allow camera access in your browser settings to scan QR codes.');
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        setError('No camera found. Please connect a camera or use "Paste Data Manually".');
+      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+        setError('Camera is in use by another application. Please close other apps using the camera.');
+      } else if (err.name === 'OverconstrainedError') {
+        // Try again without facingMode constraint
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          streamRef.current = stream;
+          setCameraPermission('granted');
+          
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            await videoRef.current.play();
+            startScanning();
+          }
+        } catch (e) {
+          setError('Could not access camera. Please use "Paste Data Manually".');
+        }
+      } else {
+        setError('Could not access camera. Please use "Paste Data Manually".');
+      }
     }
+  };
+  
+  // Request camera permission explicitly
+  const requestCameraPermission = async () => {
+    setCameraPermission('checking');
+    await startCamera();
   };
 
   const stopCamera = () => {
@@ -345,23 +412,49 @@ export const MeshQRConnect: React.FC<MeshQRConnectProps> = ({
               </div>
 
               <div className="relative bg-black rounded-xl overflow-hidden aspect-square">
-                <video
-                  ref={videoRef}
-                  className="w-full h-full object-cover"
-                  playsInline
-                  muted
-                />
-                <canvas ref={canvasRef} className="hidden" />
-                
-                {/* Scanning overlay */}
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="w-48 h-48 border-2 border-purple-500 rounded-2xl" />
-                </div>
-
-                {isLoading && (
-                  <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                    <Loader2 className="w-8 h-8 text-purple-500 animate-spin" />
+                {cameraPermission === 'denied' ? (
+                  <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center">
+                    <Camera className="w-12 h-12 text-gray-500 mb-4" />
+                    <p className="text-gray-300 font-medium mb-2">Camera Access Required</p>
+                    <p className="text-gray-500 text-sm mb-4">
+                      Please enable camera access in your browser settings to scan QR codes.
+                    </p>
+                    <button
+                      onClick={requestCameraPermission}
+                      className="py-2 px-4 bg-purple-600 hover:bg-purple-700 rounded-lg text-white text-sm flex items-center gap-2"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      Try Again
+                    </button>
                   </div>
+                ) : (
+                  <>
+                    <video
+                      ref={videoRef}
+                      className="w-full h-full object-cover"
+                      playsInline
+                      muted
+                    />
+                    <canvas ref={canvasRef} className="hidden" />
+                    
+                    {/* Scanning overlay */}
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="w-48 h-48 border-2 border-purple-500 rounded-2xl" />
+                    </div>
+
+                    {isLoading && (
+                      <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                        <Loader2 className="w-8 h-8 text-purple-500 animate-spin" />
+                      </div>
+                    )}
+                    
+                    {cameraPermission === 'checking' && (
+                      <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center">
+                        <Loader2 className="w-8 h-8 text-purple-500 animate-spin mb-2" />
+                        <p className="text-gray-400 text-sm">Requesting camera access...</p>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
 
@@ -431,22 +524,48 @@ export const MeshQRConnect: React.FC<MeshQRConnectProps> = ({
               </div>
 
               <div className="relative bg-black rounded-xl overflow-hidden aspect-square">
-                <video
-                  ref={videoRef}
-                  className="w-full h-full object-cover"
-                  playsInline
-                  muted
-                />
-                <canvas ref={canvasRef} className="hidden" />
-                
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="w-48 h-48 border-2 border-purple-500 rounded-2xl" />
-                </div>
-
-                {isLoading && (
-                  <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                    <Loader2 className="w-8 h-8 text-purple-500 animate-spin" />
+                {cameraPermission === 'denied' ? (
+                  <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center">
+                    <Camera className="w-12 h-12 text-gray-500 mb-4" />
+                    <p className="text-gray-300 font-medium mb-2">Camera Access Required</p>
+                    <p className="text-gray-500 text-sm mb-4">
+                      Please enable camera access in your browser settings to scan QR codes.
+                    </p>
+                    <button
+                      onClick={requestCameraPermission}
+                      className="py-2 px-4 bg-purple-600 hover:bg-purple-700 rounded-lg text-white text-sm flex items-center gap-2"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      Try Again
+                    </button>
                   </div>
+                ) : (
+                  <>
+                    <video
+                      ref={videoRef}
+                      className="w-full h-full object-cover"
+                      playsInline
+                      muted
+                    />
+                    <canvas ref={canvasRef} className="hidden" />
+                    
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="w-48 h-48 border-2 border-purple-500 rounded-2xl" />
+                    </div>
+
+                    {isLoading && (
+                      <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                        <Loader2 className="w-8 h-8 text-purple-500 animate-spin" />
+                      </div>
+                    )}
+                    
+                    {cameraPermission === 'checking' && (
+                      <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center">
+                        <Loader2 className="w-8 h-8 text-purple-500 animate-spin mb-2" />
+                        <p className="text-gray-400 text-sm">Requesting camera access...</p>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
 

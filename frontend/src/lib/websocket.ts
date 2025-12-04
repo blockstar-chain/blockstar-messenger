@@ -6,15 +6,22 @@ const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001'
 export class WebSocketService {
   private socket: Socket | null = null;
   private userAddress: string | null = null;
+  private publicKey: string | null = null;
+  private username: string | undefined = undefined;
   private messageHandlers: Set<(message: Message) => void> = new Set();
   private callHandlers: Set<(data: any) => void> = new Set();
   private statusHandlers: Set<(data: { address: string; status: string }) => void> = new Set();
+  private keepaliveInterval: NodeJS.Timeout | null = null;
+  private reconnectAttempts: number = 0;
+  private maxReconnectAttempts: number = 10;
 
   /**
    * Connect to WebSocket server
    */
   connect(walletAddress: string, publicKey: string, username?: string): void {
     this.userAddress = walletAddress;
+    this.publicKey = publicKey;
+    this.username = username;
 
     this.socket = io(SOCKET_URL, {
       auth: {
@@ -26,10 +33,52 @@ export class WebSocketService {
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
-      reconnectionAttempts: 5,
+      reconnectionAttempts: this.maxReconnectAttempts,
+      // Keep connection alive
+      pingTimeout: 60000,
+      pingInterval: 25000,
     });
 
     this.setupEventHandlers();
+    this.startKeepalive();
+  }
+
+  /**
+   * Start keepalive ping to prevent disconnection
+   */
+  private startKeepalive(): void {
+    // Clear any existing interval
+    if (this.keepaliveInterval) {
+      clearInterval(this.keepaliveInterval);
+    }
+
+    // Send ping every 20 seconds to keep connection alive
+    this.keepaliveInterval = setInterval(() => {
+      if (this.socket?.connected) {
+        this.socket.emit('ping');
+      } else {
+        console.log('🔌 Socket not connected, attempting reconnect...');
+        this.attemptReconnect();
+      }
+    }, 20000);
+  }
+
+  /**
+   * Attempt to reconnect if disconnected
+   */
+  private attemptReconnect(): void {
+    if (!this.userAddress || !this.publicKey) return;
+    
+    if (this.socket && !this.socket.connected) {
+      this.reconnectAttempts++;
+      
+      if (this.reconnectAttempts <= this.maxReconnectAttempts) {
+        console.log(`🔄 Reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}`);
+        this.socket.connect();
+      } else {
+        console.log('❌ Max reconnect attempts reached, please refresh the page');
+      }
+    }
   }
 
   /**
@@ -39,11 +88,25 @@ export class WebSocketService {
     if (!this.socket) return;
 
     this.socket.on('connect', () => {
-      console.log('Connected to messaging server');
+      console.log('✅ Connected to messaging server');
+      this.reconnectAttempts = 0; // Reset on successful connection
     });
 
-    this.socket.on('disconnect', () => {
-      console.log('Disconnected from messaging server');
+    this.socket.on('disconnect', (reason) => {
+      console.log('❌ Disconnected from messaging server:', reason);
+      
+      // Auto-reconnect for certain disconnect reasons
+      if (reason === 'io server disconnect' || reason === 'transport close') {
+        setTimeout(() => this.attemptReconnect(), 1000);
+      }
+    });
+
+    this.socket.on('connect_error', (error) => {
+      console.error('Connection error:', error.message);
+    });
+
+    this.socket.on('pong', () => {
+      // Server responded to ping - connection is alive
     });
 
     this.socket.on('message', (message: Message) => {
@@ -51,15 +114,32 @@ export class WebSocketService {
     });
 
     this.socket.on('call:incoming', (data: any) => {
+      console.log('📞 call:incoming received:', data);
       this.callHandlers.forEach((handler) => handler(data));
     });
 
     this.socket.on('call:answer', (data: any) => {
+      console.log('📞 call:answer received:', data);
       this.callHandlers.forEach((handler) => handler(data));
     });
 
     this.socket.on('call:ice-candidate', (data: any) => {
+      console.log('🧊 call:ice-candidate received');
       this.callHandlers.forEach((handler) => handler(data));
+    });
+
+    this.socket.on('call:initiated', (data: any) => {
+      console.log('📞 call:initiated confirmation:', data);
+    });
+
+    this.socket.on('call:unavailable', (data: any) => {
+      console.log('📞 call:unavailable:', data);
+      this.callHandlers.forEach((handler) => handler({ type: 'unavailable', ...data }));
+    });
+
+    this.socket.on('call:ended', (data: any) => {
+      console.log('📞 call:ended:', data);
+      this.callHandlers.forEach((handler) => handler({ type: 'ended', ...data }));
     });
 
     this.socket.on('user:status', (data: { address: string; status: string }) => {
@@ -108,11 +188,18 @@ export class WebSocketService {
       throw new Error('Not connected to messaging server');
     }
 
+    console.log('📤 Emitting call:initiate', {
+      recipientAddress,
+      callType,
+      callId,
+      hasOffer: !!offer,
+    });
+
     this.socket.emit('call:initiate', {
       recipientAddress,
       callType,
       offer,
-      callId,  // Send the call ID we already created
+      callId,
     });
   }
 
@@ -123,6 +210,12 @@ export class WebSocketService {
     if (!this.socket || !this.socket.connected) {
       throw new Error('Not connected to messaging server');
     }
+
+    console.log('📤 Emitting call:answer', {
+      callId,
+      hasAnswer: !!answer,
+      answerType: answer?.type,
+    });
 
     this.socket.emit('call:answer', {
       callId,
@@ -201,12 +294,19 @@ export class WebSocketService {
    * Disconnect from WebSocket server
    */
   disconnect(): void {
+    if (this.keepaliveInterval) {
+      clearInterval(this.keepaliveInterval);
+      this.keepaliveInterval = null;
+    }
+    
     if (this.socket) {
       this.socket.disconnect();
       this.socket = null;
     }
     
     this.userAddress = null;
+    this.publicKey = null;
+    this.username = undefined;
     this.messageHandlers.clear();
     this.callHandlers.clear();
     this.statusHandlers.clear();
@@ -217,6 +317,13 @@ export class WebSocketService {
    */
   isConnected(): boolean {
     return this.socket?.connected || false;
+  }
+
+  /**
+   * Get socket ID for debugging
+   */
+  getSocketId(): string | null {
+    return this.socket?.id || null;
   }
 
   /**

@@ -3,6 +3,7 @@ import { useAppStore } from '@/store';
 import { blockchainService } from '@/lib/blockchain';
 import { encryptionService } from '@/lib/encryption';
 import { webSocketService } from '@/lib/websocket';
+import { resolveProfile } from '@/lib/profileResolver';
 import { Wallet, Shield, Lock, CheckCircle, Sparkles } from 'lucide-react';
 import toast from 'react-hot-toast';
 import logoImg from '@/images/logo.png';
@@ -53,11 +54,24 @@ export default function AuthPage() {
       // Connect to messaging server with username
       webSocketService.connect(address, publicKey, nftMetadata.name);
 
-      // Set user in store
+      // Resolve profile to get avatar
+      let avatar: string | undefined;
+      try {
+        const profile = await resolveProfile(nftMetadata.name);
+        if (profile?.avatar) {
+          avatar = profile.avatar;
+          console.log('✅ Resolved avatar during auth:', avatar);
+        }
+      } catch (error) {
+        console.error('Could not resolve profile avatar:', error);
+      }
+
+      // Set user in store with avatar
       setCurrentUser({
         walletAddress: address,
         username: nftMetadata.name,
         publicKey: publicKey,
+        avatar: avatar,
         status: 'online',
       });
 

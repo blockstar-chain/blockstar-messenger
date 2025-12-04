@@ -1,129 +1,137 @@
 // BlockStar Messenger Service Worker
-// Handles push notifications and offline caching
+const CACHE_NAME = 'blockstar-messenger-v1';
 
-const CACHE_NAME = 'blockstar-v1';
-const urlsToCache = [
+// Files to cache - only cache files that definitely exist
+const STATIC_ASSETS = [
   '/',
-  '/icon-192.png',
-  '/icon-512.png',
-  '/badge-72.png',
+  '/sounds/notification.mp3',
+  '/sounds/ringtone.mp3'
 ];
 
-// Install event - cache files
+// Install event - cache static assets
 self.addEventListener('install', (event) => {
+  console.log('Service Worker installing...');
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      console.log('Opened cache');
-      return cache.addAll(urlsToCache);
-    })
+    caches.open(CACHE_NAME)
+      .then((cache) => {
+        console.log('Opened cache');
+        // Cache each file individually to handle failures gracefully
+        return Promise.allSettled(
+          STATIC_ASSETS.map(url => 
+            cache.add(url).catch(err => {
+              console.warn(`Failed to cache ${url}:`, err.message);
+              return null;
+            })
+          )
+        );
+      })
+      .then(() => {
+        console.log('Service Worker installed');
+        return self.skipWaiting();
+      })
   );
-  self.skipWaiting();
 });
 
 // Activate event - clean up old caches
 self.addEventListener('activate', (event) => {
+  console.log('Service Worker activating...');
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            console.log('Deleting old cache:', cacheName);
-            return caches.delete(cacheName);
-          }
-        })
+        cacheNames
+          .filter((name) => name !== CACHE_NAME)
+          .map((name) => {
+            console.log('Deleting old cache:', name);
+            return caches.delete(name);
+          })
       );
+    }).then(() => {
+      console.log('Service Worker activated');
+      return self.clients.claim();
     })
   );
-  self.clients.claim();
 });
 
-// Push event - handle incoming push notifications
-self.addEventListener('push', (event) => {
-  console.log('Push event received');
-
-  let data = {
-    title: 'BlockStar Messenger',
-    body: 'You have a new message',
-    icon: '/icon-192.png',
-    badge: '/badge-72.png',
-  };
-
-  if (event.data) {
-    try {
-      data = { ...data, ...event.data.json() };
-    } catch (e) {
-      data.body = event.data.text();
-    }
-  }
-
-  const options = {
-    body: data.body,
-    icon: data.icon,
-    badge: data.badge,
-    vibrate: [200, 100, 200],
-    data: data.data || {},
-    actions: [
-      { action: 'open', title: 'Open' },
-      { action: 'close', title: 'Close' },
-    ],
-    tag: data.tag || 'default',
-    requireInteraction: data.requireInteraction || false,
-  };
-
-  event.waitUntil(
-    self.registration.showNotification(data.title, options)
-  );
-});
-
-// Notification click event
-self.addEventListener('notificationclick', (event) => {
-  console.log('Notification click:', event.action);
-
-  event.notification.close();
-
-  if (event.action === 'close') {
+// Fetch event - serve from cache, fallback to network
+self.addEventListener('fetch', (event) => {
+  // Skip non-GET requests
+  if (event.request.method !== 'GET') return;
+  
+  // Skip API requests and WebSocket
+  const url = new URL(event.request.url);
+  if (url.pathname.startsWith('/api/') || 
+      url.pathname.startsWith('/socket.io/') ||
+      url.protocol === 'ws:' ||
+      url.protocol === 'wss:') {
     return;
   }
 
-  // Open/focus the app
-  event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      // If app is already open, focus it
-      for (const client of clientList) {
-        if (client.url.includes(self.location.origin) && 'focus' in client) {
-          return client.focus();
-        }
-      }
-      // Otherwise open new window
-      if (clients.openWindow) {
-        const url = event.notification.data?.conversationId
-          ? `/chat/${event.notification.data.conversationId}`
-          : '/';
-        return clients.openWindow(url);
-      }
-    })
-  );
-});
-
-// Fetch event - serve from cache when offline
-self.addEventListener('fetch', (event) => {
-  // Skip non-GET requests and external URLs
-  if (event.request.method !== 'GET') return;
-  if (!event.request.url.startsWith(self.location.origin)) return;
-
   event.respondWith(
-    caches.match(event.request).then((response) => {
-      if (response) {
-        return response;
-      }
-      return fetch(event.request);
-    })
+    caches.match(event.request)
+      .then((response) => {
+        // Return cached response if found
+        if (response) {
+          return response;
+        }
+        // Otherwise fetch from network
+        return fetch(event.request);
+      })
+      .catch(() => {
+        // If both cache and network fail, return a fallback for HTML requests
+        if (event.request.headers.get('accept')?.includes('text/html')) {
+          return caches.match('/');
+        }
+        return new Response('Offline', { status: 503 });
+      })
   );
 });
 
-// Message event - handle messages from main thread
-self.addEventListener('message', (event) => {
-  if (event.data === 'skipWaiting') {
-    self.skipWaiting();
+// Handle push notifications
+self.addEventListener('push', (event) => {
+  console.log('Push notification received');
+  
+  let data = { title: 'BlockStar Messenger', body: 'New message' };
+  
+  try {
+    if (event.data) {
+      data = event.data.json();
+    }
+  } catch (e) {
+    console.error('Error parsing push data:', e);
   }
+
+  const options = {
+    body: data.body || 'New message',
+    icon: '/icon-192.png',
+    badge: '/badge-72.png',
+    vibrate: [100, 50, 100],
+    data: data.data || {},
+    actions: data.actions || []
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'BlockStar Messenger', options)
+  );
+});
+
+// Handle notification clicks
+self.addEventListener('notificationclick', (event) => {
+  console.log('Notification clicked');
+  event.notification.close();
+
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then((clientList) => {
+        // If app is already open, focus it
+        for (const client of clientList) {
+          if (client.url.includes('messenger.blockstar.world') && 'focus' in client) {
+            return client.focus();
+          }
+        }
+        // Otherwise open new window
+        if (clients.openWindow) {
+          return clients.openWindow('/');
+        }
+      })
+  );
 });

@@ -95,14 +95,39 @@ export class MeshNetworkService {
   
   async initialize(
     walletAddress: string, 
-    publicKey: string, 
+    publicKey: string | Uint8Array | any, 
     username?: string,
     serverUrl?: string
   ): Promise<void> {
     if (this.isInitialized) return;
     
     this.myWalletAddress = walletAddress.toLowerCase();
-    this.myPublicKey = publicKey;
+    
+    // Convert publicKey to string if needed
+    if (typeof publicKey === 'string') {
+      this.myPublicKey = publicKey;
+    } else if (publicKey instanceof Uint8Array) {
+      this.myPublicKey = Array.from(publicKey)
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+    } else if (publicKey instanceof ArrayBuffer) {
+      this.myPublicKey = Array.from(new Uint8Array(publicKey))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+    } else if (Array.isArray(publicKey)) {
+      this.myPublicKey = publicKey
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+    } else if (publicKey) {
+      // Fallback to string conversion
+      this.myPublicKey = String(publicKey);
+    } else {
+      this.myPublicKey = '';
+      console.warn('⚠️ MeshNetworkService: No publicKey provided');
+    }
+    
+    console.log('🔑 MeshNetworkService publicKey type:', typeof publicKey, 'converted to:', this.myPublicKey.substring(0, 20) + '...');
+    
     this.myUsername = username || '';
     this.serverUrl = serverUrl || process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
     
@@ -245,6 +270,13 @@ export class MeshNetworkService {
       timestamp: Date.now(),
       expiresAt: Date.now() + OFFER_EXPIRY_MS,
     };
+    
+    console.log('🔐 Creating connection offer with peerInfo:', {
+      walletAddress: offer.peerInfo.walletAddress?.slice(0, 12),
+      publicKey: typeof offer.peerInfo.publicKey,
+      publicKeyLength: offer.peerInfo.publicKey?.length || 0,
+      username: offer.peerInfo.username,
+    });
     
     // Store pending connection
     this.peers.set(tempId, peerConnection);
@@ -424,49 +456,194 @@ export class MeshNetworkService {
   }
   
   // ============================================
-  // QR CODE ENCODING/DECODING
+  // QR CODE ENCODING/DECODING (COMPRESSED)
   // ============================================
   
+  // Minify SDP by removing unnecessary lines and shortening
+  private minifySDP(sdp: string): string {
+    const lines = sdp.split('\r\n');
+    const essential: string[] = [];
+    
+    for (const line of lines) {
+      // Skip empty lines and less critical lines for initial connection
+      if (!line) continue;
+      if (line.startsWith('a=extmap:')) continue;
+      if (line.startsWith('a=rtcp-fb:')) continue;
+      if (line.startsWith('a=ssrc-group:')) continue;
+      if (line.startsWith('a=msid-semantic:')) continue;
+      if (line.startsWith('a=ssrc:')) continue;
+      if (line.startsWith('a=rtcp:')) continue;
+      
+      // Shorten common prefixes
+      let shortened = line
+        .replace('a=candidate:', 'C:')
+        .replace('a=ice-ufrag:', 'U:')
+        .replace('a=ice-pwd:', 'P:')
+        .replace('a=fingerprint:', 'F:')
+        .replace('a=setup:', 'S:')
+        .replace('a=mid:', 'M:')
+        .replace('a=rtpmap:', 'R:')
+        .replace('a=group:BUNDLE', 'GB:')
+        .replace('a=sctp-port:', 'SP:')
+        .replace('a=max-message-size:', 'MS:')
+        .replace('m=application', 'MA')
+        .replace('c=IN IP4', 'CI4')
+        .replace('UDP/DTLS/SCTP', 'UDS');
+      
+      essential.push(shortened);
+    }
+    
+    return essential.join('|');
+  }
+  
+  // Restore minified SDP
+  private restoreSDP(minified: string): string {
+    const lines = minified.split('|');
+    const restored: string[] = [];
+    
+    for (const line of lines) {
+      let full = line
+        .replace('C:', 'a=candidate:')
+        .replace('U:', 'a=ice-ufrag:')
+        .replace('P:', 'a=ice-pwd:')
+        .replace('F:', 'a=fingerprint:')
+        .replace('S:', 'a=setup:')
+        .replace('M:', 'a=mid:')
+        .replace('R:', 'a=rtpmap:')
+        .replace('GB:', 'a=group:BUNDLE')
+        .replace('SP:', 'a=sctp-port:')
+        .replace('MS:', 'a=max-message-size:')
+        .replace('MA', 'm=application')
+        .replace('CI4', 'c=IN IP4')
+        .replace('UDS', 'UDP/DTLS/SCTP');
+      
+      restored.push(full);
+    }
+    
+    return restored.join('\r\n') + '\r\n';
+  }
+  
+  // Convert publicKey to string (handles various formats)
+  private stringifyPublicKey(publicKey: any): string {
+    if (!publicKey) {
+      return '';
+    }
+    
+    // Already a string
+    if (typeof publicKey === 'string') {
+      return publicKey;
+    }
+    
+    // Uint8Array or ArrayBuffer
+    if (publicKey instanceof Uint8Array) {
+      return Array.from(publicKey)
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+    }
+    
+    if (publicKey instanceof ArrayBuffer) {
+      return Array.from(new Uint8Array(publicKey))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+    }
+    
+    // Array of numbers
+    if (Array.isArray(publicKey)) {
+      return publicKey
+        .map(b => (typeof b === 'number' ? b.toString(16).padStart(2, '0') : String(b)))
+        .join('');
+    }
+    
+    // Object with specific formats (like from some crypto libraries)
+    if (typeof publicKey === 'object') {
+      // Try to convert to JSON string as fallback
+      try {
+        const json = JSON.stringify(publicKey);
+        // Hash it to get a consistent short string
+        return btoa(json).replace(/[^a-zA-Z0-9]/g, '').slice(0, 32);
+      } catch {
+        return '';
+      }
+    }
+    
+    // Fallback: convert to string
+    return String(publicKey);
+  }
+  
   private encodeForQR(data: ConnectionOffer): string {
-    // Compress the data for smaller QR codes
+    // Aggressively compress the data for smaller QR codes
+    // Only include essential ICE candidates (host and srflx, max 2)
+    const essentialCandidates = data.iceCandidates
+      .filter(c => c.candidate && (c.candidate.includes('typ host') || c.candidate.includes('typ srflx')))
+      .slice(0, 2)
+      .map(c => {
+        // Extract only essential parts of candidate
+        const parts = c.candidate?.split(' ') || [];
+        // Format: foundation component protocol priority ip port typ type
+        if (parts.length >= 8) {
+          return {
+            c: `${parts[0]} ${parts[1]} ${parts[2]} ${parts[3]} ${parts[4]} ${parts[5]} ${parts[6]} ${parts[7]}`,
+            m: c.sdpMid,
+            l: c.sdpMLineIndex,
+          };
+        }
+        return { c: c.candidate?.substring(0, 100), m: c.sdpMid, l: c.sdpMLineIndex };
+      });
+    
     const minified = {
       t: data.type === 'offer' ? 'o' : 'a',
-      s: data.sdp,
-      i: data.iceCandidates.map(c => ({
-        c: c.candidate,
-        m: c.sdpMid,
-        l: c.sdpMLineIndex,
-      })),
+      s: this.minifySDP(data.sdp),
+      i: essentialCandidates,
       p: {
-        w: data.peerInfo.walletAddress,
-        k: data.peerInfo.publicKey,
-        u: data.peerInfo.username,
+        w: String(data.peerInfo.walletAddress || '').slice(0, 12), // First 12 chars (0x + 10)
+        k: this.stringifyPublicKey(data.peerInfo.publicKey).slice(0, 24), // First 24 chars of pubkey
+        u: String(data.peerInfo.username || '').slice(0, 12), // Max 12 chars username
       },
-      e: data.expiresAt,
+      e: Math.floor((data.expiresAt - Date.now()) / 60000), // Minutes until expiry
     };
     
-    return btoa(JSON.stringify(minified));
+    const jsonStr = JSON.stringify(minified);
+    console.log('📊 QR data JSON size:', jsonStr.length, 'characters');
+    
+    // Check if still too large (QR codes can hold ~2953 alphanumeric chars max, but L correction is ~1273)
+    if (jsonStr.length > 1800) {
+      // Further reduce by removing ICE candidates entirely - rely on trickle ICE
+      minified.i = [];
+      const reducedJson = JSON.stringify(minified);
+      console.log('📊 Reduced QR data size:', reducedJson.length, 'characters');
+      
+      if (reducedJson.length > 1800) {
+        throw new Error('The amount of data is too big to be stored in a QR Code');
+      }
+      return btoa(reducedJson);
+    }
+    
+    return btoa(jsonStr);
   }
   
   private decodeFromQR(qrData: string): ConnectionOffer | null {
     try {
       const minified = JSON.parse(atob(qrData));
       
+      // Restore ICE candidates
+      const candidates = (minified.i || []).map((c: any) => ({
+        candidate: c.c?.startsWith('candidate:') ? c.c : `candidate:${c.c}`,
+        sdpMid: c.m,
+        sdpMLineIndex: c.l,
+      }));
+      
       return {
         type: minified.t === 'o' ? 'offer' : 'answer',
-        sdp: minified.s,
-        iceCandidates: minified.i.map((c: any) => ({
-          candidate: c.c,
-          sdpMid: c.m,
-          sdpMLineIndex: c.l,
-        })),
+        sdp: this.restoreSDP(minified.s),
+        iceCandidates: candidates,
         peerInfo: {
-          walletAddress: minified.p.w,
+          // Pad wallet address back to full length if needed
+          walletAddress: minified.p.w.length < 42 ? minified.p.w.padEnd(42, '0') : minified.p.w,
           publicKey: minified.p.k,
           username: minified.p.u,
         },
         timestamp: Date.now(),
-        expiresAt: minified.e,
+        expiresAt: Date.now() + (minified.e * 60000), // Convert minutes back to ms
       };
     } catch (error) {
       console.error('Failed to decode QR data:', error);

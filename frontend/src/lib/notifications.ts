@@ -75,6 +75,12 @@ class NotificationService {
     this.notificationSound = new Audio('/sounds/notification.mp3');
     this.notificationSound.volume = this.settings.soundVolume;
     
+    // Handle audio loading errors gracefully
+    this.notificationSound.onerror = () => {
+      console.warn('⚠️ Notification sound file not found, using generated sound');
+      this.notificationSound = null;
+    };
+    
     // Preload the audio
     this.notificationSound.load();
     

@@ -549,21 +549,31 @@ export class WebRTCService {
    */
   processSignal(callId: string, signal: any): void {
     const peer = this.peers.get(callId);
+    
+    console.log('========================================');
+    console.log('📥 PROCESSING SIGNAL');
+    console.log('   Call ID:', callId);
+    console.log('   Signal type:', signal?.type || 'candidate');
+    console.log('   Has peer:', !!peer);
+    console.log('   All peers:', [...this.peers.keys()]);
+    console.log('========================================');
+    
     if (peer) {
-      console.log('📥 Processing signal:', signal.type || 'candidate');
-      
       if (signal.sdp) {
         const hasAudio = signal.sdp.includes('m=audio');
-        console.log('📥 SDP has audio:', hasAudio);
+        const hasVideo = signal.sdp.includes('m=video');
+        console.log('📥 SDP info:', { hasAudio, hasVideo, type: signal.type });
       }
       
       try {
         peer.signal(signal);
+        console.log('📥 Signal processed successfully');
       } catch (error) {
-        console.error('Error processing signal:', error);
+        console.error('❌ Error processing signal:', error);
       }
     } else {
-      console.warn('⚠️ No peer for callId:', callId);
+      console.error('⚠️ No peer found for callId:', callId);
+      console.error('   Available peers:', [...this.peers.keys()]);
     }
   }
 
