@@ -18,7 +18,7 @@ export class WebSocketService {
   /**
    * Connect to WebSocket server
    */
-  connect(walletAddress: string, publicKey: string, username?: string): void {
+  connect(walletAddress: any, publicKey: string, username?: string): void {
     this.userAddress = walletAddress;
     this.publicKey = publicKey;
     this.username = username;

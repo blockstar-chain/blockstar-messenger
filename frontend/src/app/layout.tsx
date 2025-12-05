@@ -3,6 +3,7 @@ import './globals.css';
 import WalletProvider from '../utils/wagmiProvider';
 import { cookieToInitialState } from 'wagmi';
 import { config } from '@/utils/wagmi';
+import { Toaster } from 'react-hot-toast';
 
 // Using system font stack instead of Google Fonts
 const fontClass = 'font-sans';
@@ -116,6 +117,7 @@ export default function RootLayout({
       </head>
       <body className={`${fontClass} bg-midnight text-white antialiased`}>
         <WalletProvider initialState={initialState}>
+          <Toaster position='top-right' />
           {children}
         </WalletProvider>
       </body>

@@ -1,7 +1,7 @@
 // BlockStar Cypher - Complete Type Definitions
 
 export interface User {
-  walletAddress: string;
+  walletAddress: any;
   username: string; // @name from NFT
   publicKey: string;
   avatar?: string;

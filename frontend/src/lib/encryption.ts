@@ -83,7 +83,7 @@ export class EncryptionService {
    * Initialize encryption with wallet-derived keys
    * This ensures same keys on every device with same wallet
    */
-  async initialize(walletAddress: string, signMessage?: (message: string) => Promise<string>): Promise<void> {
+  async initialize(walletAddress: any, signMessage?: (message: string) => Promise<string>): Promise<void> {
     this.userAddress = walletAddress.toLowerCase();
     
     if (signMessage) {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAppStore } from '@/store';
 import { blockchainService } from '@/lib/blockchain';
 import { encryptionService } from '@/lib/encryption';
@@ -9,9 +9,11 @@ import toast from 'react-hot-toast';
 import logoImg from '@/images/logo.png';
 import Image from 'next/image';
 import ConnectButton from './ConnectButton';
+import { useAppKitAccount } from '@reown/appkit/react';
 
 
 export default function AuthPage() {
+  const { address } = useAppKitAccount();
   const { setCurrentUser, setAuthenticated } = useAppStore();
   const [isConnecting, setIsConnecting] = useState(false);
   const [currentStep, setCurrentStep] = useState<'connect' | 'verify' | 'encrypt'>('connect');
@@ -21,17 +23,15 @@ export default function AuthPage() {
 
     try {
       setCurrentStep('connect');
-
-      // Connect wallet
-      const rawAddress = await blockchainService.connectWallet();
-      const address = rawAddress.toLowerCase(); // Normalize to lowercase
-      toast.success('Wallet connected!');
+      const contractconnect = await blockchainService.connectWallet();
+      if(!contractconnect){
+        return false;
+      }
 
       setCurrentStep('verify');
-
       // Verify NFT ownership
       const nftMetadata = await blockchainService.verifyNFTOwnership(address);
-
+      
       if (!nftMetadata) {
         toast.error('No @name NFT found. Please purchase an @name NFT to continue.');
         setIsConnecting(false);
@@ -86,6 +86,12 @@ export default function AuthPage() {
       setIsConnecting(false);
     }
   };
+
+  useEffect(() => {
+    if(address){
+        handleConnectWallet();
+    }
+  }, [address])
 
   const StepIcon = ({ step, icon: Icon }: { step: string; icon: any }) => {
     const isActive = currentStep === step;
@@ -195,25 +201,8 @@ export default function AuthPage() {
             </div>
           </div>
 
-          {/* Connect Button */}
-          <button
-            onClick={handleConnectWallet}
-            disabled={isConnecting}
-            className="w-full bg-gradient-to-r from-primary-500 to-cyan-500 hover:from-primary-600 hover:to-cyan-600 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 shadow-glow hover:shadow-glow-lg"
-          >
-            {isConnecting ? (
-              <>
-                <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
-                Connecting...
-              </>
-            ) : (
-              <>
-                <Wallet size={22} />
-                Connect Wallet
-              </>
-            )}
-          </button>
-          <ConnectButton className="w-full bg-gradient-to-r from-primary-500 to-cyan-500 hover:from-primary-600 hover:to-cyan-600 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 shadow-glow hover:shadow-glow-lg" />
+  
+          <ConnectButton isConnecting={isConnecting} className="w-full bg-gradient-to-r from-primary-500 to-cyan-500 hover:from-primary-600 hover:to-cyan-600 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 shadow-glow hover:shadow-glow-lg" />
 
           {/* Info */}
           <div className="mt-6 p-4 bg-dark-200 border border-midnight rounded-xl">

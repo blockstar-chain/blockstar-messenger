@@ -13,41 +13,30 @@ const EXPLORER_URL = process.env.NEXT_PUBLIC_EXPLORER_URL || 'https://polygonsca
 
 
 export class BlockchainService {
-  private provider: BrowserProvider | null = null;
+  private provider: any | null = null;
   private signer: JsonRpcSigner | null = null;
   private nftContract: ethers.Contract | null = null;
 
-  async connectWallet(): Promise<string> {
+  async connectWallet(): Promise<Boolean> {
     if (typeof window.ethereum === 'undefined') {
       throw new Error('Please install MetaMask or another Web3 wallet');
     }
 
     try {
-      this.provider = new BrowserProvider(window.ethereum);
-
-      // Request account access
-      await window.ethereum.request({ method: 'eth_requestAccounts' });
-
-      // Check if on BlockStar Chain
-      const network = await this.provider.getNetwork();
-      if (network.chainId.toString() !== BLOCKSTAR_CHAIN_ID) {
-        await this.switchToBlockStarChain();
-      }
-
-      this.signer = await this.provider.getSigner();
-      const address = await this.signer.getAddress();
+      this.provider = new ethers.JsonRpcProvider(BLOCKSTAR_RPC_URL);
 
       // Initialize NFT contract
       this.nftContract = new ethers.Contract(
         NFT_CONTRACT_ADDRESS,
         NFT_ABI,
-        this.signer
+        this.provider
       );
 
-      return address;
+      return true;
     } catch (error) {
       console.error('Wallet connection error:', error);
       throw error;
+      return false;
     }
   }
 
@@ -86,7 +75,7 @@ export class BlockchainService {
     });
   }
 
-  async verifyNFTOwnership(address: string): Promise<NFTMetadata | null> {
+  async verifyNFTOwnership(address: any): Promise<NFTMetadata | null> {
     if (!this.nftContract) {
       throw new Error('NFT contract not initialized');
     }
