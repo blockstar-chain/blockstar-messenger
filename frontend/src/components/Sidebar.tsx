@@ -18,6 +18,7 @@ import { addToContacts, isContact } from './ContactsSection';
 import MeshStatusIndicator from './MeshStatusIndicator';
 import MeshQRConnect from './MeshQRConnect';
 import NotificationSettingsPanel from './NotificationSettings';
+import { useDisconnect } from '@reown/appkit/react';
 
 // Cache for decrypted message previews
 const decryptedPreviewCache = new Map<string, string>();
@@ -79,12 +80,56 @@ export const clearDeletedConversations = (walletAddress?: string) => {
   console.log(`🗑️ Cleared all deleted conversations for ${walletAddress || 'unknown'}`);
 };
 
-export default function Sidebar() {
+interface SidebarProps {
+  onConversationSelect?: () => void;
+  // Controlled tab state from parent (for mobile bottom nav)
+  activeTab?: 'messages' | 'contacts';
+  onTabChange?: (tab: 'messages' | 'contacts') => void;
+  // Controlled modal states from parent (for mobile bottom nav)
+  showSettingsModal?: boolean;
+  onSettingsModalChange?: (show: boolean) => void;
+  showNewChatModal?: boolean;
+  onNewChatModalChange?: (show: boolean) => void;
+  showMeshModal?: boolean;
+  onMeshModalChange?: (show: boolean) => void;
+  // Mobile mode flag
+  isMobile?: boolean;
+}
+
+export default function Sidebar({ 
+  onConversationSelect,
+  activeTab: controlledActiveTab,
+  onTabChange: controlledOnTabChange,
+  showSettingsModal: controlledShowSettings,
+  onSettingsModalChange,
+  showNewChatModal: controlledShowNewChat,
+  onNewChatModalChange,
+  showMeshModal: controlledShowMesh,
+  onMeshModalChange,
+  isMobile = false,
+}: SidebarProps) {
   const { currentUser, conversations, setActiveConversation, activeConversationId, setConversations, addConversation } = useAppStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [filteredConversations, setFilteredConversations] = useState<Conversation[]>([]);
-  const [showNewChatModal, setShowNewChatModal] = useState(false);
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  
+  // Internal state (used when not controlled by parent)
+  const [internalShowNewChatModal, setInternalShowNewChatModal] = useState(false);
+  const [internalShowSettingsModal, setInternalShowSettingsModal] = useState(false);
+  const [internalActiveTab, setInternalActiveTab] = useState<'messages' | 'contacts'>('messages');
+  
+  // Use controlled state if provided, otherwise use internal state
+  const showNewChatModal = controlledShowNewChat ?? internalShowNewChatModal;
+  const setShowNewChatModal = onNewChatModalChange ?? setInternalShowNewChatModal;
+  const showSettingsModal = controlledShowSettings ?? internalShowSettingsModal;
+  const setShowSettingsModal = onSettingsModalChange ?? setInternalShowSettingsModal;
+  const activeTab = controlledActiveTab ?? internalActiveTab;
+  const setActiveTab = controlledOnTabChange ?? setInternalActiveTab;
+  
+  // Mesh modal state
+  const [internalShowMeshModal, setInternalShowMeshModal] = useState(false);
+  const showMeshQRConnect = controlledShowMesh ?? internalShowMeshModal;
+  const setShowMeshQRConnect = onMeshModalChange ?? setInternalShowMeshModal;
+  
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [newChatAddress, setNewChatAddress] = useState('');
   const [userProfile, setUserProfile] = useState<BlockStarProfile | null>(null);
@@ -93,6 +138,7 @@ export default function Sidebar() {
   const [hoveredConversation, setHoveredConversation] = useState<string | null>(null);
   const domainName = currentUser?.username ? currentUser.username.includes('@') ? currentUser.username.split('@')[0] : currentUser.username : "";
   const stats = useSettingReslover(domainName || '');
+  const { disconnect } = useDisconnect()
 
 
 
@@ -105,15 +151,10 @@ export default function Sidebar() {
   const [groupMemberProfiles, setGroupMemberProfiles] = useState<Record<string, BlockStarProfile | null>>({});
   const [groupAddMode, setGroupAddMode] = useState<'search' | 'contacts'>('search');
   const [availableContacts, setAvailableContacts] = useState<Array<{ walletAddress: string; nickname?: string; profile?: BlockStarProfile | null }>>([]);
-  // Tab state for Messages vs Contacts
-  const [activeTab, setActiveTab] = useState<'messages' | 'contacts'>('messages');
   
   // Profile modal state
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [selectedProfileAddress, setSelectedProfileAddress] = useState<string | null>(null);
-
-  // Mesh network state
-  const [showMeshQRConnect, setShowMeshQRConnect] = useState(false);
 
   // Load contacts for group creation when switching to group mode
   useEffect(() => {
@@ -751,6 +792,7 @@ export default function Sidebar() {
         // Remove from deleted list if it was there (user is re-opening deleted chat)
         removeFromDeletedConversations(existingConv.id, currentUser?.walletAddress);
         setActiveConversation(existingConv.id);
+        onConversationSelect?.();
         setShowNewChatModal(false);
         setNewChatAddress('');
         setLoadingProfile(false);
@@ -811,6 +853,7 @@ export default function Sidebar() {
       await db.conversations.put(newConversation);
       addConversation(newConversation);
       setActiveConversation(conversationId);
+      onConversationSelect?.();
 
       setShowNewChatModal(false);
       setNewChatAddress('');
@@ -993,7 +1036,8 @@ export default function Sidebar() {
     setGroupAddMode('search');
   };
 
-  const handleLogout = () => {
+  const handleLogout = async() => {
+    await disconnect();
     blockchainService.disconnect();
     useAppStore.getState().reset();
     window.location.reload();
@@ -1088,15 +1132,18 @@ export default function Sidebar() {
 
   return (
     <>
-      <div className="w-80 bg-midnight-light border-r border-midnight flex flex-col h-screen">
+      <div className="w-full md:w-80 lg:w-96 bg-midnight-light border-r border-midnight flex flex-col h-full md:h-screen">
         {/* Header */}
-        <div className="p-4 border-b border-midnight">
-          <div className="flex items-center justify-between mb-4">
-            <h1 className="text-xl font-bold text-white">Messages</h1>
+        <div className="p-3 md:p-4 border-b border-midnight flex-shrink-0">
+          <div className="flex items-center justify-between mb-3 md:mb-4">
+            <h1 className="text-lg md:text-xl font-bold text-white">
+              {activeTab === 'contacts' ? 'Contacts' : 'Messages'}
+            </h1>
             <div className="flex gap-1">
+              {/* New Chat - hidden on mobile (in bottom nav) */}
               <button
                 onClick={() => setShowNewChatModal(true)}
-                className="p-2 bg-primary-500 hover:bg-primary-600 text-white rounded-lg transition-all hover:shadow-glow"
+                className="hidden md:flex p-2 bg-primary-500 hover:bg-primary-600 text-white rounded-lg transition-all hover:shadow-glow"
                 title="New Chat"
               >
                 <Plus size={18} />
@@ -1104,21 +1151,22 @@ export default function Sidebar() {
               <button
                 onClick={handleRefresh}
                 disabled={isRefreshing}
-                className={`p-2 hover:bg-dark-200 text-secondary hover:text-white rounded-lg transition ${isRefreshing ? 'animate-spin' : ''}`}
+                className={`p-2.5 md:p-2 hover:bg-dark-200 text-secondary hover:text-white rounded-lg transition active:bg-dark-100 ${isRefreshing ? 'animate-spin' : ''}`}
                 title="Refresh"
               >
                 <RefreshCw size={18} />
               </button>
+              {/* Settings - hidden on mobile (in bottom nav) */}
               <button
                 onClick={() => setShowSettingsModal(true)}
-                className="p-2 hover:bg-dark-200 text-secondary hover:text-white rounded-lg transition"
+                className="hidden md:flex p-2 hover:bg-dark-200 text-secondary hover:text-white rounded-lg transition"
                 title="Settings"
               >
                 <Settings size={18} />
               </button>
               <button
                 onClick={handleLogout}
-                className="p-2 hover:bg-dark-200 text-secondary hover:text-white rounded-lg transition"
+                className="p-2.5 md:p-2 hover:bg-dark-200 text-secondary hover:text-white rounded-lg transition active:bg-dark-100"
                 title="Logout"
               >
                 <LogOut size={18} />
@@ -1126,8 +1174,8 @@ export default function Sidebar() {
             </div>
           </div>
 
-          {/* Mesh Network Status */}
-          <div className="mb-3">
+          {/* Mesh Network Status - hidden on mobile (in bottom nav) */}
+          <div className="mb-3 hidden md:block">
             <MeshStatusIndicator onOpenQRConnect={() => setShowMeshQRConnect(true)} />
           </div>
 
@@ -1167,8 +1215,8 @@ export default function Sidebar() {
             />
           </div>
 
-          {/* Tabs */}
-          <div className="flex gap-2 mt-4">
+          {/* Tabs - hidden on mobile (handled by bottom nav) */}
+          <div className="hidden md:flex gap-2 mt-4">
             <button
               onClick={() => setActiveTab('messages')}
               className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-xl transition ${
@@ -1196,7 +1244,7 @@ export default function Sidebar() {
 
         {/* Content based on active tab */}
         {activeTab === 'contacts' ? (
-          <ContactsSection />
+          <ContactsSection onConversationSelect={onConversationSelect} />
         ) : (
           <>
         {/* Conversations List */}
@@ -1230,10 +1278,13 @@ export default function Sidebar() {
               return (
                 <div
                   key={conversation.id}
-                  onClick={() => setActiveConversation(conversation.id)}
+                  onClick={() => {
+                    setActiveConversation(conversation.id);
+                    onConversationSelect?.();
+                  }}
                   onMouseEnter={() => setHoveredConversation(conversation.id)}
                   onMouseLeave={() => setHoveredConversation(null)}
-                  className={`p-4 border-b border-midnight cursor-pointer transition-all relative ${isActive
+                  className={`p-3 md:p-4 border-b border-midnight cursor-pointer transition-all relative active:bg-primary-500/20 ${isActive
                     ? 'bg-primary-500/10 border-l-2 border-l-primary-500'
                     : 'hover:bg-card'
                     }`}
@@ -1442,13 +1493,13 @@ export default function Sidebar() {
 
       {/* New Chat Modal */}
       {showNewChatModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-card border border-midnight rounded-2xl shadow-2xl max-w-md w-full p-6">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end md:items-center justify-center p-0 md:p-4">
+          <div className="bg-card border border-midnight rounded-t-2xl md:rounded-2xl shadow-2xl max-w-md w-full p-4 md:p-6 max-h-[90vh] overflow-y-auto pb-safe">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-bold text-white">New Chat</h3>
+              <h3 className="text-lg md:text-xl font-bold text-white">New Chat</h3>
               <button
                 onClick={resetNewChatModal}
-                className="p-2 hover:bg-dark-200 rounded-lg transition"
+                className="p-2.5 hover:bg-dark-200 rounded-lg transition"
               >
                 <X size={20} className="text-secondary" />
               </button>
@@ -1722,19 +1773,19 @@ export default function Sidebar() {
 
       {/* Settings Modal */}
       {showSettingsModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-card border border-midnight rounded-2xl shadow-2xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-xl font-bold text-white">Settings</h3>
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end md:items-center justify-center p-0 md:p-4">
+          <div className="bg-card border border-midnight rounded-t-2xl md:rounded-2xl shadow-2xl max-w-md w-full p-4 md:p-6 max-h-[90vh] overflow-y-auto pb-safe">
+            <div className="flex items-center justify-between mb-4 md:mb-6">
+              <h3 className="text-lg md:text-xl font-bold text-white">Settings</h3>
               <button
                 onClick={() => setShowSettingsModal(false)}
-                className="p-2 hover:bg-dark-200 rounded-lg transition"
+                className="p-2.5 hover:bg-dark-200 rounded-lg transition"
               >
                 <X size={20} className="text-secondary" />
               </button>
             </div>
 
-            <div className="space-y-6">
+            <div className="space-y-4 md:space-y-6">
               {/* Profile Section */}
               <div>
                 <h4 className="font-semibold text-white mb-3">Profile</h4>

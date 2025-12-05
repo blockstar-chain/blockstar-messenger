@@ -289,3 +289,128 @@ body {
   animation: slide-up 0.3s ease-out forwards;
 }
 
+/* ============================================
+   Mobile Responsive Utilities
+   ============================================ */
+
+/* Safe area padding for notched devices */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0);
+}
+
+/* Full viewport height accounting for mobile browser chrome */
+.h-dvh {
+  height: 100dvh;
+}
+
+/* Safe area insets */
+@supports (padding: env(safe-area-inset-bottom)) {
+  .pb-safe {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+  
+  .pt-safe {
+    padding-top: max(0.5rem, env(safe-area-inset-top));
+  }
+}
+
+/* Prevent iOS bounce/overscroll on body */
+html, body {
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Fix for 100vh on mobile browsers */
+@supports (height: 100dvh) {
+  .h-screen {
+    height: 100dvh;
+  }
+}
+
+/* Toaster safe area positioning */
+.!top-safe {
+  top: max(1rem, env(safe-area-inset-top)) !important;
+}
+
+/* Mobile touch feedback */
+@media (hover: none) and (pointer: coarse) {
+  .active\:bg-dark-100:active {
+    background-color: var(--bg-input);
+  }
+  
+  .active\:bg-primary-500\/20:active {
+    background-color: rgba(0, 102, 255, 0.2);
+  }
+  
+  .active\:bg-danger-500\/20:active {
+    background-color: rgba(255, 59, 92, 0.2);
+  }
+  
+  .active\:bg-danger-500\/40:active {
+    background-color: rgba(255, 59, 92, 0.4);
+  }
+  
+  .active\:opacity-80:active {
+    opacity: 0.8;
+  }
+}
+
+/* Prevent text selection on interactive elements */
+button, a {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+/* Smooth momentum scrolling for lists */
+.overflow-y-auto {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Input zoom prevention on iOS */
+@media screen and (-webkit-min-device-pixel-ratio: 0) {
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="search"],
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Mobile modal slide-up animation */
+@keyframes modal-slide-up {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-modal-up {
+  animation: modal-slide-up 0.3s ease-out forwards;
+}
+
+/* Better focus states for mobile */
+@media (hover: none) {
+  :focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
+  }
+}
+
+/* Responsive max-width for message bubbles */
+@media (max-width: 640px) {
+  .message-sent,
+  .message-received {
+    max-width: 85% !important;
+  }
+}
+

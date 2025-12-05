@@ -7,7 +7,7 @@ import { encryptionService } from '@/lib/encryption';
 import { voiceMessageService } from '@/lib/voice-message-service';
 import { notificationService } from '@/lib/notifications';
 import { Message, Conversation } from '@/types';
-import { Send, Phone, Video, MoreVertical, Menu, Paperclip, Mic, MicOff, Lock, LockOpen, Search, X, Bell, BellOff, Smile, Check, CheckCheck, Trash2, Shield, ShieldAlert, MessageSquare, Users, RefreshCw, Settings, UserPlus, VolumeX, Volume2 } from 'lucide-react';
+import { Send, Phone, Video, MoreVertical, Menu, Paperclip, Mic, MicOff, Lock, LockOpen, Search, X, Bell, BellOff, Smile, Check, CheckCheck, Trash2, Shield, ShieldAlert, MessageSquare, Users, RefreshCw, Settings, UserPlus, VolumeX, Volume2, ChevronLeft } from 'lucide-react';
 import { generateMessageId, generateConversationId, formatMessageTime, truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
 import { resolveProfile, getProfileByWallet, type BlockStarProfile } from '@/lib/profileResolver';
 import toast from 'react-hot-toast';
@@ -19,6 +19,10 @@ import { isConversationDeleted, removeFromDeletedConversations } from './Sidebar
 
 // Store for decrypted message content (in-memory + localStorage cache)
 const decryptedContentCache = new Map<string, string>();
+
+interface ChatAreaProps {
+  onBackClick?: () => void;
+}
 
 // Load decrypted content cache from localStorage on startup
 const DECRYPTED_CACHE_KEY = 'blockstar_decrypted_cache';
@@ -101,7 +105,7 @@ const renderTextWithLinks = (text: string): React.ReactNode => {
   return result;
 };
 
-export default function ChatArea() {
+export default function ChatArea({ onBackClick }: ChatAreaProps) {
   const {
     currentUser,
     activeConversationId,
@@ -1873,21 +1877,23 @@ export default function ChatArea() {
   }
 
   return (
-    <div className="flex-1 flex flex-col h-screen bg-midnight">
+    <div className="flex-1 flex flex-col h-full md:h-screen bg-midnight">
       {/* Chat Header */}
-      <div className="bg-midnight-light border-b border-midnight p-4">
+      <div className="bg-midnight-light border-b border-midnight p-3 md:p-4 flex-shrink-0">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 md:gap-3 flex-1 min-w-0">
+            {/* Back button - visible on mobile */}
             <button
-              onClick={toggleSidebar}
-              className="md:hidden p-2 hover:bg-dark-200 rounded-lg transition"
+              onClick={onBackClick}
+              className="md:hidden p-2.5 hover:bg-dark-200 rounded-lg transition flex-shrink-0 active:bg-dark-100"
+              aria-label="Back to conversations"
             >
-              <Menu size={20} className="text-secondary" />
+              <ChevronLeft size={22} className="text-secondary" />
             </button>
             
             {/* Clickable Avatar */}
             <div 
-              className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary-500 transition ${
+              className={`w-10 h-10 md:w-10 md:h-10 rounded-full flex items-center justify-center text-white font-semibold overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary-500 transition flex-shrink-0 ${
                 isGroupChat 
                   ? 'bg-gradient-to-br from-purple-500/50 to-pink-500/50'
                   : 'bg-gradient-to-br from-primary-500/50 to-cyan-500/50'
@@ -1924,7 +1930,7 @@ export default function ChatArea() {
             
             {/* Clickable Name */}
             <div 
-              className="cursor-pointer hover:opacity-80 transition"
+              className="cursor-pointer hover:opacity-80 transition min-w-0 flex-1"
               onClick={() => {
                 if (!isGroupChat && otherParticipant) {
                   setShowProfileModal(true);
@@ -1935,58 +1941,55 @@ export default function ChatArea() {
             >
               {isGroupChat ? (
                 <>
-                  <h2 className="font-semibold text-white">{groupConv?.groupName || 'Group Chat'}</h2>
+                  <h2 className="font-semibold text-white text-sm md:text-base truncate">{groupConv?.groupName || 'Group Chat'}</h2>
                   <p className="text-xs text-muted">{activeConversation?.participants.length} members</p>
                 </>
               ) : displayProfile?.username ? (
                 <>
-                  <h2 className="font-semibold text-white">@{displayProfile.username}</h2>
-                  <p className="text-xs text-muted">{truncateAddress(otherParticipant || '')}</p>
+                  <h2 className="font-semibold text-white text-sm md:text-base truncate">@{displayProfile.username}</h2>
+                  <p className="text-xs text-muted truncate hidden md:block">{truncateAddress(otherParticipant || '')}</p>
                 </>
               ) : (
-                <h2 className="font-semibold text-white">
+                <h2 className="font-semibold text-white text-sm md:text-base truncate">
                   {truncateAddress(otherParticipant || '')}
                 </h2>
               )}
-              <div className="flex items-center gap-2 text-sm">
+              <div className="flex items-center gap-1 md:gap-2 text-xs md:text-sm flex-wrap">
                 {!isGroupChat && (
                   <>
-                    <span className={`w-2 h-2 rounded-full ${
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
                       getStatus(otherParticipant || '') === 'online' 
                         ? 'bg-success-500 shadow-glow-green' 
                         : 'bg-muted'
                     }`} />
-                    <span className="text-secondary">
+                    <span className="text-secondary truncate">
                       {getStatus(otherParticipant || '') === 'online' 
                         ? 'Online' 
-                        : getLastSeen(otherParticipant || '') 
-                          ? `Last seen ${formatLastSeen(getLastSeen(otherParticipant || ''))}`
-                          : 'Offline'}
+                        : 'Offline'}
                     </span>
-                    <span className="text-muted">•</span>
+                    <span className="text-muted hidden md:inline">•</span>
                   </>
                 )}
                 {encryptionStatus === 'encrypted' ? (
-                  <span className="text-success-500 text-xs flex items-center gap-1">
+                  <span className="text-success-500 text-xs flex items-center gap-1 flex-shrink-0">
                     <Lock size={10} />
-                    E2E Encrypted
+                    <span className="hidden md:inline">E2E Encrypted</span>
                   </span>
                 ) : encryptionStatus === 'unencrypted' ? (
-                  <span className="text-yellow-500 text-xs flex items-center gap-1" title={isGroupChat ? "Some members haven't set up encryption yet" : "Recipient hasn't set up encryption yet"}>
+                  <span className="text-yellow-500 text-xs flex items-center gap-1 flex-shrink-0" title={isGroupChat ? "Some members haven't set up encryption yet" : "Recipient hasn't set up encryption yet"}>
                     <LockOpen size={10} />
-                    Not Encrypted
+                    <span className="hidden md:inline">Not Encrypted</span>
                   </span>
                 ) : (
-                  <span className="text-muted text-xs flex items-center gap-1">
+                  <span className="text-muted text-xs flex items-center gap-1 flex-shrink-0">
                     <Lock size={10} />
-                    Checking...
                   </span>
                 )}
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5 md:gap-1 flex-shrink-0">
             {/* Add to Contacts Button (only for direct chats if not already a contact) */}
             {!isGroupChat && otherParticipant && !isUserContact && (
               <button
@@ -1999,7 +2002,7 @@ export default function ChatArea() {
                     toast.error('Already in contacts');
                   }
                 }}
-                className="p-2 hover:bg-dark-200 rounded-lg transition text-secondary hover:text-success-400"
+                className="p-2.5 hover:bg-dark-200 rounded-lg transition text-secondary hover:text-success-400 active:bg-dark-100"
                 title="Add to contacts"
               >
                 <UserPlus size={20} />
@@ -2010,7 +2013,7 @@ export default function ChatArea() {
             {isGroupChat && (
               <button
                 onClick={() => setShowGroupSettings(true)}
-                className="p-2 hover:bg-dark-200 rounded-lg transition text-secondary hover:text-white"
+                className="p-2.5 hover:bg-dark-200 rounded-lg transition text-secondary hover:text-white active:bg-dark-100 hidden md:block"
                 title="Group settings"
               >
                 <Settings size={20} />
@@ -2018,14 +2021,14 @@ export default function ChatArea() {
             )}
             <button
               onClick={() => handleStartCall('audio')}
-              className="p-2 hover:bg-dark-200 rounded-lg transition text-secondary hover:text-white"
+              className="p-2.5 hover:bg-dark-200 rounded-lg transition text-secondary hover:text-white active:bg-dark-100"
               title="Voice call"
             >
               <Phone size={20} />
             </button>
             <button
               onClick={() => handleStartCall('video')}
-              className="p-2 hover:bg-dark-200 rounded-lg transition text-secondary hover:text-white"
+              className="p-2.5 hover:bg-dark-200 rounded-lg transition text-secondary hover:text-white active:bg-dark-100 hidden md:block"
               title="Video call"
             >
               <Video size={20} />
@@ -2034,30 +2037,41 @@ export default function ChatArea() {
             <div className="relative" ref={menuRef}>
               <button
                 onClick={() => setShowChatMenu(!showChatMenu)}
-                className="p-2 hover:bg-dark-200 rounded-lg transition text-secondary hover:text-white"
+                className="p-2.5 hover:bg-dark-200 rounded-lg transition text-secondary hover:text-white active:bg-dark-100"
               >
                 <MoreVertical size={20} />
               </button>
               
               {showChatMenu && (
                 <div className="absolute right-0 mt-2 w-56 bg-card border border-midnight rounded-xl shadow-lg py-1 z-50">
+                  {/* Video call option visible in menu on mobile */}
+                  <button
+                    onClick={() => {
+                      handleStartCall('video');
+                      setShowChatMenu(false);
+                    }}
+                    className="w-full px-4 py-3 md:hidden text-left text-sm text-secondary hover:text-white hover:bg-dark-200 flex items-center gap-3 transition active:bg-dark-100"
+                  >
+                    <Video size={16} />
+                    Video Call
+                  </button>
                   <button
                     onClick={handleToggleSearch}
-                    className="w-full px-4 py-2.5 text-left text-sm text-secondary hover:text-white hover:bg-dark-200 flex items-center gap-3 transition"
+                    className="w-full px-4 py-3 text-left text-sm text-secondary hover:text-white hover:bg-dark-200 flex items-center gap-3 transition active:bg-dark-100"
                   >
                     <Search size={16} />
                     {searchMode ? 'Close Search' : 'Search in Chat'}
                   </button>
                   <button
                     onClick={handleToggleMute}
-                    className="w-full px-4 py-2.5 text-left text-sm text-secondary hover:text-white hover:bg-dark-200 flex items-center gap-3 transition"
+                    className="w-full px-4 py-3 text-left text-sm text-secondary hover:text-white hover:bg-dark-200 flex items-center gap-3 transition active:bg-dark-100"
                   >
                     {isMuted ? <Bell size={16} /> : <BellOff size={16} />}
                     {isMuted ? 'Unmute Notifications' : 'Mute Notifications'}
                   </button>
                   <button
                     onClick={handleRetryDecryption}
-                    className="w-full px-4 py-2.5 text-left text-sm text-secondary hover:text-white hover:bg-dark-200 flex items-center gap-3 transition"
+                    className="w-full px-4 py-3 text-left text-sm text-secondary hover:text-white hover:bg-dark-200 flex items-center gap-3 transition active:bg-dark-100"
                   >
                     <RefreshCw size={16} />
                     Retry Decryption
@@ -2065,7 +2079,7 @@ export default function ChatArea() {
                   <div className="border-t border-midnight my-1"></div>
                   <button
                     onClick={handleClearChat}
-                    className="w-full px-4 py-2.5 text-left text-sm text-danger-500 hover:bg-danger-500/10 flex items-center gap-3 transition"
+                    className="w-full px-4 py-3 text-left text-sm text-danger-500 hover:bg-danger-500/10 flex items-center gap-3 transition active:bg-danger-500/20"
                   >
                     <X size={16} />
                     Clear Chat
@@ -2108,25 +2122,29 @@ export default function ChatArea() {
       )}
 
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-midnight">
+      <div className="flex-1 overflow-y-auto p-3 md:p-6 space-y-3 md:space-y-4 bg-midnight">
         {/* Encryption notice */}
-        <div className="flex justify-center mb-4">
+        <div className="flex justify-center mb-2 md:mb-4">
           {encryptionStatus === 'encrypted' ? (
-            <div className="bg-success-500/10 border border-success-500/30 text-success-400 text-xs px-4 py-1.5 rounded-full flex items-center gap-2">
+            <div className="bg-success-500/10 border border-success-500/30 text-success-400 text-xs px-3 md:px-4 py-1.5 rounded-full flex items-center gap-2">
               <Lock size={12} />
-              Messages are end-to-end encrypted
+              <span className="hidden md:inline">Messages are end-to-end encrypted</span>
+              <span className="md:hidden">E2E Encrypted</span>
             </div>
           ) : encryptionStatus === 'unencrypted' ? (
-            <div className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-xs px-4 py-1.5 rounded-full flex items-center gap-2">
+            <div className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-xs px-3 md:px-4 py-1.5 rounded-full flex items-center gap-2">
               <LockOpen size={12} />
-              {isGroupChat 
-                ? 'Group messages are not yet encrypted' 
-                : 'Messages not encrypted - recipient needs to set up encryption'}
+              <span className="hidden md:inline">
+                {isGroupChat 
+                  ? 'Group messages are not yet encrypted' 
+                  : 'Messages not encrypted - recipient needs to set up encryption'}
+              </span>
+              <span className="md:hidden">Not Encrypted</span>
             </div>
           ) : (
-            <div className="bg-dark-200 border border-midnight text-muted text-xs px-4 py-1.5 rounded-full flex items-center gap-2">
+            <div className="bg-dark-200 border border-midnight text-muted text-xs px-3 md:px-4 py-1.5 rounded-full flex items-center gap-2">
               <Lock size={12} />
-              Checking encryption status...
+              <span className="hidden md:inline">Checking encryption status...</span>
             </div>
           )}
         </div>
@@ -2588,7 +2606,7 @@ export default function ChatArea() {
       )}
 
       {/* Message Input */}
-      <div className="bg-midnight-light border-t border-midnight p-4">
+      <div className="bg-midnight-light border-t border-midnight p-3 md:p-4 pb-safe flex-shrink-0">
         <input
           type="file"
           ref={fileInputRef}
@@ -2597,17 +2615,17 @@ export default function ChatArea() {
           accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt"
         />
         
-        <form onSubmit={handleSendMessage} className="flex items-center gap-3">
+        <form onSubmit={handleSendMessage} className="flex items-center gap-2 md:gap-3">
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="p-2.5 hover:bg-dark-200 rounded-xl transition text-secondary hover:text-white"
+            className="p-2.5 hover:bg-dark-200 rounded-xl transition text-secondary hover:text-white active:bg-dark-100 flex-shrink-0"
             title="Attach file"
           >
             <Paperclip size={20} />
           </button>
           
-          <div className="relative">
+          <div className="relative hidden md:block">
             <button
               type="button"
               onClick={() => setShowEmojiPicker(!showEmojiPicker)}
@@ -2627,14 +2645,14 @@ export default function ChatArea() {
           
           {isRecording ? (
             // Recording UI
-            <div className="flex-1 flex items-center gap-3 px-4 py-3 bg-danger-500/20 border border-danger-500/50 rounded-xl">
-              <div className="w-3 h-3 rounded-full bg-danger-500 animate-pulse" />
-              <span className="text-white font-medium">{formatDuration(recordingDuration)}</span>
-              <span className="text-secondary text-sm flex-1">Recording...</span>
+            <div className="flex-1 flex items-center gap-2 md:gap-3 px-3 md:px-4 py-2.5 md:py-3 bg-danger-500/20 border border-danger-500/50 rounded-xl">
+              <div className="w-3 h-3 rounded-full bg-danger-500 animate-pulse flex-shrink-0" />
+              <span className="text-white font-medium text-sm md:text-base">{formatDuration(recordingDuration)}</span>
+              <span className="text-secondary text-xs md:text-sm flex-1 truncate">Recording...</span>
               <button
                 type="button"
                 onClick={handleCancelRecording}
-                className="p-2 hover:bg-danger-500/30 rounded-lg transition text-danger-500"
+                className="p-2 hover:bg-danger-500/30 rounded-lg transition text-danger-500 active:bg-danger-500/40 flex-shrink-0"
                 title="Cancel recording"
               >
                 <X size={18} />
@@ -2648,17 +2666,18 @@ export default function ChatArea() {
               onChange={(e) => setMessageText(e.target.value)}
               placeholder="Type a message..."
               disabled={isSending}
-              className="flex-1 px-4 py-3 bg-card border border-midnight rounded-xl text-white placeholder-muted focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500/50 transition"
+              className="flex-1 min-w-0 px-3 md:px-4 py-2.5 md:py-3 bg-card border border-midnight rounded-xl text-white placeholder-muted focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500/50 transition text-base"
+              style={{ fontSize: '16px' }} // Prevents iOS zoom on focus
             />
           )}
           <button
             type="button"
             onClick={handleVoiceRecordToggle}
             disabled={isSending}
-            className={`p-2.5 rounded-xl transition ${
+            className={`p-2.5 rounded-xl transition flex-shrink-0 ${
               isRecording 
                 ? 'bg-danger-500 text-white hover:bg-danger-600 animate-pulse' 
-                : 'hover:bg-dark-200 text-secondary hover:text-white'
+                : 'hover:bg-dark-200 text-secondary hover:text-white active:bg-dark-100'
             }`}
             title={isRecording ? "Stop recording" : "Voice message"}
           >
@@ -2667,7 +2686,7 @@ export default function ChatArea() {
           <button
             type="submit"
             disabled={(!messageText.trim() && !isRecording) || isSending}
-            className="p-3 bg-gradient-to-r from-primary-500 to-cyan-500 text-white rounded-xl hover:shadow-glow transition disabled:opacity-50 disabled:cursor-not-allowed"
+            className="p-2.5 md:p-3 bg-gradient-to-r from-primary-500 to-cyan-500 text-white rounded-xl hover:shadow-glow transition disabled:opacity-50 disabled:cursor-not-allowed active:opacity-80 flex-shrink-0"
           >
             <Send size={20} />
           </button>
