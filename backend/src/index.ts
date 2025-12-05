@@ -74,12 +74,12 @@ app.use('/uploads', (req, res, next) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Range, Accept-Ranges, Content-Range');
   res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
-  
+
   // Handle preflight requests
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
-  
+
   // Set appropriate content types for audio files
   const ext = path.extname(req.path).toLowerCase();
   if (ext === '.webm') {
@@ -93,10 +93,10 @@ app.use('/uploads', (req, res, next) => {
   } else if (ext === '.wav') {
     res.setHeader('Content-Type', 'audio/wav');
   }
-  
+
   // Enable range requests for audio/video seeking
   res.setHeader('Accept-Ranges', 'bytes');
-  
+
   next();
 }, express.static(uploadsDir));
 
@@ -161,38 +161,180 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// Debug endpoint to check active connections (for troubleshooting)
-app.get('/api/debug/connections', (req, res) => {
-  const connections = [...activeConnections.keys()].map(addr => ({
-    address: addr,
-    status: userStatuses.get(addr) || 'unknown',
-    hasSocketId: !!activeConnections.get(addr),
-    lastSeen: lastSeenTimes.get(addr) || null,
-  }));
-  
-  res.json({
-    totalConnections: activeConnections.size,
-    connections,
-    timestamp: Date.now(),
-  });
+app.post('/api/push-token', async (req, res) => {
+  const { token, walletAddress, platform } = req.body;
+
+  if (!token || !walletAddress || !platform) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'token, walletAddress, and platform are required' 
+    });
+  }
+
+  if (!['ios', 'android'].includes(platform)) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'platform must be ios or android' 
+    });
+  }
+
+  try {
+    // Store token in database
+    await db.savePushToken({
+      wallet_address: walletAddress.toLowerCase(),
+      push_token: token,
+      platform, // 'ios' or 'android'
+      updated_at: new Date(),
+    });
+
+    console.log(`📱 Push token registered for ${walletAddress} (${platform})`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error saving push token:', error);
+    res.status(500).json({ success: false, error: 'Failed to save push token' });
+  }
 });
 
-// Check if a specific user is connected
-app.get('/api/debug/connections/:walletAddress', (req, res) => {
-  const address = req.params.walletAddress.toLowerCase();
-  const socketId = activeConnections.get(address);
-  const status = userStatuses.get(address);
-  const lastSeen = lastSeenTimes.get(address);
-  
-  res.json({
-    address,
-    isConnected: !!socketId,
-    socketId: socketId ? socketId.substring(0, 8) + '...' : null,
-    status: status || 'offline',
-    lastSeen,
-    timestamp: Date.now(),
-  });
+// Delete push token (for logout)
+app.delete('/api/push-token', async (req, res) => {
+  const { token, walletAddress } = req.body;
+
+  if (!token || !walletAddress) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'token and walletAddress are required' 
+    });
+  }
+
+  try {
+    await db.deletePushToken(walletAddress.toLowerCase(), token);
+    console.log(`📱 Push token removed for ${walletAddress}`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting push token:', error);
+    res.status(500).json({ success: false, error: 'Failed to delete push token' });
+  }
 });
+
+// Send push notification when message is sent
+async function sendPushNotification(
+  recipientWallet: string, 
+  title: string, 
+  body: string, 
+  data: Record<string, any>
+): Promise<void> {
+  try {
+    const tokens = await db.getPushTokens(recipientWallet);
+
+    if (tokens.length === 0) {
+      console.log(`📱 No push tokens for ${recipientWallet}`);
+      return;
+    }
+
+    for (const { push_token, platform } of tokens) {
+      try {
+        if (platform === 'ios') {
+          // Send via APNs
+          await sendAPNsPush(push_token, { title, body, data });
+        } else if (platform === 'android') {
+          // Send via FCM
+          await sendFCMPush(push_token, { title, body, data });
+        }
+      } catch (err) {
+        console.error(`Failed to send push to ${platform}:`, err);
+      }
+    }
+  } catch (error) {
+    console.error('Error sending push notification:', error);
+  }
+}
+
+// APNs push notification (placeholder - requires Apple Push Notification service setup)
+async function sendAPNsPush(
+  token: string, 
+  payload: { title: string; body: string; data: Record<string, any> }
+): Promise<void> {
+  // TODO: Implement APNs push notification
+  // This requires:
+  // 1. APNs certificate or key from Apple Developer account
+  // 2. Use a library like 'apn' or '@parse/node-apn'
+  
+  console.log(`📱 [APNs] Would send push to iOS device: ${token.substring(0, 20)}...`);
+  console.log(`   Title: ${payload.title}`);
+  console.log(`   Body: ${payload.body}`);
+  
+  // Example implementation with node-apn:
+  /*
+  const apn = require('apn');
+  const options = {
+    token: {
+      key: process.env.APNS_KEY_PATH,
+      keyId: process.env.APNS_KEY_ID,
+      teamId: process.env.APNS_TEAM_ID,
+    },
+    production: process.env.NODE_ENV === 'production',
+  };
+  
+  const apnProvider = new apn.Provider(options);
+  const notification = new apn.Notification();
+  notification.expiry = Math.floor(Date.now() / 1000) + 3600;
+  notification.badge = 1;
+  notification.sound = 'default';
+  notification.alert = { title: payload.title, body: payload.body };
+  notification.payload = payload.data;
+  notification.topic = 'com.blockstar.cypher';
+  
+  await apnProvider.send(notification, token);
+  */
+}
+
+// FCM push notification (placeholder - requires Firebase setup)
+async function sendFCMPush(
+  token: string, 
+  payload: { title: string; body: string; data: Record<string, any> }
+): Promise<void> {
+  // TODO: Implement FCM push notification
+  // This requires:
+  // 1. Firebase service account credentials
+  // 2. Use 'firebase-admin' SDK
+  
+  console.log(`📱 [FCM] Would send push to Android device: ${token.substring(0, 20)}...`);
+  console.log(`   Title: ${payload.title}`);
+  console.log(`   Body: ${payload.body}`);
+  
+  // Example implementation with firebase-admin:
+  /*
+  const admin = require('firebase-admin');
+  
+  if (!admin.apps.length) {
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+      }),
+    });
+  }
+  
+  const message = {
+    token: token,
+    notification: {
+      title: payload.title,
+      body: payload.body,
+    },
+    data: payload.data,
+    android: {
+      priority: 'high',
+      notification: {
+        sound: 'default',
+        channelId: 'messages',
+      },
+    },
+  };
+  
+  await admin.messaging().send(message);
+  */
+}
 
 // Register or update user's public key
 app.post('/api/keys/register', async (req, res) => {
@@ -200,15 +342,15 @@ app.post('/api/keys/register', async (req, res) => {
     const { walletAddress, publicKey, username } = req.body;
 
     if (!walletAddress || !publicKey) {
-      return res.status(400).json({ 
-        error: 'walletAddress and publicKey are required' 
+      return res.status(400).json({
+        error: 'walletAddress and publicKey are required'
       });
     }
 
     // Validate wallet address format
     if (!/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
-      return res.status(400).json({ 
-        error: 'Invalid wallet address format' 
+      return res.status(400).json({
+        error: 'Invalid wallet address format'
       });
     }
 
@@ -217,8 +359,8 @@ app.post('/api/keys/register', async (req, res) => {
 
     console.log(`✅ Key registered for ${walletAddress} (DB ID: ${user._id})`);
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: 'Public key registered successfully',
       registeredAt: user.created_at,
     });
@@ -235,10 +377,10 @@ app.get('/api/keys/:walletAddress', async (req, res) => {
     const user = await db.getUserByWallet(walletAddress);
 
     if (!user) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
         error: 'User not found',
-        walletAddress 
+        walletAddress
       });
     }
 
@@ -337,20 +479,20 @@ app.get('/api/users/:walletAddress/status', (req, res) => {
 app.get('/api/profile/resolve/:username', async (req, res) => {
   try {
     const { username } = req.params;
-    
+
     console.log(`🔍 [Resolve] Request for username: "${username}"`);
-    
+
     if (!username || username.trim().length === 0) {
       console.log(`❌ [Resolve] Invalid/empty username`);
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Invalid username',
         username,
       });
     }
-    
+
     const nftUsername = profileResolver.extractNftUsername(username);
     console.log(`🔍 [Resolve] Extracted NFT username: "${nftUsername}"`);
-    
+
     let profile = null;
     try {
       profile = await profileResolver.resolveProfile(nftUsername);
@@ -359,16 +501,16 @@ app.get('/api/profile/resolve/:username', async (req, res) => {
       console.error('❌ [Resolve] Profile resolution error:', resolveError?.message || resolveError);
       // Don't throw 500, just return not found
     }
-    
+
     if (!profile) {
       console.log(`❌ [Resolve] Returning 404 for "${username}"`);
-      return res.status(404).json({ 
+      return res.status(404).json({
         error: 'Profile not found',
         username,
         resolverUrl: profileResolver.getResolverUrl(nftUsername),
       });
     }
-    
+
     console.log(`✅ [Resolve] Success for "${username}" -> ${profile.walletAddress}`);
     res.json({
       success: true,
@@ -377,7 +519,7 @@ app.get('/api/profile/resolve/:username', async (req, res) => {
     });
   } catch (error: any) {
     console.error('❌ [Resolve] Outer error:', error?.message || error);
-    res.status(404).json({ 
+    res.status(404).json({
       error: 'Profile not found',
       username: req.params.username,
     });
@@ -388,14 +530,14 @@ app.get('/api/profile/resolve/:username', async (req, res) => {
 app.post('/api/profile/resolve/batch', async (req, res) => {
   try {
     const { usernames } = req.body;
-    
+
     if (!Array.isArray(usernames)) {
       return res.status(400).json({ error: 'usernames must be an array' });
     }
-    
+
     const nftUsernames = usernames.map(u => profileResolver.extractNftUsername(u));
     const profiles = await profileResolver.resolveProfiles(nftUsernames);
-    
+
     const results: Record<string, any> = {};
     profiles.forEach((profile, username) => {
       results[username] = {
@@ -403,10 +545,85 @@ app.post('/api/profile/resolve/batch', async (req, res) => {
         resolverUrl: profileResolver.getResolverUrl(username),
       };
     });
-    
+
     res.json(results);
   } catch (error) {
     console.error('Error resolving profiles:', error);
+    res.status(500).json({ error: 'Failed to resolve profiles' });
+  }
+});
+
+// Batch resolve profiles by wallet addresses
+app.post('/api/profile/resolve/wallets', async (req, res) => {
+  try {
+    const { walletAddresses } = req.body;
+
+    if (!Array.isArray(walletAddresses)) {
+      return res.status(400).json({ error: 'walletAddresses must be an array' });
+    }
+
+    // Get users from database to find their usernames
+    const users = await db.getUsersByWallets(walletAddresses);
+    
+    console.log(`📋 Resolving profiles for ${walletAddresses.length} wallets, found ${users.length} users in DB`);
+    
+    const results: Record<string, any> = {};
+    
+    // For users with usernames, resolve their full profiles
+    const usernamesMap = new Map<string, string>(); // username -> wallet
+    for (const user of users) {
+      if (user.username) {
+        usernamesMap.set(user.username, user.wallet_address);
+      }
+    }
+    
+    // Resolve profiles for users with usernames
+    if (usernamesMap.size > 0) {
+      const usernames = Array.from(usernamesMap.keys());
+      const nftUsernames = usernames.map(u => profileResolver.extractNftUsername(u));
+      const profiles = await profileResolver.resolveProfiles(nftUsernames);
+      
+      profiles.forEach((profile, username) => {
+        const wallet = usernamesMap.get(username) || usernamesMap.get(username.toLowerCase());
+        if (wallet) {
+          results[wallet.toLowerCase()] = {
+            profile,
+            resolverUrl: profileResolver.getResolverUrl(username),
+          };
+        }
+      });
+    }
+    
+    // For wallets without profiles, return basic info from DB
+    for (const user of users) {
+      const wallet = user.wallet_address.toLowerCase();
+      if (!results[wallet] && user.username) {
+        results[wallet] = {
+          profile: {
+            username: user.username,
+            fullUsername: user.username.includes('@') ? user.username : `${user.username}@blockstar`,
+            walletAddress: user.wallet_address,
+            avatar: null,
+            records: {},
+            subdomains: [],
+            isSubdomain: false,
+            mainDomain: user.username,
+            subDomain: '',
+            resolvedAt: Date.now(),
+          },
+          resolverUrl: profileResolver.getResolverUrl(user.username),
+        };
+      }
+    }
+    
+    console.log(`📋 Resolved ${Object.keys(results).length} profiles`);
+
+    res.json({ 
+      success: true,
+      profiles: results 
+    });
+  } catch (error) {
+    console.error('Error resolving profiles by wallets:', error);
     res.status(500).json({ error: 'Failed to resolve profiles' });
   }
 });
@@ -415,7 +632,7 @@ app.post('/api/profile/resolve/batch', async (req, res) => {
 app.get('/api/profile/resolver-url/:username', (req, res) => {
   const { username } = req.params;
   const nftUsername = profileResolver.extractNftUsername(username);
-  
+
   res.json({
     username,
     nftUsername,
@@ -430,19 +647,19 @@ app.get('/api/profile/debug/:username', async (req, res) => {
   console.log('========================================');
   console.log(`🔬 DEBUG: Resolving profile for "${username}"`);
   console.log('Contract info:', profileResolver.getContractInfo());
-  
+
   const startTime = Date.now();
-  
+
   try {
     // Clear cache first to force fresh lookup
     profileResolver.clearProfileCache(username);
-    
+
     const profile = await profileResolver.resolveProfile(username);
     const duration = Date.now() - startTime;
-    
+
     console.log(`🔬 DEBUG: Resolution took ${duration}ms`);
     console.log(`🔬 DEBUG: Profile result:`, profile ? 'Found' : 'Not found');
-    
+
     res.json({
       success: !!profile,
       username,
@@ -453,7 +670,7 @@ app.get('/api/profile/debug/:username', async (req, res) => {
   } catch (error: any) {
     const duration = Date.now() - startTime;
     console.error(`🔬 DEBUG: Error after ${duration}ms:`, error);
-    
+
     res.status(500).json({
       success: false,
       username,
@@ -468,7 +685,7 @@ app.get('/api/profile/debug/:username', async (req, res) => {
 app.post('/api/profile/cache/clear', (req, res) => {
   const { username } = req.body;
   profileResolver.clearProfileCache(username);
-  
+
   res.json({
     success: true,
     message: username ? `Cache cleared for ${username}` : 'All profile cache cleared',
@@ -480,10 +697,10 @@ app.get('/api/profile/:walletAddress', async (req, res) => {
   try {
     const { walletAddress } = req.params;
     const address = walletAddress.toLowerCase();
-    
+
     // Get user from database
     const user = await db.getUser(address);
-    
+
     if (user && user.username) {
       res.json({
         success: true,
@@ -515,9 +732,21 @@ app.get('/api/conversations/:walletAddress', async (req, res) => {
   try {
     const { walletAddress } = req.params;
     const address = walletAddress.toLowerCase();
-    
+
     const conversations = await db.getUserConversations(address);
-    
+
+    // Log all conversations to debug
+    const groups = conversations.filter(c => c.type === 'group');
+    const directs = conversations.filter(c => c.type === 'direct');
+    console.log(`📋 Returning ${conversations.length} total conversations for ${address}:`);
+    console.log(`   - ${groups.length} groups, ${directs.length} direct chats`);
+    groups.forEach((g: any) => {
+      console.log(`   [GROUP] ${g.name || g.group_id}: created_by=${g.created_by}, admins=${JSON.stringify(g.admins)}`);
+    });
+    directs.forEach((d: any) => {
+      console.log(`   [DIRECT] ${d._id}: participants=${JSON.stringify(d.participants)}`);
+    });
+
     // Deduplicate groups by participants (in case of old data without group_id)
     const seenGroupParticipants = new Set<string>();
     const deduplicatedConversations = conversations.filter(conv => {
@@ -531,18 +760,18 @@ app.get('/api/conversations/:walletAddress', async (req, res) => {
       }
       return true;
     });
-    
+
     // Enrich conversations with last message
     const enrichedConversations = await Promise.all(
       deduplicatedConversations.map(async (conv) => {
         // Cast to any to access group-specific fields
         const convAny = conv as any;
-        
+
         // For groups, use group_id for messages; for direct, use _id
         const conversationId = convAny.group_id || conv._id!.toString();
         const messages = await db.getMessages(conversationId, 1);
         const lastMessage = messages.length > 0 ? messages[0] : null;
-        
+
         // Process lastMessage content for encrypted group messages
         let lastMessageContent = lastMessage?.content;
         if (lastMessage && lastMessageContent === '__ENCRYPTED_GROUP__') {
@@ -553,7 +782,7 @@ app.get('/api/conversations/:walletAddress', async (req, res) => {
             lastMessageContent = '__ENCRYPTED_GROUP__';
           }
         }
-        
+
         return {
           id: conversationId,  // Use group_id if available
           type: conv.type,
@@ -577,7 +806,7 @@ app.get('/api/conversations/:walletAddress', async (req, res) => {
         };
       })
     );
-    
+
     res.json({
       success: true,
       conversations: enrichedConversations,
@@ -594,14 +823,14 @@ app.get('/api/conversations/:conversationId/messages', async (req, res) => {
     const { conversationId } = req.params;
     const { limit = '50', before, walletAddress } = req.query;
     const userAddress = walletAddress ? (walletAddress as string).toLowerCase() : null;
-    
+
     const beforeDate = before ? new Date(parseInt(before as string)) : undefined;
     const messages = await db.getMessages(conversationId, parseInt(limit as string), beforeDate);
-    
+
     const formattedMessages = messages.map(msg => {
       const msgAny = msg as any;
       let content = msg.content;
-      
+
       // For encrypted group messages, get the user's specific encrypted content
       if (content === '__ENCRYPTED_GROUP__' && msgAny.encrypted_payloads && userAddress) {
         // Look up this user's encrypted payload
@@ -613,7 +842,7 @@ app.get('/api/conversations/:conversationId/messages', async (req, res) => {
           console.log(`⚠️ No encrypted payload for ${userAddress} in message ${msg.client_id}`);
         }
       }
-      
+
       return {
         id: msg.client_id || msg._id!.toString(),  // Use client_id for frontend consistency
         conversationId: msg.conversation_id,
@@ -626,7 +855,7 @@ app.get('/api/conversations/:conversationId/messages', async (req, res) => {
         timestamp: msg.created_at.getTime(),
       };
     });
-    
+
     res.json({
       success: true,
       messages: formattedMessages,
@@ -641,14 +870,14 @@ app.get('/api/conversations/:conversationId/messages', async (req, res) => {
 app.post('/api/conversations/direct', async (req, res) => {
   try {
     const { user1, user2 } = req.body;
-    
+
     if (!user1 || !user2) {
       return res.status(400).json({ error: 'Both user1 and user2 are required' });
     }
-    
+
     const conversationId = await db.getOrCreateDirectConversation(user1, user2);
     const conversation = await db.getConversationById(conversationId);
-    
+
     res.json({
       success: true,
       conversation: {
@@ -670,13 +899,13 @@ app.post('/api/conversations/:conversationId/read', async (req, res) => {
   try {
     const { conversationId } = req.params;
     const { walletAddress } = req.body;
-    
+
     if (!walletAddress) {
       return res.status(400).json({ error: 'walletAddress is required' });
     }
-    
+
     await db.markMessagesRead(conversationId, walletAddress);
-    
+
     res.json({ success: true });
   } catch (error) {
     console.error('Error marking messages as read:', error);
@@ -688,13 +917,13 @@ app.post('/api/conversations/:conversationId/read', async (req, res) => {
 app.post('/api/conversations/cleanup-duplicates', async (req, res) => {
   try {
     const { walletAddress } = req.body;
-    
+
     if (!walletAddress) {
       return res.status(400).json({ error: 'walletAddress is required' });
     }
-    
+
     const result = await db.cleanupDuplicateGroups(walletAddress.toLowerCase());
-    
+
     console.log(`🧹 Cleaned up ${result.removed} duplicate groups for ${walletAddress}`);
     res.json({ success: true, removed: result.removed, kept: result.kept });
   } catch (error) {
@@ -707,15 +936,15 @@ app.post('/api/conversations/cleanup-duplicates', async (req, res) => {
 app.get('/api/conversations/:conversationId', async (req, res) => {
   try {
     const { conversationId } = req.params;
-    
+
     const conversation = await db.getConversationById(conversationId);
-    
+
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
-    
+
     const convAny = conversation as any;
-    
+
     res.json({
       success: true,
       conversation: {
@@ -742,13 +971,13 @@ app.get('/api/conversations/:conversationId', async (req, res) => {
 app.delete('/api/conversations/:conversationId', async (req, res) => {
   try {
     const { conversationId } = req.params;
-    
+
     // Delete all messages in the conversation
     await db.deleteConversationMessages(conversationId);
-    
+
     // Delete the conversation
     await db.deleteConversation(conversationId);
-    
+
     res.json({ success: true, message: 'Conversation deleted' });
   } catch (error) {
     console.error('Error deleting conversation:', error);
@@ -761,14 +990,14 @@ app.post('/api/conversations/:conversationId/hide', async (req, res) => {
   try {
     const { conversationId } = req.params;
     const { walletAddress } = req.body;
-    
+
     if (!walletAddress) {
       return res.status(400).json({ error: 'walletAddress is required' });
     }
-    
+
     // Add to hidden conversations for this user
     await db.hideConversationForUser(conversationId, walletAddress.toLowerCase());
-    
+
     console.log(`🗑️ Hid conversation ${conversationId} for user ${walletAddress}`);
     res.json({ success: true, message: 'Conversation hidden' });
   } catch (error) {
@@ -777,13 +1006,74 @@ app.post('/api/conversations/:conversationId/hide', async (req, res) => {
   }
 });
 
+// Unhide conversation for a specific user (restore hidden conversation)
+app.post('/api/conversations/:conversationId/unhide', async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const { walletAddress } = req.body;
+
+    if (!walletAddress) {
+      return res.status(400).json({ error: 'walletAddress is required' });
+    }
+
+    const normalizedAddress = walletAddress.toLowerCase();
+    
+    // Remove from hidden_for array
+    await db.unhideConversationForUser(conversationId, normalizedAddress);
+
+    console.log(`✅ Unhid conversation ${conversationId} for user ${walletAddress}`);
+    res.json({ success: true, message: 'Conversation restored' });
+  } catch (error) {
+    console.error('Error unhiding conversation:', error);
+    res.status(500).json({ error: 'Failed to unhide conversation' });
+  }
+});
+
+// Debug: Get ALL conversations for a user including hidden ones
+app.get('/api/conversations/:walletAddress/all', async (req, res) => {
+  try {
+    const { walletAddress } = req.params;
+    const address = walletAddress.toLowerCase();
+
+    const allConversations = await db.getAllUserConversations(address);
+    
+    const groups = allConversations.filter(c => c.type === 'group');
+    const directs = allConversations.filter(c => c.type === 'direct');
+    const hidden = allConversations.filter(c => (c as any).hidden_for?.includes(address));
+    
+    console.log(`📋 [DEBUG] ALL conversations for ${address}:`);
+    console.log(`   - ${groups.length} groups, ${directs.length} direct chats`);
+    console.log(`   - ${hidden.length} hidden`);
+
+    res.json({
+      success: true,
+      total: allConversations.length,
+      groups: groups.length,
+      directs: directs.length,
+      hidden: hidden.length,
+      conversations: allConversations.map(c => ({
+        id: (c as any).group_id || c._id?.toString(),
+        type: c.type,
+        name: c.name,
+        participants: c.participants,
+        hidden: (c as any).hidden_for?.includes(address) || false,
+        created_at: c.created_at,
+        updated_at: c.updated_at,
+      })),
+    });
+  } catch (error) {
+    console.error('Error fetching all conversations:', error);
+    res.status(500).json({ error: 'Failed to fetch conversations' });
+  }
+});
+
 // Delete a single message (soft delete)
 app.delete('/api/messages/:messageId', async (req, res) => {
   try {
     const { messageId } = req.params;
-    
+
     const deleted = await db.softDeleteMessage(messageId);
-    
+
     if (deleted) {
       res.json({ success: true, message: 'Message deleted' });
     } else {
@@ -804,16 +1094,29 @@ app.post('/api/groups/:groupId/members', async (req, res) => {
   try {
     const { groupId } = req.params;
     const { memberAddress, adminAddress } = req.body;
-    
+
+    console.log('📝 Add member request:', { groupId, memberAddress, adminAddress });
+
     if (!memberAddress || !adminAddress) {
       return res.status(400).json({ error: 'memberAddress and adminAddress are required' });
     }
-    
+
+    // Debug: Check group data before operation
+    const group = await db.getGroup(groupId);
+    console.log('📝 Group data:', group ? {
+      _id: group._id?.toString(),
+      group_id: group.group_id,
+      created_by: group.created_by,
+      admins: group.admins,
+      participantCount: group.participants?.length
+    } : 'NOT FOUND');
+
     const success = await db.addGroupMember(groupId, memberAddress, adminAddress);
-    
+
     if (success) {
       res.json({ success: true, message: 'Member added successfully' });
     } else {
+      console.error('❌ Add member failed - not authorized or group not found');
       res.status(403).json({ success: false, error: 'Not authorized or group not found' });
     }
   } catch (error) {
@@ -827,16 +1130,29 @@ app.delete('/api/groups/:groupId/members/:memberAddress', async (req, res) => {
   try {
     const { groupId, memberAddress } = req.params;
     const { adminAddress } = req.body;
-    
+
+    console.log('📝 Remove member request:', { groupId, memberAddress, adminAddress });
+
     if (!adminAddress) {
       return res.status(400).json({ error: 'adminAddress is required' });
     }
-    
+
+    // Debug: Check group data before operation
+    const group = await db.getGroup(groupId);
+    console.log('📝 Group data:', group ? {
+      _id: group._id?.toString(),
+      group_id: group.group_id,
+      created_by: group.created_by,
+      admins: group.admins,
+      participantCount: group.participants?.length
+    } : 'NOT FOUND');
+
     const success = await db.removeGroupMember(groupId, memberAddress, adminAddress);
-    
+
     if (success) {
       res.json({ success: true, message: 'Member removed successfully' });
     } else {
+      console.error('❌ Remove member failed - not authorized or cannot remove this member');
       res.status(403).json({ success: false, error: 'Not authorized or cannot remove this member' });
     }
   } catch (error) {
@@ -850,16 +1166,29 @@ app.post('/api/groups/:groupId/admins', async (req, res) => {
   try {
     const { groupId } = req.params;
     const { memberAddress, adminAddress } = req.body;
-    
+
+    console.log('📝 Add admin request:', { groupId, memberAddress, adminAddress });
+
     if (!memberAddress || !adminAddress) {
       return res.status(400).json({ error: 'memberAddress and adminAddress are required' });
     }
-    
+
+    // Debug: Check group data before operation
+    const group = await db.getGroup(groupId);
+    console.log('📝 Group data:', group ? {
+      _id: group._id?.toString(),
+      group_id: group.group_id,
+      created_by: group.created_by,
+      admins: group.admins,
+      participantCount: group.participants?.length
+    } : 'NOT FOUND');
+
     const success = await db.addGroupAdmin(groupId, memberAddress, adminAddress);
-    
+
     if (success) {
       res.json({ success: true, message: 'Admin added successfully' });
     } else {
+      console.error('❌ Add admin failed - not authorized or member not in group');
       res.status(403).json({ success: false, error: 'Not authorized or member not in group' });
     }
   } catch (error) {
@@ -873,16 +1202,29 @@ app.delete('/api/groups/:groupId/admins', async (req, res) => {
   try {
     const { groupId } = req.params;
     const { memberAddress, adminAddress } = req.body;
-    
+
+    console.log('📝 Remove admin request:', { groupId, memberAddress, adminAddress });
+
     if (!memberAddress || !adminAddress) {
       return res.status(400).json({ error: 'memberAddress and adminAddress are required' });
     }
-    
+
+    // Debug: Check group data before operation
+    const group = await db.getGroup(groupId);
+    console.log('📝 Group data:', group ? {
+      _id: group._id?.toString(),
+      group_id: group.group_id,
+      created_by: group.created_by,
+      admins: group.admins,
+      participantCount: group.participants?.length
+    } : 'NOT FOUND');
+
     const success = await db.removeGroupAdmin(groupId, memberAddress, adminAddress);
-    
+
     if (success) {
       res.json({ success: true, message: 'Admin removed successfully' });
     } else {
+      console.error('❌ Remove admin failed - not authorized or cannot remove creator admin');
       res.status(403).json({ success: false, error: 'Not authorized or cannot remove creator admin' });
     }
   } catch (error) {
@@ -895,13 +1237,74 @@ app.delete('/api/groups/:groupId/admins', async (req, res) => {
 app.get('/api/groups/:groupId/members', async (req, res) => {
   try {
     const { groupId } = req.params;
-    
+
     const members = await db.getGroupMembers(groupId);
-    
+
     res.json({ success: true, members });
   } catch (error) {
     console.error('Error getting group members:', error);
     res.status(500).json({ error: 'Failed to get members' });
+  }
+});
+
+// Debug endpoint - get full group data
+app.get('/api/groups/:groupId/debug', async (req, res) => {
+  try {
+    const { groupId } = req.params;
+
+    const group = await db.getGroup(groupId);
+    
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found', groupId });
+    }
+    
+    res.json({ 
+      success: true, 
+      group: {
+        _id: group._id?.toString(),
+        group_id: group.group_id,
+        name: group.name,
+        created_by: group.created_by,
+        admins: group.admins,
+        participants: group.participants,
+        type: group.type,
+      }
+    });
+  } catch (error) {
+    console.error('Error getting group debug info:', error);
+    res.status(500).json({ error: 'Failed to get group' });
+  }
+});
+
+// Fix a group that's missing created_by/admins
+app.post('/api/groups/:groupId/fix', async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const { walletAddress } = req.body;
+    
+    if (!walletAddress) {
+      return res.status(400).json({ error: 'walletAddress is required' });
+    }
+    
+    const result = await db.fixGroup(groupId, walletAddress);
+    
+    if (!result.success) {
+      return res.status(404).json({ error: 'Group not found or user is not a participant' });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: 'Group fixed',
+      updated: result.updated,
+      group: {
+        group_id: result.group?.group_id,
+        created_by: result.group?.created_by,
+        admins: result.group?.admins,
+      }
+    });
+  } catch (error) {
+    console.error('Error fixing group:', error);
+    res.status(500).json({ error: 'Failed to fix group' });
   }
 });
 
@@ -910,27 +1313,27 @@ app.put('/api/groups/:groupId/avatar', async (req, res) => {
   try {
     const { groupId } = req.params;
     const { avatarUrl, adminAddress } = req.body;
-    
+
     if (!avatarUrl || !adminAddress) {
       return res.status(400).json({ error: 'avatarUrl and adminAddress are required' });
     }
-    
+
     // Verify admin status
     const group = await db.getGroup(groupId);
     if (!group) {
       return res.status(404).json({ error: 'Group not found' });
     }
-    
+
     const isAdmin = group.admins?.includes(adminAddress.toLowerCase()) ||
-                    group.created_by?.toLowerCase() === adminAddress.toLowerCase();
-    
+      group.created_by?.toLowerCase() === adminAddress.toLowerCase();
+
     if (!isAdmin) {
       return res.status(403).json({ error: 'Only admins can update group avatar' });
     }
-    
+
     // Update the group avatar
     await db.updateGroupAvatar(groupId, avatarUrl);
-    
+
     res.json({ success: true, avatarUrl });
   } catch (error) {
     console.error('Error updating group avatar:', error);
@@ -947,9 +1350,9 @@ app.get('/api/contacts/:walletAddress', async (req, res) => {
   try {
     const { walletAddress } = req.params;
     const normalizedAddress = walletAddress.toLowerCase();
-    
+
     const contacts = await db.getContacts(normalizedAddress);
-    
+
     res.json({ success: true, contacts });
   } catch (error) {
     console.error('Error getting contacts:', error);
@@ -961,17 +1364,17 @@ app.get('/api/contacts/:walletAddress', async (req, res) => {
 app.post('/api/contacts', async (req, res) => {
   try {
     const { ownerWallet, contactWallet, nickname } = req.body;
-    
+
     if (!ownerWallet || !contactWallet) {
       return res.status(400).json({ error: 'ownerWallet and contactWallet are required' });
     }
-    
+
     const contact = await db.addContact(ownerWallet, contactWallet, nickname);
-    
+
     if (!contact) {
       return res.status(409).json({ error: 'Contact already exists or invalid' });
     }
-    
+
     res.json({ success: true, contact });
   } catch (error) {
     console.error('Error adding contact:', error);
@@ -984,17 +1387,17 @@ app.put('/api/contacts/:ownerWallet/:contactWallet', async (req, res) => {
   try {
     const { ownerWallet, contactWallet } = req.params;
     const { nickname, isFavorite } = req.body;
-    
+
     const updates: { nickname?: string; is_favorite?: boolean } = {};
     if (nickname !== undefined) updates.nickname = nickname;
     if (isFavorite !== undefined) updates.is_favorite = isFavorite;
-    
+
     const success = await db.updateContact(ownerWallet, contactWallet, updates);
-    
+
     if (!success) {
       return res.status(404).json({ error: 'Contact not found' });
     }
-    
+
     res.json({ success: true });
   } catch (error) {
     console.error('Error updating contact:', error);
@@ -1006,13 +1409,13 @@ app.put('/api/contacts/:ownerWallet/:contactWallet', async (req, res) => {
 app.delete('/api/contacts/:ownerWallet/:contactWallet', async (req, res) => {
   try {
     const { ownerWallet, contactWallet } = req.params;
-    
+
     const success = await db.removeContact(ownerWallet, contactWallet);
-    
+
     if (!success) {
       return res.status(404).json({ error: 'Contact not found' });
     }
-    
+
     res.json({ success: true });
   } catch (error) {
     console.error('Error removing contact:', error);
@@ -1024,9 +1427,9 @@ app.delete('/api/contacts/:ownerWallet/:contactWallet', async (req, res) => {
 app.get('/api/contacts/:ownerWallet/:contactWallet/exists', async (req, res) => {
   try {
     const { ownerWallet, contactWallet } = req.params;
-    
+
     const exists = await db.isContactExists(ownerWallet, contactWallet);
-    
+
     res.json({ success: true, exists });
   } catch (error) {
     console.error('Error checking contact:', error);
@@ -1034,100 +1437,17 @@ app.get('/api/contacts/:ownerWallet/:contactWallet/exists', async (req, res) => 
   }
 });
 
-// ============================================
-// PUSH TOKEN ENDPOINTS
-// ============================================
-
-// Register push token for native app notifications
-app.post('/api/push-token', async (req, res) => {
-  try {
-    const { token, walletAddress, platform, deviceId } = req.body;
-    
-    if (!token || !walletAddress || !platform) {
-      return res.status(400).json({ 
-        error: 'token, walletAddress, and platform are required' 
-      });
-    }
-    
-    if (!['ios', 'android', 'web'].includes(platform)) {
-      return res.status(400).json({ 
-        error: 'platform must be ios, android, or web' 
-      });
-    }
-    
-    const success = await db.savePushToken({
-      wallet_address: walletAddress,
-      push_token: token,
-      platform,
-      device_id: deviceId,
-      created_at: new Date(),  // ADD THIS
-      updated_at: new Date(),  // already added
-    });
-    
-    if (success) {
-      console.log(`📱 Push token registered for ${walletAddress} (${platform})`);
-      res.json({ success: true });
-    } else {
-      res.status(500).json({ error: 'Failed to save push token' });
-    }
-  } catch (error) {
-    console.error('Error registering push token:', error);
-    res.status(500).json({ error: 'Failed to register push token' });
-  }
-});
-
-// Remove push token (on logout)
-app.delete('/api/push-token', async (req, res) => {
-  try {
-    const { token, walletAddress } = req.body;
-    
-    if (!token || !walletAddress) {
-      return res.status(400).json({ 
-        error: 'token and walletAddress are required' 
-      });
-    }
-    
-    const success = await db.deletePushToken(walletAddress, token);
-    
-    res.json({ success });
-  } catch (error) {
-    console.error('Error removing push token:', error);
-    res.status(500).json({ error: 'Failed to remove push token' });
-  }
-});
-
-// Get push tokens for a wallet (admin/debug)
-app.get('/api/push-tokens/:walletAddress', async (req, res) => {
-  try {
-    const { walletAddress } = req.params;
-    const tokens = await db.getPushTokens(walletAddress);
-    
-    res.json({ 
-      success: true, 
-      tokens: tokens.map(t => ({
-        platform: t.platform,
-        deviceId: t.device_id,
-        createdAt: t.created_at,
-        updatedAt: t.updated_at,
-      }))
-    });
-  } catch (error) {
-    console.error('Error getting push tokens:', error);
-    res.status(500).json({ error: 'Failed to get push tokens' });
-  }
-});
-
 // Save a message via REST (backup for when WebSocket fails)
 app.post('/api/messages', async (req, res) => {
   try {
     const { conversationId, senderWallet, content, messageType = 'text' } = req.body;
-    
+
     if (!conversationId || !senderWallet || !content) {
       return res.status(400).json({ error: 'conversationId, senderWallet, and content are required' });
     }
-    
+
     const message = await db.saveMessage(conversationId, senderWallet, content, messageType);
-    
+
     res.json({
       success: true,
       message: {
@@ -1150,35 +1470,26 @@ app.get('/api/sync/:walletAddress', async (req, res) => {
   try {
     const { walletAddress } = req.params;
     const address = walletAddress.toLowerCase();
-    
+
     // Get user data
     const user = await db.getUserByWallet(address);
-    
-    // Get all conversations (already filters out invalid "Group Chat" names)
+
+    // Get all conversations
     const conversations = await db.getUserConversations(address);
-    
+
     // Get messages for each conversation (last 50 per conversation)
     const conversationsWithMessages = await Promise.all(
       conversations.map(async (conv) => {
-        const convAny = conv as any;
-        
-        // For groups, use group_id for messages; for direct, use _id
-        const conversationId = convAny.group_id || conv._id!.toString();
-        const messages = await db.getMessages(conversationId, 50);
-        
+        const messages = await db.getMessages(conv._id!.toString(), 50);
+
         return {
-          id: conversationId,  // Use group_id if available for groups
+          id: conv._id!.toString(),
           type: conv.type,
           participants: conv.participants,
           name: conv.name,
           avatarUrl: conv.avatar_url,
           createdAt: conv.created_at.getTime(),
           updatedAt: conv.updated_at.getTime(),
-          // Group-specific fields - CRITICAL for proper display
-          groupName: conv.name,  // Also return as groupName for frontend compatibility
-          groupAvatar: conv.avatar_url,
-          admins: convAny.admins || [],
-          createdBy: convAny.created_by || '',
           messages: messages.map(msg => {
             // Ensure content is always a string
             let contentStr: string;
@@ -1189,7 +1500,7 @@ app.get('/api/sync/:walletAddress', async (req, res) => {
             } else {
               contentStr = String(msg.content || '');
             }
-            
+
             return {
               id: msg.client_id || msg._id!.toString(),  // Use client_id if available
               conversationId: msg.conversation_id,
@@ -1204,7 +1515,7 @@ app.get('/api/sync/:walletAddress', async (req, res) => {
         };
       })
     );
-    
+
     res.json({
       success: true,
       user: user ? {
@@ -1240,15 +1551,15 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
     if (!baseUrl.includes('localhost') && baseUrl.startsWith('http://')) {
       baseUrl = baseUrl.replace('http://', 'https://');
     }
-    
+
     const fileUrl = `${baseUrl}/uploads/${req.file.filename}`;
-    
+
     console.log('File uploaded:', {
       originalName: req.file.originalname,
       storedAs: req.file.filename,
       url: fileUrl,
     });
-    
+
     res.json({
       success: true,
       file: {
@@ -1270,7 +1581,7 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
 app.post('/api/upload/multiple', upload.array('files', 5), (req, res) => {
   try {
     const files = req.files as Express.Multer.File[];
-    
+
     if (!files || files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });
     }
@@ -1288,7 +1599,7 @@ app.post('/api/upload/multiple', upload.array('files', 5), (req, res) => {
       size: file.size,
       url: `${baseUrl}/uploads/${file.filename}`,
     }));
-    
+
     res.json({
       success: true,
       files: uploadedFiles,
@@ -1305,7 +1616,7 @@ app.delete('/api/upload/:fileId', (req, res) => {
     const { fileId } = req.params;
     const files = fs.readdirSync(uploadsDir);
     const fileToDelete = files.find(f => f.startsWith(fileId));
-    
+
     if (fileToDelete) {
       fs.unlinkSync(path.join(uploadsDir, fileToDelete));
       res.json({ success: true });
@@ -1321,31 +1632,6 @@ app.delete('/api/upload/:fileId', (req, res) => {
 // ============================================
 // WEBSOCKET HANDLERS
 // ============================================
-
-// Store pending calls for offline users (will be forwarded when they come online)
-const pendingCalls = new Map<string, {
-  callerId: string;
-  callType: string;
-  offer: any;
-  callId: string;
-  timestamp: number;
-}[]>();
-
-// Clean up old pending calls (older than 60 seconds)
-const cleanupPendingCalls = () => {
-  const now = Date.now();
-  for (const [recipient, calls] of pendingCalls.entries()) {
-    const activePendingCalls = calls.filter(c => now - c.timestamp < 60000);
-    if (activePendingCalls.length === 0) {
-      pendingCalls.delete(recipient);
-    } else {
-      pendingCalls.set(recipient, activePendingCalls);
-    }
-  }
-};
-
-// Run cleanup every 30 seconds
-setInterval(cleanupPendingCalls, 30000);
 
 io.on('connection', (socket: Socket) => {
   console.log('Client connected:', socket.id);
@@ -1399,46 +1685,22 @@ io.on('connection', (socket: Socket) => {
           timestamp: new Date(msg.created_at).getTime(),
           type: msg.message_type,
         };
-        
+
         // Include conversation ID if available
         if (msg.conversation_id) {
           messageData.conversationId = msg.conversation_id;
         }
-        
+
         // Include group info if this is a group message
         if (msg.group_info) {
           messageData.groupInfo = msg.group_info;
         }
-        
+
         socket.emit('message', messageData);
       });
       db.clearOfflineMessages(address).catch(console.error);
     }
   }).catch(console.error);
-
-  // Deliver any pending calls (calls initiated while user was offline)
-  const pending = pendingCalls.get(address);
-  if (pending && pending.length > 0) {
-    const now = Date.now();
-    const activePending = pending.filter(call => now - call.timestamp < 60000);
-    
-    if (activePending.length > 0) {
-      console.log(`📞 Forwarding ${activePending.length} pending calls to ${address}`);
-      
-      for (const call of activePending) {
-        socket.emit('call:incoming', {
-          callerId: call.callerId,
-          callType: call.callType,
-          offer: call.offer,
-          callId: call.callId,
-        });
-        console.log(`📞 Forwarded pending call from ${call.callerId}`);
-      }
-    }
-    
-    // Clear pending calls for this user
-    pendingCalls.delete(address);
-  }
 
   // ----------------------
   // Key Exchange Events
@@ -1488,7 +1750,7 @@ io.on('connection', (socket: Socket) => {
 
   socket.on('message:send', async (message: any) => {
     try {
-      const recipientAddress = typeof message.recipientId === 'string' 
+      const recipientAddress = typeof message.recipientId === 'string'
         ? message.recipientId.toLowerCase()
         : null;
 
@@ -1549,7 +1811,7 @@ io.on('connection', (socket: Socket) => {
         } catch (dbError) {
           console.error('Failed to queue offline message:', dbError);
         }
-        
+
         // Acknowledge to sender (will be delivered when recipient comes online)
         socket.emit('message:queued', {
           messageId: message.id,
@@ -1565,17 +1827,17 @@ io.on('connection', (socket: Socket) => {
   socket.on('message:delivered', async ({ messageId }: { messageId: string }) => {
     try {
       console.log('✓ Message delivered:', messageId, 'by:', address);
-      
+
       // Get the message to find the sender
       const message = await db.getMessageById(messageId);
-      
+
       if (message && message.senderId) {
         const senderId = message.senderId.toLowerCase();
-        
+
         // Don't notify if the reader is the sender
         if (senderId !== address.toLowerCase()) {
           const senderSocketId = activeConnections.get(senderId);
-          
+
           if (senderSocketId) {
             console.log(`✓ Notifying ${senderId} that message ${messageId} was delivered`);
             io.to(senderSocketId).emit('message:delivered', {
@@ -1595,15 +1857,15 @@ io.on('connection', (socket: Socket) => {
     try {
       // Mark the message as read in the database and get the sender
       const result = await db.markSingleMessageRead(messageId, address);
-      
+
       if (result && result.senderId) {
         // Only notify if sender is different from reader
         if (result.senderId.toLowerCase() !== address.toLowerCase()) {
           const senderSocketId = activeConnections.get(result.senderId.toLowerCase());
           if (senderSocketId) {
             console.log(`📖 Notifying ${result.senderId} that message ${messageId} was read by ${address}`);
-            io.to(senderSocketId).emit('message:read', { 
-              messageId, 
+            io.to(senderSocketId).emit('message:read', {
+              messageId,
               readBy: address,
               readAt: Date.now()
             });
@@ -1619,25 +1881,25 @@ io.on('connection', (socket: Socket) => {
   // Message Reactions
   // ----------------------
 
-  socket.on('message:reaction', async ({ messageId, emoji, conversationId, userId }: { 
-    messageId: string; 
+  socket.on('message:reaction', async ({ messageId, emoji, conversationId, userId }: {
+    messageId: string;
     emoji: string;
     conversationId: string;
     userId: string;
   }) => {
     try {
       console.log('Reaction:', { messageId, emoji, userId });
-      
+
       // Toggle reaction in database (add or remove)
       const { action, reactions } = await db.toggleMessageReaction(messageId, emoji, userId);
-      
+
       // Get conversation to find participants
       const conversation = await db.getConversationById(conversationId);
       if (!conversation) {
         console.log('Conversation not found for reaction');
         return;
       }
-      
+
       // Broadcast to all participants (including sender for confirmation)
       for (const participant of conversation.participants) {
         const participantSocketId = activeConnections.get(participant.toLowerCase());
@@ -1672,44 +1934,22 @@ io.on('connection', (socket: Socket) => {
   // Call Events
   // ----------------------
 
-  // ----------------------
-  // Ping/Pong Keepalive
-  // ----------------------
-  socket.on('ping', () => {
-    socket.emit('pong');
-  });
-
-  // ----------------------
-  // Calling
-  // ----------------------
-
-  // Store active calls to track caller-recipient mapping
-  const activeCalls = new Map<string, { callerId: string; recipientId: string }>();
-
-  socket.on('call:initiate', async ({ recipientAddress, callType, offer, callId }: any) => {
+  socket.on('call:initiate', ({ recipientAddress, callType, offer, callId }: any) => {
     try {
       const recipient = recipientAddress.toLowerCase();
       const recipientSocketId = activeConnections.get(recipient);
 
-      console.log('========================================');
-      console.log('📞 CALL:INITIATE received');
-      console.log('   From:', address);
-      console.log('   To:', recipient);
-      console.log('   Call ID:', callId);
-      console.log('   Type:', callType);
-      console.log('   Recipient socket:', recipientSocketId ? 'CONNECTED' : 'NOT CONNECTED');
-      console.log('   Active connections:', [...activeConnections.keys()]);
-      console.log('========================================');
-
-      // Use the callId provided by the caller
-      const finalCallId = callId || `${address}-${recipient}-${Date.now()}`;
-      
-      // Store call mapping for answer routing
-      activeCalls.set(finalCallId, { callerId: address, recipientId: recipient });
-
       if (recipientSocketId) {
-        console.log('📞 Sending call:incoming to recipient socket:', recipientSocketId);
-        
+        // Use the callId provided by the caller, or create one if not provided (backward compatibility)
+        const finalCallId = callId || `${address}-${recipient}-${Date.now()}`;
+
+        console.log('Call initiated:', {
+          from: address,
+          to: recipient,
+          callId: finalCallId,
+          type: callType
+        });
+
         io.to(recipientSocketId).emit('call:incoming', {
           callerId: address,
           callType,
@@ -1717,57 +1957,12 @@ io.on('connection', (socket: Socket) => {
           callId: finalCallId,
         });
 
-        // Confirm call initiated to caller
+        // Confirm call initiated to caller with the SAME call ID
         socket.emit('call:initiated', { callId: finalCallId, recipientAddress: recipient });
-        console.log('📞 Call initiated successfully');
       } else {
-        // User is offline - queue the call and let them receive it when they come online
-        // Don't send unavailable immediately - the frontend will handle timeout
-        console.log('📞 Recipient offline - queueing call for when they come online');
-        
-        const pendingForRecipient = pendingCalls.get(recipient) || [];
-        pendingForRecipient.push({
-          callerId: address,
-          callType,
-          offer,
-          callId: finalCallId,
-          timestamp: Date.now(),
-        });
-        pendingCalls.set(recipient, pendingForRecipient);
-        
-        // Still confirm call initiated to caller (they'll see "ringing")
-        socket.emit('call:initiated', { callId: finalCallId, recipientAddress: recipient });
-        
-        // Send push notification to offline user
-        try {
-          const pushTokens = await db.getPushTokens(recipient);
-          if (pushTokens && pushTokens.length > 0) {
-            console.log(`📱 Sending push notification for incoming call to ${recipient}`);
-            // Get caller profile for notification
-            let callerName = address.substring(0, 10) + '...';
-            try {
-              const callerProfile = await db.getUserByWallet(address);
-              if (callerProfile?.username) {
-                callerName = '@' + callerProfile.username;
-              }
-            } catch {}
-            
-            // Send push notification (simplified - implement based on your push service)
-            // This is a placeholder - you'd integrate with FCM, APNs, or web-push here
-            console.log(`📱 Would send push: "Incoming ${callType} call from ${callerName}"`);
-          }
-        } catch (pushError) {
-          console.warn('Could not send push notification for call:', pushError);
-        }
-        
-        // DON'T send call:unavailable immediately - let the caller ring for a while
-        // The caller will timeout after 60 seconds if no answer
-        // Only send a status update, not unavailable
-        socket.emit('call:status', {
-          callId: finalCallId,
+        socket.emit('call:unavailable', {
           recipientAddress: recipient,
-          status: 'ringing-offline',
-          message: 'User is offline - they may receive a push notification',
+          reason: 'User is offline',
         });
       }
     } catch (error) {
@@ -1778,31 +1973,12 @@ io.on('connection', (socket: Socket) => {
 
   socket.on('call:answer', ({ callId, answer }: any) => {
     try {
-      console.log('========================================');
-      console.log('📞 CALL:ANSWER received');
-      console.log('   Call ID:', callId);
-      console.log('   From (answerer):', address);
-      console.log('   Answer type:', answer?.type);
-      console.log('========================================');
-
-      // Try to get caller from stored call mapping first
-      const callInfo = activeCalls.get(callId);
-      let callerAddress: string;
-      
-      if (callInfo) {
-        callerAddress = callInfo.callerId;
-        console.log('📞 Found caller from call mapping:', callerAddress);
-      } else {
-        // Fallback: Extract caller from callId format (callerAddress-recipientAddress-timestamp)
-        // Ethereum addresses are 42 chars (0x + 40 hex)
-        callerAddress = callId.substring(0, 42).toLowerCase();
-        console.log('📞 Extracted caller from callId:', callerAddress);
-      }
-
+      // CallId format: callerAddress-recipientAddress-timestamp
+      // Ethereum addresses are 42 chars (0x + 40 hex)
+      const callerAddress = callId.substring(0, 42).toLowerCase();
       const callerSocketId = activeConnections.get(callerAddress);
 
-      console.log('📞 Caller socket ID:', callerSocketId ? 'FOUND' : 'NOT FOUND');
-      console.log('📞 Active connections:', [...activeConnections.keys()]);
+      console.log('Call answer received:', { callId, callerAddress, callerSocketId: !!callerSocketId });
 
       if (callerSocketId) {
         io.to(callerSocketId).emit('call:answer', {
@@ -1810,11 +1986,9 @@ io.on('connection', (socket: Socket) => {
           answer,
           from: address,
         });
-        console.log('📞 Sent call:answer to caller successfully');
+        console.log('Sent call:answer to caller');
       } else {
-        console.log('📞 ERROR: Caller not found in activeConnections');
-        console.log('📞 Looking for:', callerAddress);
-        console.log('📞 Available:', [...activeConnections.keys()]);
+        console.log('Caller not found in activeConnections');
       }
     } catch (error) {
       console.error('Error answering call:', error);
@@ -1826,21 +2000,15 @@ io.on('connection', (socket: Socket) => {
       const recipient = recipientAddress.toLowerCase();
       const recipientSocketId = activeConnections.get(recipient);
 
-      console.log('🧊 ICE candidate relay:', {
-        from: address,
-        to: recipient,
-        callId,
-        recipientConnected: !!recipientSocketId,
-      });
-
       if (recipientSocketId) {
+        console.log(`Relaying ICE candidate from ${address} to ${recipient} for call ${callId}`);
         io.to(recipientSocketId).emit('call:ice-candidate', {
           from: address,
           candidate,
           callId,
         });
       } else {
-        console.log(`🧊 Cannot relay ICE candidate - ${recipient} not connected`);
+        console.log(`Cannot relay ICE candidate - ${recipient} not connected`);
       }
     } catch (error) {
       console.error('Error handling ICE candidate:', error);
@@ -1868,15 +2036,35 @@ io.on('connection', (socket: Socket) => {
 
   socket.on('group:create', async ({ group, members }: any) => {
     try {
+      // Log what we received from frontend
+      console.log('📥 group:create received from frontend:', JSON.stringify({
+        id: group?.id,
+        groupName: group?.groupName,
+        createdBy: group?.createdBy,
+        admins: group?.admins,
+        participants: group?.participants,
+        members: members,
+      }, null, 2));
+      
+      // Ensure createdBy and admins are set if not provided
+      if (!group.createdBy) {
+        console.log('⚠️ group.createdBy was not set, using socket address:', address);
+        group.createdBy = address;
+      }
+      if (!group.admins || group.admins.length === 0) {
+        console.log('⚠️ group.admins was empty, setting to createdBy:', group.createdBy);
+        group.admins = [group.createdBy];
+      }
+      
       // Save the group to database
       await db.createGroupConversation(group);
       console.log(`📢 Group "${group.groupName}" created by ${address} with members:`, members);
-      
+
       // Notify all members about the new group
       for (const memberAddress of members) {
         const memberLower = memberAddress.toLowerCase();
         if (memberLower === address) continue; // Skip creator
-        
+
         const memberSocketId = activeConnections.get(memberLower);
         if (memberSocketId) {
           // Member is online - send immediately
@@ -1911,10 +2099,10 @@ io.on('connection', (socket: Socket) => {
   socket.on('group:message', async ({ groupId, message, recipients, groupInfo }: any) => {
     try {
       console.log(`📢 Group message in ${groupId} from ${address}:`, message.content?.substring(0, 30));
-      
+
       // For encrypted group messages, we store a marker and send individual payloads
       const isEncrypted = message.content === '__ENCRYPTED_GROUP__' && message.encryptedPayloads;
-      
+
       // Save message to database (store encrypted marker or plain text)
       await db.saveMessage(
         groupId,
@@ -1924,18 +2112,18 @@ io.on('connection', (socket: Socket) => {
         message.id,
         isEncrypted ? message.encryptedPayloads : undefined // Store encrypted payloads
       );
-      
+
       // Forward to all recipients with their specific encrypted content
       for (const recipientAddress of recipients) {
         const recipientLower = recipientAddress.toLowerCase();
         const recipientSocketId = activeConnections.get(recipientLower);
-        
+
         // Get the recipient's specific encrypted payload
         let recipientContent = message.content;
         if (isEncrypted && message.encryptedPayloads[recipientLower]) {
           recipientContent = message.encryptedPayloads[recipientLower];
         }
-        
+
         const recipientMessage = {
           ...message,
           content: recipientContent,
@@ -1944,7 +2132,7 @@ io.on('connection', (socket: Socket) => {
           encryptedPayloads: undefined, // Don't send all payloads to each recipient
           groupInfo, // Include group metadata so recipient can create group if needed
         };
-        
+
         if (recipientSocketId) {
           io.to(recipientSocketId).emit('message', recipientMessage);
           console.log(`   → Sent to ${recipientAddress} (encrypted: ${isEncrypted})`);
@@ -1962,7 +2150,7 @@ io.on('connection', (socket: Socket) => {
           console.log(`   → Queued offline for ${recipientAddress}`);
         }
       }
-      
+
       console.log(`✅ Group message delivered to ${recipients.length} recipients`);
     } catch (error) {
       console.error('Error handling group message:', error);
@@ -1976,7 +2164,7 @@ io.on('connection', (socket: Socket) => {
   socket.on('group:member:add', async ({ groupId, memberAddress, addedBy, groupName }: any) => {
     try {
       console.log(`📢 Adding member ${memberAddress} to group ${groupId}`);
-      
+
       // Notify the added member
       const memberSocketId = activeConnections.get(memberAddress.toLowerCase());
       if (memberSocketId) {
@@ -1988,7 +2176,7 @@ io.on('connection', (socket: Socket) => {
         });
         console.log(`   → Notified ${memberAddress} they were added`);
       }
-      
+
       // Also notify existing members
       const members = await db.getGroupMembers(groupId);
       for (const member of members) {
@@ -2011,7 +2199,7 @@ io.on('connection', (socket: Socket) => {
   socket.on('group:member:remove', async ({ groupId, memberAddress, removedBy }: any) => {
     try {
       console.log(`📢 Removing member ${memberAddress} from group ${groupId}`);
-      
+
       // Notify the removed member
       const memberSocketId = activeConnections.get(memberAddress.toLowerCase());
       if (memberSocketId) {
@@ -2022,7 +2210,7 @@ io.on('connection', (socket: Socket) => {
         });
         console.log(`   → Notified ${memberAddress} they were removed`);
       }
-      
+
       // Notify remaining members
       const members = await db.getGroupMembers(groupId);
       for (const member of members) {
@@ -2046,7 +2234,7 @@ io.on('connection', (socket: Socket) => {
   socket.on('group:avatar:update', async ({ groupId, avatarUrl, updatedBy }: any) => {
     try {
       console.log(`🖼️ Updating avatar for group ${groupId}`);
-      
+
       // Notify all group members
       const members = await db.getGroupMembers(groupId);
       for (const member of members) {
@@ -2070,7 +2258,7 @@ io.on('connection', (socket: Socket) => {
   // Group Call Events
   // ----------------------
 
-  socket.on('group:call:initiate', async ({ recipientAddress, callType, offer, callId, groupId, groupName, participants }: any) => {
+  socket.on('group:call:initiate', ({ recipientAddress, callType, offer, callId, groupId, groupName, participants }: any) => {
     try {
       const recipient = recipientAddress.toLowerCase();
       const recipientSocketId = activeConnections.get(recipient);
@@ -2099,33 +2287,10 @@ io.on('connection', (socket: Socket) => {
 
         console.log(`   → Group call signal sent to ${recipient}`);
       } else {
-        console.log(`   → ${recipient} is offline, sending push notification`);
-        
-        // Send push notification to offline participant
-        try {
-          let callerName = address.slice(0, 10) + '...';
-          try {
-            const callerProfile = await db.getUserByWallet(address);
-            if (callerProfile?.username) {
-              callerName = '@' + callerProfile.username;
-            }
-          } catch {}
-          
-          const pushTokens = await db.getPushTokens(recipient);
-          if (pushTokens && pushTokens.length > 0) {
-            console.log(`📱 Sending group call push notification to ${pushTokens.length} device(s)`);
-            // Push notification placeholder - integrate with FCM, APNs, or web-push here
-            console.log(`📱 Would send push: "Group call from ${callerName} in ${groupName || 'group'}"`);
-          }
-        } catch (pushError) {
-          console.error('Error sending group call push notification:', pushError);
-        }
-        
-        // Notify caller that this participant is offline (but call continues)
+        console.log(`   → ${recipient} is offline, cannot reach`);
         socket.emit('group:call:participant:unavailable', {
           address: recipient,
           callId,
-          reason: 'User is offline - push notification sent',
         });
       }
     } catch (error) {
@@ -2177,7 +2342,7 @@ io.on('connection', (socket: Socket) => {
   socket.on('group:call:end', async ({ callId, groupId }: any) => {
     try {
       console.log(`Group call ended: ${callId} in group ${groupId}`);
-      
+
       // Get all group members and notify them
       const members = await db.getGroupMembers(groupId);
       for (const member of members) {
@@ -2196,7 +2361,7 @@ io.on('connection', (socket: Socket) => {
   socket.on('group:call:leave', async ({ callId, groupId }: any) => {
     try {
       console.log(`User ${address} left group call: ${callId}`);
-      
+
       // Notify other participants
       const members = await db.getGroupMembers(groupId);
       for (const member of members) {
@@ -2219,13 +2384,8 @@ io.on('connection', (socket: Socket) => {
   // Disconnect
   // ----------------------
 
-  socket.on('disconnect', (reason) => {
-    console.log('========================================');
-    console.log('🔌 Client DISCONNECTED');
-    console.log('   Socket ID:', socket.id);
-    console.log('   Wallet:', address);
-    console.log('   Reason:', reason);
-    console.log('========================================');
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
 
     if (address) {
       activeConnections.delete(address);
@@ -2254,7 +2414,7 @@ async function startServer() {
   try {
     // Initialize database connection
     const dbInitialized = await db.initializeDatabase();
-    
+
     if (!dbInitialized) {
       console.error('❌ Failed to connect to MongoDB. Running without persistence.');
       console.error('   Messages and keys will NOT be saved!');

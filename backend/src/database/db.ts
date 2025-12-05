@@ -192,6 +192,9 @@ export interface DBConversation {
   name?: string;
   avatar_url?: string;
   created_by?: string;
+  admins?: string[];
+  group_id?: string;
+  hidden_for?: string[];
   created_at: Date;
   updated_at: Date;
 }
@@ -204,6 +207,8 @@ export async function getOrCreateDirectConversation(
   const wallet2 = user2.toLowerCase();
   const participants = [wallet1, wallet2].sort(); // Consistent ordering
   
+  console.log(`🔍 getOrCreateDirectConversation: Looking for conversation between ${wallet1} and ${wallet2}`);
+  
   // Check if conversation exists
   const existing = await conversationsCollection.findOne({
     type: 'direct',
@@ -211,10 +216,29 @@ export async function getOrCreateDirectConversation(
   });
   
   if (existing) {
+    const existingAny = existing as any;
+    console.log(`📋 Found existing conversation ${existing._id}:`, {
+      hidden_for: existingAny.hidden_for || [],
+      participants: existing.participants,
+    });
+    
+    // IMPORTANT: Unhide the conversation for both users when they start chatting again
+    // This handles the case where a user deleted the chat but then starts a new one
+    if (existingAny.hidden_for && existingAny.hidden_for.length > 0) {
+      console.log(`👁️ Unhiding conversation ${existing._id} - was hidden for: ${existingAny.hidden_for.join(', ')}`);
+      const updateResult = await conversationsCollection.updateOne(
+        { _id: existing._id },
+        { 
+          $set: { hidden_for: [], updated_at: new Date() }
+        }
+      );
+      console.log(`👁️ Unhide result: matched=${updateResult.matchedCount}, modified=${updateResult.modifiedCount}`);
+    }
     return existing._id!.toString();
   }
   
   // Create new conversation
+  console.log(`➕ Creating new conversation between ${wallet1} and ${wallet2}`);
   const now = new Date();
   const result = await conversationsCollection.insertOne({
     type: 'direct',
@@ -223,6 +247,7 @@ export async function getOrCreateDirectConversation(
     updated_at: now,
   });
   
+  console.log(`✅ Created new conversation: ${result.insertedId}`);
   return result.insertedId.toString();
 }
 
@@ -258,6 +283,23 @@ export async function getUserConversations(walletAddress: string): Promise<DBCon
     ]
   }).sort({ updated_at: -1 }).toArray();
   
+  // Debug: Also get ALL conversations to see what's hidden
+  const allConversations = await conversationsCollection.find({
+    participants: normalizedAddress
+  }).toArray();
+  
+  const hiddenConvs = allConversations.filter(c => {
+    const hidden = (c as any).hidden_for || [];
+    return hidden.includes(normalizedAddress);
+  });
+  
+  if (hiddenConvs.length > 0) {
+    console.log(`🙈 User ${normalizedAddress} has ${hiddenConvs.length} hidden conversations:`);
+    hiddenConvs.forEach(c => {
+      console.log(`   - ${c._id} (${c.type}): hidden_for=${JSON.stringify((c as any).hidden_for)}`);
+    });
+  }
+  
   return conversations as DBConversation[];
 }
 
@@ -266,6 +308,16 @@ export async function createGroupConversation(group: any): Promise<string> {
   
   // Use the frontend-provided group ID
   const groupId = group.id;
+  
+  // DETAILED LOGGING
+  console.log('🔍 createGroupConversation received:', JSON.stringify({
+    id: group.id,
+    groupName: group.groupName,
+    name: group.name,
+    createdBy: group.createdBy,
+    admins: group.admins,
+    participants: group.participants,
+  }, null, 2));
   
   // Group name should ALWAYS be provided - if not, something is wrong
   if (!group.groupName && !group.name) {
@@ -279,13 +331,6 @@ export async function createGroupConversation(group: any): Promise<string> {
     throw new Error('Cannot create group without a name');
   }
   
-  console.log(`📝 createGroupConversation called with:`, {
-    id: groupId,
-    groupName: group.groupName,
-    name: group.name,
-    resolvedName: groupName
-  });
-  
   // Check if group already exists by the group_id
   let existing = await conversationsCollection.findOne({
     type: 'group',
@@ -293,7 +338,25 @@ export async function createGroupConversation(group: any): Promise<string> {
   });
   
   if (existing) {
-    console.log('Group conversation already exists by group_id:', groupId);
+    console.log('⚠️ Group already exists by group_id:', groupId);
+    console.log('  Existing created_by:', (existing as any).created_by);
+    console.log('  Existing admins:', (existing as any).admins);
+    
+    // If existing group is missing created_by/admins, update it
+    const existingAny = existing as any;
+    if ((!existingAny.created_by || !existingAny.admins || existingAny.admins.length === 0) && group.createdBy) {
+      console.log('🔧 Updating existing group with missing created_by/admins');
+      await conversationsCollection.updateOne(
+        { _id: existing._id },
+        { 
+          $set: { 
+            created_by: group.createdBy.toLowerCase(),
+            admins: (group.admins || [group.createdBy]).map((a: string) => a.toLowerCase()),
+            updated_at: now
+          }
+        }
+      );
+    }
     return groupId;
   }
   
@@ -309,34 +372,79 @@ export async function createGroupConversation(group: any): Promise<string> {
   
   if (existing) {
     const existingAny = existing as any;
-    console.log('Group conversation already exists by participants, updating group_id:', existingAny.group_id || existing._id);
+    console.log('⚠️ Group already exists by participants:', existingAny.group_id || existing._id);
+    console.log('  Existing created_by:', existingAny.created_by);
+    console.log('  Existing admins:', existingAny.admins);
     
-    // Update the existing group with the new group_id if it doesn't have one
+    // Update the existing group with the new group_id, created_by, and admins if not set
+    const updateFields: any = { updated_at: now };
+    
     if (!existingAny.group_id) {
-      await conversationsCollection.updateOne(
-        { _id: existing._id },
-        { $set: { group_id: groupId, name: groupName, updated_at: now } }
-      );
-      console.log('Updated existing group with new group_id:', groupId);
+      updateFields.group_id = groupId;
     }
+    if (groupName) {
+      updateFields.name = groupName;
+    }
+    // Always update created_by and admins if they're provided and not already set
+    if (group.createdBy && !existingAny.created_by) {
+      updateFields.created_by = group.createdBy.toLowerCase();
+    }
+    if (group.admins && group.admins.length > 0 && (!existingAny.admins || existingAny.admins.length === 0)) {
+      updateFields.admins = group.admins.map((a: string) => a.toLowerCase());
+    }
+    
+    await conversationsCollection.updateOne(
+      { _id: existing._id },
+      { $set: updateFields }
+    );
+    console.log('🔧 Updated existing group with fields:', Object.keys(updateFields));
     
     return existingAny.group_id || existing._id!.toString();
   }
   
-  // Create new group conversation - use frontend ID as group_id
-  await conversationsCollection.insertOne({
+  // Create new group - prepare the document
+  const createdBy = (group.createdBy || '').toLowerCase();
+  const admins = (group.admins || []).map((a: string) => a.toLowerCase());
+  
+  // If admins is empty but we have createdBy, add createdBy as admin
+  if (admins.length === 0 && createdBy) {
+    admins.push(createdBy);
+  }
+  
+  const newGroup = {
     type: 'group',
-    group_id: groupId,  // Store the frontend-generated ID
+    group_id: groupId,
     participants,
-    name: groupName,  // Use resolved name
+    name: groupName,
     avatar_url: group.groupAvatar || group.avatar,
-    created_by: (group.createdBy || '').toLowerCase(),
-    admins: (group.admins || []).map((a: string) => a.toLowerCase()),
+    created_by: createdBy,
+    admins: admins,
     created_at: now,
     updated_at: now,
-  });
+  };
   
-  console.log(`✅ Created group "${groupName}" with ID:`, groupId);
+  console.log('✅ Creating NEW group with data:', JSON.stringify({
+    group_id: newGroup.group_id,
+    name: newGroup.name,
+    created_by: newGroup.created_by,
+    admins: newGroup.admins,
+    participants: newGroup.participants,
+  }, null, 2));
+  
+  await conversationsCollection.insertOne(newGroup);
+  
+  // Verify it was saved correctly
+  const saved = await conversationsCollection.findOne({ group_id: groupId });
+  if (saved) {
+    console.log('✅ Verified saved group:', {
+      group_id: (saved as any).group_id,
+      created_by: (saved as any).created_by,
+      admins: (saved as any).admins,
+    });
+  } else {
+    console.error('❌ ERROR: Group was not saved properly!');
+  }
+  
   return groupId;
 }
 
@@ -838,29 +946,56 @@ export async function addGroupMember(
   // Check if requester is admin - normalize all addresses for comparison
   const admins = (conversation.admins || []).map((a: string) => a.toLowerCase());
   const createdBy = (conversation.created_by || '').toLowerCase();
-  const isAdmin = admins.includes(normalizedAdmin) || createdBy === normalizedAdmin;
+  const participants = (conversation.participants || []).map((p: string) => p.toLowerCase());
   
-  console.log('addGroupMember check:', { normalizedAdmin, admins, createdBy, isAdmin });
+  // If no created_by is set, consider first participant as creator (for older groups)
+  const effectiveCreator = createdBy || (participants.length > 0 ? participants[0] : '');
   
-  if (!isAdmin) {
+  const isAdmin = admins.includes(normalizedAdmin) || effectiveCreator === normalizedAdmin;
+  
+  // If no admins set and requester is a participant, allow them to manage (for older groups)
+  const canManage = isAdmin || (admins.length === 0 && !createdBy && participants.includes(normalizedAdmin));
+  
+  console.log('addGroupMember check:', { 
+    normalizedAdmin, 
+    admins, 
+    createdBy, 
+    effectiveCreator,
+    isAdmin,
+    canManage,
+    participantCount: participants.length
+  });
+  
+  if (!canManage) {
     console.error('User is not admin:', normalizedAdmin);
     return false;
   }
   
   // Check if member already in group - normalize participants too
-  const normalizedParticipants = conversation.participants.map((p: string) => p.toLowerCase());
-  if (normalizedParticipants.includes(normalizedMember)) {
+  if (participants.includes(normalizedMember)) {
     console.log('Member already in group:', normalizedMember);
     return true;
   }
   
-  // Add member
+  // Add member and set created_by/admins if not set (for older groups)
+  const updateOp: any = { 
+    $push: { participants: normalizedMember },
+    $set: { updated_at: new Date() }
+  };
+  
+  // If no created_by set, set the admin as creator
+  if (!createdBy) {
+    updateOp.$set.created_by = normalizedAdmin;
+  }
+  
+  // If no admins set, add the admin
+  if (admins.length === 0) {
+    updateOp.$addToSet = { admins: normalizedAdmin };
+  }
+  
   await conversationsCollection.updateOne(
     { _id: conversation._id },
-    { 
-      $push: { participants: normalizedMember } as any,
-      $set: { updated_at: new Date() }
-    }
+    updateOp
   );
   
   console.log(`Added ${normalizedMember} to group ${conversationId}`);
@@ -896,32 +1031,56 @@ export async function removeGroupMember(
   // Check if requester is admin (or removing themselves) - normalize all addresses
   const admins = (conversation.admins || []).map((a: string) => a.toLowerCase());
   const createdBy = (conversation.created_by || '').toLowerCase();
-  const isAdmin = admins.includes(normalizedAdmin) || createdBy === normalizedAdmin;
+  const participants = (conversation.participants || []).map((p: string) => p.toLowerCase());
+  
+  // If no created_by is set, consider first participant as creator (for older groups)
+  const effectiveCreator = createdBy || (participants.length > 0 ? participants[0] : '');
+  
+  const isAdmin = admins.includes(normalizedAdmin) || effectiveCreator === normalizedAdmin;
   const isSelfRemoval = normalizedMember === normalizedAdmin;
   
-  console.log('removeGroupMember check:', { normalizedAdmin, normalizedMember, admins, createdBy, isAdmin, isSelfRemoval });
+  // If no admins set and requester is a participant, allow them to manage (for older groups)
+  const canManage = isAdmin || isSelfRemoval || (admins.length === 0 && !createdBy && participants.includes(normalizedAdmin));
   
-  if (!isAdmin && !isSelfRemoval) {
+  console.log('removeGroupMember check:', { 
+    normalizedAdmin, 
+    normalizedMember, 
+    admins, 
+    createdBy, 
+    effectiveCreator,
+    isAdmin, 
+    isSelfRemoval,
+    canManage
+  });
+  
+  if (!canManage) {
     console.error('User is not authorized to remove members:', normalizedAdmin);
     return false;
   }
   
-  // Can't remove the creator
-  if (normalizedMember === createdBy) {
+  // Can't remove the creator (use effective creator for older groups)
+  if (normalizedMember === effectiveCreator && !isSelfRemoval) {
     console.error('Cannot remove group creator:', normalizedMember);
     return false;
   }
   
   // Remove member from participants and admins
+  const updateOp: any = { 
+    $pull: { 
+      participants: normalizedMember,
+      admins: normalizedMember 
+    },
+    $set: { updated_at: new Date() }
+  };
+  
+  // If no created_by set and we're removing someone, set the admin as creator
+  if (!createdBy && normalizedAdmin !== normalizedMember) {
+    updateOp.$set.created_by = normalizedAdmin;
+  }
+  
   await conversationsCollection.updateOne(
     { _id: conversation._id },
-    { 
-      $pull: { 
-        participants: normalizedMember,
-        admins: normalizedMember 
-      } as any,
-      $set: { updated_at: new Date() }
-    }
+    updateOp
   );
   
   console.log(`Removed ${normalizedMember} from group ${conversationId}`);
@@ -955,25 +1114,38 @@ export async function addGroupAdmin(
   // Check if requester is admin - normalize all addresses
   const admins = (conversation.admins || []).map((a: string) => a.toLowerCase());
   const createdBy = (conversation.created_by || '').toLowerCase();
-  const isAdmin = admins.includes(normalizedAdmin) || createdBy === normalizedAdmin;
+  const participants = (conversation.participants || []).map((p: string) => p.toLowerCase());
   
-  if (!isAdmin) {
+  // If no created_by is set, consider first participant as creator (for older groups)
+  const effectiveCreator = createdBy || (participants.length > 0 ? participants[0] : '');
+  
+  const isAdmin = admins.includes(normalizedAdmin) || effectiveCreator === normalizedAdmin;
+  
+  // If no admins set and requester is a participant, allow them to manage (for older groups)
+  const canManage = isAdmin || (admins.length === 0 && !createdBy && participants.includes(normalizedAdmin));
+  
+  if (!canManage) {
     return false;
   }
   
-  // Check if member is in the group - normalize participants
-  const normalizedParticipants = conversation.participants.map((p: string) => p.toLowerCase());
-  if (!normalizedParticipants.includes(normalizedMember)) {
+  // Check if member is in the group
+  if (!participants.includes(normalizedMember)) {
     return false;
   }
   
-  // Add as admin
+  // Add as admin and set created_by if not set
+  const updateOp: any = { 
+    $addToSet: { admins: normalizedMember },
+    $set: { updated_at: new Date() }
+  };
+  
+  if (!createdBy) {
+    updateOp.$set.created_by = normalizedAdmin;
+  }
+  
   await conversationsCollection.updateOne(
     { _id: conversation._id },
-    { 
-      $addToSet: { admins: normalizedMember },
-      $set: { updated_at: new Date() }
-    }
+    updateOp
   );
   
   return true;
@@ -1006,14 +1178,22 @@ export async function removeGroupAdmin(
   // Check if requester is admin - normalize all addresses
   const admins = (conversation.admins || []).map((a: string) => a.toLowerCase());
   const createdBy = (conversation.created_by || '').toLowerCase();
-  const isAdmin = admins.includes(normalizedAdmin) || createdBy === normalizedAdmin;
+  const participants = (conversation.participants || []).map((p: string) => p.toLowerCase());
   
-  if (!isAdmin) {
+  // If no created_by is set, consider first participant as creator (for older groups)
+  const effectiveCreator = createdBy || (participants.length > 0 ? participants[0] : '');
+  
+  const isAdmin = admins.includes(normalizedAdmin) || effectiveCreator === normalizedAdmin;
+  
+  // If no admins set and requester is a participant, allow them to manage (for older groups)
+  const canManage = isAdmin || (admins.length === 0 && !createdBy && participants.includes(normalizedAdmin));
+  
+  if (!canManage) {
     return false;
   }
   
-  // Can't remove admin from creator
-  if (normalizedMember === createdBy) {
+  // Can't remove admin from creator (use effective creator for older groups)
+  if (normalizedMember === effectiveCreator) {
     return false;
   }
   
@@ -1045,6 +1225,61 @@ export async function getGroup(conversationId: string): Promise<any | null> {
   }
   
   return conversation;
+}
+
+/**
+ * Fix a group that's missing created_by/admins
+ */
+export async function fixGroup(conversationId: string, walletAddress: string): Promise<{ success: boolean; updated: string[]; group?: any }> {
+  const normalizedWallet = walletAddress.toLowerCase();
+  
+  const group = await getGroup(conversationId);
+  
+  if (!group) {
+    return { success: false, updated: [] };
+  }
+  
+  // Check if user is a participant
+  const participants = (group.participants || []).map((p: string) => p.toLowerCase());
+  if (!participants.includes(normalizedWallet)) {
+    return { success: false, updated: [] };
+  }
+  
+  // Update the group with missing fields
+  const updateFields: any = { updated_at: new Date() };
+  const updatedFieldNames: string[] = [];
+  
+  if (!group.created_by) {
+    updateFields.created_by = normalizedWallet;
+    updatedFieldNames.push('created_by');
+  }
+  
+  if (!group.admins || group.admins.length === 0) {
+    updateFields.admins = [group.created_by || normalizedWallet];
+    updatedFieldNames.push('admins');
+  }
+  
+  if (updatedFieldNames.length > 0) {
+    try {
+      await conversationsCollection.updateOne(
+        { _id: group._id },
+        { $set: updateFields }
+      );
+    } catch {
+      await conversationsCollection.updateOne(
+        { group_id: conversationId },
+        { $set: updateFields }
+      );
+    }
+  }
+  
+  const updatedGroup = await getGroup(conversationId);
+  
+  return { 
+    success: true, 
+    updated: updatedFieldNames,
+    group: updatedGroup
+  };
 }
 
 /**
@@ -1253,19 +1488,108 @@ export async function hideConversationForUser(
   const normalizedAddress = walletAddress.toLowerCase();
   
   try {
-    // Add this user to the hidden_for array
-    await conversationsCollection.updateOne(
-      { _id: new ObjectId(conversationId) },
-      { 
-        $addToSet: { hidden_for: normalizedAddress },
-        $set: { updated_at: new Date() }
-      }
-    );
-    return true;
+    // Try by ObjectId first
+    let result;
+    try {
+      result = await conversationsCollection.updateOne(
+        { _id: new ObjectId(conversationId) },
+        { 
+          $addToSet: { hidden_for: normalizedAddress },
+          $set: { updated_at: new Date() }
+        }
+      );
+    } catch {
+      // Invalid ObjectId, try by group_id
+      result = await conversationsCollection.updateOne(
+        { group_id: conversationId },
+        { 
+          $addToSet: { hidden_for: normalizedAddress },
+          $set: { updated_at: new Date() }
+        }
+      );
+    }
+    
+    if (result.matchedCount === 0) {
+      // Try by group_id as fallback even if ObjectId parse succeeded
+      result = await conversationsCollection.updateOne(
+        { group_id: conversationId },
+        { 
+          $addToSet: { hidden_for: normalizedAddress },
+          $set: { updated_at: new Date() }
+        }
+      );
+    }
+    
+    console.log(`🙈 Hide conversation ${conversationId} for ${normalizedAddress}: matched=${result.matchedCount}, modified=${result.modifiedCount}`);
+    return result.modifiedCount > 0 || result.matchedCount > 0;
   } catch (error) {
     console.error('Error hiding conversation:', error);
     return false;
   }
+}
+
+/**
+ * Unhide a conversation for a user (restore hidden conversation)
+ */
+export async function unhideConversationForUser(
+  conversationId: string,
+  walletAddress: string
+): Promise<boolean> {
+  const normalizedAddress = walletAddress.toLowerCase();
+  
+  try {
+    // Try by ObjectId first
+    let result;
+    try {
+      result = await conversationsCollection.updateOne(
+        { _id: new ObjectId(conversationId) },
+        { 
+          $pull: { hidden_for: normalizedAddress } as any,
+          $set: { updated_at: new Date() }
+        }
+      );
+    } catch {
+      // Invalid ObjectId, try by group_id
+      result = await conversationsCollection.updateOne(
+        { group_id: conversationId },
+        { 
+          $pull: { hidden_for: normalizedAddress } as any,
+          $set: { updated_at: new Date() }
+        }
+      );
+    }
+    
+    if (result.matchedCount === 0) {
+      // Try by group_id as fallback
+      result = await conversationsCollection.updateOne(
+        { group_id: conversationId },
+        { 
+          $pull: { hidden_for: normalizedAddress } as any,
+          $set: { updated_at: new Date() }
+        }
+      );
+    }
+    
+    console.log(`👁️ Unhide conversation ${conversationId} for ${normalizedAddress}: matched=${result.matchedCount}, modified=${result.modifiedCount}`);
+    return result.modifiedCount > 0 || result.matchedCount > 0;
+  } catch (error) {
+    console.error('Error unhiding conversation:', error);
+    return false;
+  }
+}
+
+/**
+ * Get ALL conversations for a user including hidden ones (for debugging)
+ */
+export async function getAllUserConversations(walletAddress: string): Promise<DBConversation[]> {
+  const normalizedAddress = walletAddress.toLowerCase();
+  
+  // Get ALL conversations where user is a participant (including hidden)
+  const conversations = await conversationsCollection.find({
+    participants: normalizedAddress
+  }).sort({ updated_at: -1 }).toArray();
+  
+  return conversations as DBConversation[];
 }
 
 /**
@@ -1363,14 +1687,13 @@ export async function cleanupDuplicateGroups(
 // PUSH TOKEN OPERATIONS
 // ============================================
 
-interface PushToken {
+export interface PushToken {
   wallet_address: string;
   push_token: string;
   platform: 'ios' | 'android';
-  device_id: string;
   updated_at: Date;
-  created_at: Date;   // add this
 }
+
 /**
  * Save or update a push token for a user
  */
@@ -1466,6 +1789,7 @@ export default {
   removeGroupAdmin,
   getGroupMembers,
   getGroup,
+  fixGroup,
   updateGroupAvatar,
   // Message operations
   saveMessage,
@@ -1492,6 +1816,8 @@ export default {
   deleteConversationMessages,
   softDeleteMessage,
   hideConversationForUser,
+  unhideConversationForUser,
+  getAllUserConversations,
   isConversationHiddenForUser,
   cleanupDuplicateGroups,
   getUser,
