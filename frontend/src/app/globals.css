@@ -332,7 +332,7 @@ html, body {
 }
 
 /* Toaster safe area positioning */
-.!top-safe {
+.top-safe {
   top: max(1rem, env(safe-area-inset-top)) !important;
 }
 
