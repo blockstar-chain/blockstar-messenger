@@ -19,7 +19,10 @@
     "@capacitor/splash-screen": "^5.0.7",
     "@capacitor/status-bar": "^5.0.7",
     "@noble/curves": "^1.9.7",
+    "@reown/appkit": "^1.7.1",
+    "@reown/appkit-adapter-wagmi": "^1.7.1",
     "@signalapp/libsignal-client": "^0.32.0",
+    "@tanstack/react-query": "^5.71.1",
     "axios": "^1.13.2",
     "circomlibjs": "^0.1.7",
     "clsx": "^2.0.0",
@@ -39,7 +42,9 @@
     "socket.io-client": "^4.6.1",
     "tailwind-merge": "^2.1.0",
     "uuid": "^9.0.0",
-    "web3": "1.10.0",
+    "viem": "^2.24.2",
+    "wagmi": "^2.14.15",
+    "web3": "^1.10.0",
     "zustand": "^4.4.7"
   },
   "devDependencies": {

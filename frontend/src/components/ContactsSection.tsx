@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useAppStore } from '@/store';
 import { Search, UserPlus, X, Users, MessageSquare, Trash2, Star, StarOff, Pencil, RefreshCw } from 'lucide-react';
 import { truncateAddress, getInitials, getAvatarColor, generateConversationId } from '@/utils/helpers';
-import { resolveProfile, getProfileByWallet, type BlockStarProfile } from '@/lib/profileResolver';
+import { resolveProfile, resolveProfilesByWallets, getProfileByWallet, cacheProfileByWallet, type BlockStarProfile } from '@/lib/profileResolver';
 import { db } from '@/lib/database';
 import UserProfileModal from './UserProfileModal';
 import toast from 'react-hot-toast';
@@ -74,42 +74,30 @@ export default function ContactsSection() {
         const data = await response.json();
         
         if (data.success && data.contacts) {
-          // Convert server format to client format and load profiles
-          const contactsWithProfiles = await Promise.all(
-            data.contacts.map(async (serverContact: ServerContact) => {
-              const contact: Contact = {
-                id: serverContact.id,
-                walletAddress: serverContact.contact_wallet,
-                nickname: serverContact.nickname,
-                addedAt: serverContact.added_at,
-                isFavorite: serverContact.is_favorite,
-              };
-              
-              // Try to load profile
-              try {
-                const cachedProfile = getProfileByWallet(contact.walletAddress);
-                if (cachedProfile) {
-                  return { ...contact, profile: cachedProfile };
-                }
-                
-                const profileResponse = await fetch(`${API_URL}/api/profile/${contact.walletAddress}`);
-                if (profileResponse.ok) {
-                  const profileData = await profileResponse.json();
-                  if (profileData.success && profileData.profile?.nftName) {
-                    const profile = await resolveProfile(profileData.profile.nftName);
-                    return { ...contact, profile };
-                  }
-                }
-              } catch {
-                // Continue without profile
-              }
-              
-              return { ...contact, profile: null };
-            })
-          );
+          // First, collect all wallet addresses
+          const walletAddresses = data.contacts.map((c: ServerContact) => c.contact_wallet);
+          
+          // Batch resolve all profiles at once (more efficient)
+          const profilesMap = await resolveProfilesByWallets(walletAddresses);
+          
+          // Convert server format to client format with resolved profiles
+          const contactsWithProfiles = data.contacts.map((serverContact: ServerContact) => {
+            const contact: Contact = {
+              id: serverContact.id,
+              walletAddress: serverContact.contact_wallet,
+              nickname: serverContact.nickname,
+              addedAt: serverContact.added_at,
+              isFavorite: serverContact.is_favorite,
+            };
+            
+            // Get profile from the batch result
+            const profile = profilesMap.get(serverContact.contact_wallet.toLowerCase()) || null;
+            
+            return { ...contact, profile };
+          });
           
           // Sort contacts alphabetically by display name (nickname > @username > wallet address)
-          const sortedContacts = contactsWithProfiles.sort((a, b) => {
+          const sortedContacts = contactsWithProfiles.sort((a: Contact, b: Contact) => {
             const nameA = (a.nickname || a.profile?.username || a.walletAddress).toLowerCase();
             const nameB = (b.nickname || b.profile?.username || b.walletAddress).toLowerCase();
             return nameA.localeCompare(nameB);
@@ -376,22 +364,52 @@ export default function ContactsSection() {
   const handleStartChat = async (contact: Contact) => {
     if (!currentUser) return;
 
-    const conversationId = generateConversationId(
-      currentUser.walletAddress.toLowerCase(),
-      contact.walletAddress.toLowerCase()
-    );
+    const myAddress = currentUser.walletAddress.toLowerCase();
+    const contactAddress = contact.walletAddress.toLowerCase();
+    
+    // IMPORTANT: Call backend to get/create conversation - this also unhides if previously deleted
+    const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
+    let conversationId: string;
+    
+    try {
+      const response = await fetch(`${API_URL}/api/conversations/direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user1: myAddress, user2: contactAddress }),
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.conversation) {
+          conversationId = data.conversation.id;
+        } else {
+          throw new Error('Invalid server response');
+        }
+      } else {
+        throw new Error(`HTTP ${response.status}`);
+      }
+    } catch (error) {
+      // Fallback to client-generated ID if server fails
+      console.warn('Could not reach server for conversation, using local ID:', error);
+      conversationId = generateConversationId(myAddress, contactAddress);
+    }
+    
+    // Remove from deleted list if it was there (user is re-opening a deleted chat)
+    // Import this at the top of the file
+    const { removeFromDeletedConversations } = await import('./Sidebar');
+    removeFromDeletedConversations(conversationId, currentUser.walletAddress);
 
-    // Check if conversation already exists
+    // Check if conversation already exists in state
     const existingConv = conversations.find(c => c.id === conversationId);
     
     if (existingConv) {
       setActiveConversation(conversationId);
     } else {
-      // Create new conversation
+      // Create new conversation locally
       const newConv = {
         id: conversationId,
         type: 'direct' as const,
-        participants: [currentUser.walletAddress.toLowerCase(), contact.walletAddress.toLowerCase()],
+        participants: [myAddress, contactAddress],
         unreadCount: 0,
         createdAt: Date.now(),
         updatedAt: Date.now(),

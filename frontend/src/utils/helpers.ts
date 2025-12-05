@@ -183,3 +183,14 @@ export function throttle<T extends (...args: any[]) => any>(
     }
   };
 }
+
+
+export const trimAddress = (addr :any) => {
+    try {
+        if (!addr) return '';
+        return `${addr.substring(0, 6)}...${addr.substring(addr.length - 4)}`;
+    }
+    catch (err) {
+        return addr;
+    }
+}

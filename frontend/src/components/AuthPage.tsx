@@ -8,6 +8,7 @@ import { Wallet, Shield, Lock, CheckCircle, Sparkles } from 'lucide-react';
 import toast from 'react-hot-toast';
 import logoImg from '@/images/logo.png';
 import Image from 'next/image';
+import ConnectButton from './ConnectButton';
 
 
 export default function AuthPage() {
@@ -212,6 +213,7 @@ export default function AuthPage() {
               </>
             )}
           </button>
+          <ConnectButton className="w-full bg-gradient-to-r from-primary-500 to-cyan-500 hover:from-primary-600 hover:to-cyan-600 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 shadow-glow hover:shadow-glow-lg" />
 
           {/* Info */}
           <div className="mt-6 p-4 bg-dark-200 border border-midnight rounded-xl">

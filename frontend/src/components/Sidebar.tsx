@@ -5,7 +5,7 @@ import { Conversation } from '@/types';
 import { Search, Plus, Settings, LogOut, X, MessageSquarePlus, Lock, ExternalLink, Globe, Mail, Twitter, MessageSquare, Trash2, Users, ExternalLinkIcon, BookUser, Radio, RefreshCw, Bell } from 'lucide-react';
 import { truncateAddress, formatTimestamp, getInitials, getAvatarColor, generateConversationId } from '@/utils/helpers';
 import { blockchainService } from '@/lib/blockchain';
-import { resolveProfile, getProfileByWallet, type BlockStarProfile } from '@/lib/profileResolver';
+import { resolveProfile, resolveProfilesByWallets, getProfileByWallet, type BlockStarProfile } from '@/lib/profileResolver';
 import { groupChatService } from '@/lib/group-chat-service';
 import { webSocketService } from '@/lib/websocket';
 import { encryptionService } from '@/lib/encryption';
@@ -68,6 +68,15 @@ export const removeFromDeletedConversations = (conversationId: string, walletAdd
     localStorage.setItem(key, JSON.stringify([...deleted]));
     console.log(`📬 Removed ${conversationId} from deleted list - new message received`);
   }
+};
+
+// Clear all deleted conversations for a user (use when fully syncing from server)
+export const clearDeletedConversations = (walletAddress?: string) => {
+  const key = walletAddress 
+    ? `${DELETED_CONVERSATIONS_KEY}_${walletAddress.toLowerCase()}`
+    : DELETED_CONVERSATIONS_KEY;
+  localStorage.removeItem(key);
+  console.log(`🗑️ Cleared all deleted conversations for ${walletAddress || 'unknown'}`);
 };
 
 export default function Sidebar() {
@@ -156,61 +165,6 @@ export default function Sidebar() {
     if (currentUser?.walletAddress) {
       loadConversations();
     }
-  }, [currentUser?.walletAddress]);
-
-  // Periodic duplicate cleanup - runs every 30 seconds to catch any duplicates that slip through
-  useEffect(() => {
-    if (!currentUser?.walletAddress) return;
-
-    const cleanupDuplicates = async () => {
-      try {
-        const allConversations = await db.conversations.toArray();
-        
-        // Find and remove any "Group Chat" duplicates
-        const groupChatGroups = allConversations.filter(c => 
-          c.type === 'group' && (c as any).groupName === 'Group Chat'
-        );
-        
-        let removedCount = 0;
-        
-        for (const badGroup of groupChatGroups) {
-          const participants = (badGroup.participants || []).map(p => p.toLowerCase()).sort().join(',');
-          
-          // Check if there's a properly named group with the same participants
-          const properGroup = allConversations.find(c => 
-            c.type === 'group' && 
-            c.id !== badGroup.id &&
-            (c as any).groupName && 
-            (c as any).groupName !== 'Group Chat' &&
-            (c.participants || []).map(p => p.toLowerCase()).sort().join(',') === participants
-          );
-          
-          if (properGroup) {
-            console.log(`🧹 Auto-cleanup: Removing duplicate "Group Chat", proper group exists: ${(properGroup as any).groupName}`);
-            await db.conversations.delete(badGroup.id);
-            removedCount++;
-          }
-        }
-        
-        if (removedCount > 0) {
-          // Reload conversations to update UI
-          loadConversations();
-        }
-      } catch (error) {
-        // Silently ignore cleanup errors
-      }
-    };
-
-    // Run cleanup every 30 seconds
-    const interval = setInterval(cleanupDuplicates, 30000);
-    
-    // Also run once immediately after a short delay
-    const timeout = setTimeout(cleanupDuplicates, 5000);
-
-    return () => {
-      clearInterval(interval);
-      clearTimeout(timeout);
-    };
   }, [currentUser?.walletAddress]);
 
   // Listen for group:created events when another user adds us to a group
@@ -443,7 +397,15 @@ export default function Sidebar() {
     
     try {
       const deletedIds = getDeletedConversations(currentUser.walletAddress);
+      console.log(`📋 Loading conversations. Deleted IDs in localStorage: ${deletedIds.size}`);
+      if (deletedIds.size > 0) {
+        console.log(`   Deleted IDs: ${Array.from(deletedIds).join(', ')}`);
+      }
+      
       let allConversations = await db.conversations.toArray();
+      const localGroups = allConversations.filter(c => c.type === 'group');
+      const localDirects = allConversations.filter(c => c.type === 'direct');
+      console.log(`📋 Found ${allConversations.length} in IndexedDB (${localGroups.length} groups, ${localDirects.length} direct)`);
       
       // CRITICAL: Remove any groups named "Group Chat" that shouldn't exist
       // These are created by bugs and should never be shown to users
@@ -501,12 +463,31 @@ export default function Sidebar() {
 
         if (response.ok) {
           const data = await response.json();
-          console.log('Server conversations:', data.conversations?.length);
+          const groups = data.conversations?.filter((c: any) => c.type === 'group') || [];
+          const directs = data.conversations?.filter((c: any) => c.type === 'direct') || [];
+          console.log(`Server conversations: ${data.conversations?.length} total (${groups.length} groups, ${directs.length} direct)`);
           
           if (data.success && data.conversations?.length > 0) {
             for (const serverConv of data.conversations) {
-              // Skip if deleted locally
-              if (deletedIds.has(serverConv.id)) continue;
+              // Generate a client-style ID for comparison (in case deleted list has this format)
+              let clientStyleId: string | null = null;
+              if (serverConv.type === 'direct' && serverConv.participants?.length === 2) {
+                clientStyleId = generateConversationId(serverConv.participants[0], serverConv.participants[1]);
+              }
+              
+              // If server returns a conversation, it means it's NOT hidden on the server
+              // So we should trust the server and remove from our local deleted list
+              // Check both server ID and client-generated ID
+              if (deletedIds.has(serverConv.id)) {
+                console.log(`📬 Server returned previously deleted ${serverConv.type} conversation: ${serverConv.id} - removing from deleted list`);
+                removeFromDeletedConversations(serverConv.id, currentUser.walletAddress);
+                deletedIds.delete(serverConv.id);
+              }
+              if (clientStyleId && deletedIds.has(clientStyleId)) {
+                console.log(`📬 Server returned conv matching deleted client ID: ${clientStyleId} - removing from deleted list`);
+                removeFromDeletedConversations(clientStyleId, currentUser.walletAddress);
+                deletedIds.delete(clientStyleId);
+              }
               
               // Check if we already have this conversation locally by ID
               let existingLocal = allConversations.find(c => c.id === serverConv.id);
@@ -553,9 +534,25 @@ export default function Sidebar() {
                 } : existingLocal?.lastMessage,
               };
 
-              // Only add if we don't already have this conversation
-              if (!existingLocal) {
+              // Update or add conversation
+              if (existingLocal) {
+                // Update existing local conversation with server data (especially admin/creator info)
+                const updatedConv = {
+                  ...existingLocal,
+                  // Update group-specific fields from server
+                  admins: serverConv.admins || existingLocal.admins,
+                  createdBy: serverConv.createdBy || existingLocal.createdBy,
+                  groupName: serverConv.groupName || serverConv.name || existingLocal.groupName,
+                  groupAvatar: serverConv.groupAvatar || serverConv.avatarUrl || existingLocal.groupAvatar,
+                  updatedAt: Math.max(serverConv.updatedAt || 0, existingLocal.updatedAt || 0),
+                };
+                await db.conversations.put(updatedConv);
+                if (serverConv.type === 'group') {
+                  console.log(`📋 Updated group "${updatedConv.groupName}": createdBy=${updatedConv.createdBy}, admins=${JSON.stringify(updatedConv.admins)}`);
+                }
+              } else {
                 await db.conversations.put(conversation);
+                console.log(`📋 Added ${serverConv.type} conversation: ${serverConv.id}`);
               }
             }
 
@@ -615,7 +612,31 @@ export default function Sidebar() {
       }
 
       const sorted = allConversations.sort((a, b) => b.updatedAt - a.updatedAt);
+      
+      // Log final counts
+      const finalGroups = sorted.filter(c => c.type === 'group');
+      const finalDirects = sorted.filter(c => c.type === 'direct');
+      console.log(`📋 Final: ${sorted.length} conversations (${finalGroups.length} groups, ${finalDirects.length} direct)`);
+      
       setConversations(sorted);
+      
+      // Sync profiles for all participants (needed after cache clear)
+      const allParticipants = new Set<string>();
+      for (const conv of sorted) {
+        for (const participant of conv.participants || []) {
+          if (participant.toLowerCase() !== currentUser.walletAddress.toLowerCase()) {
+            allParticipants.add(participant.toLowerCase());
+          }
+        }
+      }
+      
+      if (allParticipants.size > 0) {
+        console.log(`📋 Syncing profiles for ${allParticipants.size} participants...`);
+        // Don't await - let it run in background
+        resolveProfilesByWallets(Array.from(allParticipants)).catch(err => {
+          console.error('Error syncing participant profiles:', err);
+        });
+      }
     } catch (error) {
       console.error('Error loading conversations:', error);
     }
@@ -727,6 +748,8 @@ export default function Sidebar() {
       }
 
       if (existingConv) {
+        // Remove from deleted list if it was there (user is re-opening deleted chat)
+        removeFromDeletedConversations(existingConv.id, currentUser?.walletAddress);
         setActiveConversation(existingConv.id);
         setShowNewChatModal(false);
         setNewChatAddress('');
@@ -750,7 +773,11 @@ export default function Sidebar() {
           if (data.success && data.conversation) {
             conversationId = data.conversation.id;
             
-            // Check if this conversation ID already exists
+            // IMPORTANT: Remove from deleted list - this handles the case where
+            // user deleted a chat and is now starting a new one with same person
+            removeFromDeletedConversations(conversationId, currentUser?.walletAddress);
+            
+            // Check if this conversation ID already exists in state
             const existing = conversations.find(c => c.id === conversationId);
             if (existing) {
               setActiveConversation(conversationId);
@@ -768,6 +795,8 @@ export default function Sidebar() {
         }
       } catch (serverError) {
         conversationId = generateConversationId(myAddress, address);
+        // Also remove from deleted list for generated IDs
+        removeFromDeletedConversations(conversationId, currentUser?.walletAddress);
       }
 
       const newConversation: Conversation = {

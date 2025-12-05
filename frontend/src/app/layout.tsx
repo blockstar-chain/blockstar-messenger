@@ -1,5 +1,8 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
+import WalletProvider from '../utils/wagmiProvider';
+import { cookieToInitialState } from 'wagmi';
+import { config } from '@/utils/wagmi';
 
 // Using system font stack instead of Google Fonts
 const fontClass = 'font-sans';
@@ -21,10 +24,10 @@ export const metadata: Metadata = {
   authors: [{ name: 'BlockStar' }],
   creator: 'BlockStar',
   publisher: 'BlockStar',
-  
+
   // PWA Manifest
   manifest: '/manifest.json',
-  
+
   // Icons
   icons: {
     icon: [
@@ -38,7 +41,7 @@ export const metadata: Metadata = {
     ],
     shortcut: '/favicon/favicon.ico',
   },
-  
+
   // Apple iOS specific
   appleWebApp: {
     capable: true,
@@ -51,7 +54,7 @@ export const metadata: Metadata = {
       },
     ],
   },
-  
+
   // Open Graph for sharing
   openGraph: {
     type: 'website',
@@ -60,7 +63,7 @@ export const metadata: Metadata = {
     description: 'Secure, decentralized Web3 messaging',
     images: [{ url: '/icons/icon-512.png', width: 512, height: 512 }],
   },
-  
+
   // Twitter Card
   twitter: {
     card: 'summary',
@@ -68,14 +71,14 @@ export const metadata: Metadata = {
     description: 'Secure, decentralized Web3 messaging',
     images: ['/icons/icon-512.png'],
   },
-  
+
   // Formatting detection
   formatDetection: {
     telephone: false,
     email: false,
     address: false,
   },
-  
+
   // Other
   other: {
     'mobile-web-app-capable': 'yes',
@@ -91,6 +94,7 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const initialState = cookieToInitialState(config, undefined);
   return (
     <html lang="en" className="dark">
       <head>
@@ -99,19 +103,21 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="apple-mobile-web-app-title" content="BlockStar" />
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
-        
+
         {/* Splash screens for iOS */}
         <link
           rel="apple-touch-startup-image"
           href="/icons/icon-512.png"
           media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3)"
         />
-        
+
         {/* Prevent zoom on input focus (iOS) */}
         <meta name="format-detection" content="telephone=no" />
       </head>
       <body className={`${fontClass} bg-midnight text-white antialiased`}>
-        {children}
+        <WalletProvider initialState={initialState}>
+          {children}
+        </WalletProvider>
       </body>
     </html>
   );

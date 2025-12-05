@@ -330,23 +330,26 @@ export default function GroupSettingsModal({ isOpen, onClose, conversation }: Gr
 
   // Remove member from group
   const handleRemoveMember = async (address: string) => {
-    if (!isCurrentUserAdmin) {
+    const normalizedAddress = address.toLowerCase();
+    const isSelfRemoval = normalizedAddress === currentUser?.walletAddress.toLowerCase();
+    
+    // Check permissions - admins can remove anyone, non-admins can only remove themselves
+    if (!isCurrentUserAdmin && !isSelfRemoval) {
       toast.error('Only admins can remove members');
       return;
     }
 
-    const normalizedAddress = address.toLowerCase();
-
-    // Can't remove the creator
-    if (groupConv.createdBy?.toLowerCase() === normalizedAddress) {
+    // Can't remove the creator (unless they're removing themselves which shouldn't happen via this check)
+    if (groupConv.createdBy?.toLowerCase() === normalizedAddress && !isSelfRemoval) {
       toast.error('Cannot remove the group creator');
       return;
     }
 
-    // Can't remove yourself if you're the only admin
-    if (normalizedAddress === currentUser?.walletAddress.toLowerCase()) {
+    // If leaving, check if you're the only admin
+    if (isSelfRemoval) {
+      const isAdmin = groupConv.admins?.map((a: string) => a.toLowerCase()).includes(normalizedAddress);
       const adminCount = groupConv.admins?.length || 0;
-      if (adminCount <= 1) {
+      if (isAdmin && adminCount <= 1) {
         toast.error('Cannot leave - you are the only admin. Make someone else admin first.');
         return;
       }

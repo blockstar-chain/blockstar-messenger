@@ -665,9 +665,22 @@ export default function ChatArea() {
         
         // Check if this conversation was deleted by the user
         // If so, remove from deleted list so it reappears with the new message
-        if (isConversationDeleted(conversationId, currentUser?.walletAddress)) {
-          console.log('📬 New message for deleted conversation, restoring:', conversationId);
-          removeFromDeletedConversations(conversationId, currentUser?.walletAddress);
+        // Check multiple ID formats (server ObjectId, client-generated ID, etc.)
+        const idsToCheck = new Set<string>();
+        if (conversationId) idsToCheck.add(conversationId);
+        if (conv?.id) idsToCheck.add(conv.id);
+        
+        // For direct messages, also check client-generated ID format
+        if (!isGroupMessage) {
+          const clientStyleId = generateConversationId(senderId, recipientId);
+          idsToCheck.add(clientStyleId);
+        }
+        
+        for (const idToCheck of idsToCheck) {
+          if (isConversationDeleted(idToCheck, currentUser?.walletAddress)) {
+            console.log('📬 New message for deleted conversation, restoring:', idToCheck);
+            removeFromDeletedConversations(idToCheck, currentUser?.walletAddress);
+          }
         }
         
         if (!conv) {
@@ -675,12 +688,7 @@ export default function ChatArea() {
           if (isGroupMessage) {
             // For group messages, try to create the group from groupInfo if available
             // This handles the case where group:created event was missed
-            // IMPORTANT: Reject 'Group Chat' as it's the default fallback name - wait for proper group creation
-            const hasValidGroupName = message.groupInfo && 
-              message.groupInfo.groupName && 
-              message.groupInfo.groupName !== 'Group Chat';
-              
-            if (hasValidGroupName) {
+            if (message.groupInfo && message.groupInfo.groupName) {
               console.log(`📨 Creating group from message groupInfo: ${message.groupInfo.groupName}`);
               
               const newGroup: Conversation = {
@@ -701,9 +709,8 @@ export default function ChatArea() {
               addConversation(newGroup);
               conv = newGroup;
             } else {
-              // No valid groupInfo available - wait for group:created event
+              // No groupInfo available - wait for group:created event
               console.log(`📨 Received message for unknown group ${conversationId}, waiting for group:created event`);
-              console.log(`📨 groupInfo:`, message.groupInfo);
               
               // Save message to IndexedDB so it appears when group is created
               await dbHelpers.saveMessage(displayMessage);
@@ -1490,6 +1497,10 @@ export default function ChatArea() {
       return;
     }
     
+    // IMPORTANT: If user is sending a message to a conversation they previously deleted,
+    // remove it from the deleted list so it won't disappear after logout
+    removeFromDeletedConversations(activeConversationId, currentUser.walletAddress);
+    
     // Determine if this is a group chat - check type or fall back to participant count
     const isGroup = activeConversation?.type === 'group' || 
                     (activeConversation?.participants && activeConversation.participants.length > 2) ||
@@ -1585,30 +1596,14 @@ export default function ChatArea() {
           updatedAt: Date.now()
         });
 
-        // Get the actual group name - NEVER use 'Group Chat' as a fallback
-        // This prevents creating duplicate groups with wrong names
-        const actualGroupName = (activeConversation as any)?.groupName;
-        
-        if (!actualGroupName) {
-          // Try to fetch from database
-          const dbConv = await db.conversations.get(activeConversationId);
-          if (dbConv && (dbConv as any).groupName) {
-            console.log('📨 Fetched group name from DB:', (dbConv as any).groupName);
-          }
-        }
-        
-        const finalGroupName = actualGroupName || 
-          (await db.conversations.get(activeConversationId))?.groupName;
-
         // Get group info to include in message (for recipients who might not have the group yet)
-        // Only include groupInfo if we have a valid group name (not the default 'Group Chat')
-        const groupInfo = finalGroupName ? {
+        const groupInfo = {
           id: activeConversationId,
-          groupName: finalGroupName,
+          groupName: (activeConversation as any)?.groupName || 'Group Chat',
           participants: activeConversation?.participants || [],
           admins: (activeConversation as any)?.admins || [],
           createdBy: (activeConversation as any)?.createdBy || senderId,
-        } : null;
+        };
 
         // Send to group with encrypted payloads for each recipient
         webSocketService.emit('group:message', {
@@ -1619,7 +1614,7 @@ export default function ChatArea() {
             encryptedPayloads, // Each recipient's encrypted copy
           },
           recipients,
-          groupInfo, // Include group metadata for recipients (null if no valid name)
+          groupInfo, // Include group metadata for recipients
         });
         
         console.log('✅ Group message sent with E2E encryption for', Object.keys(encryptedPayloads).length, 'recipients');

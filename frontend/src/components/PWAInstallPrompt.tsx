@@ -25,16 +25,20 @@ export default function PWAInstallPrompt() {
     const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
     setIsIOS(iOS);
 
+    const params = new URLSearchParams(window.location.search);
+    const autoOpen = params.get('open_install_prompt') === 'true';
+
     // Check if user dismissed before
     const dismissed = localStorage.getItem('pwa-install-dismissed');
     const dismissedTime = dismissed ? parseInt(dismissed) : 0;
     const daysSinceDismissed = (Date.now() - dismissedTime) / (1000 * 60 * 60 * 24);
     
     // Don't show if already installed or recently dismissed (within 7 days)
-    if (isInStandaloneMode || daysSinceDismissed < 7) {
+    if ((isInStandaloneMode || daysSinceDismissed < 1) && !autoOpen) {
       return;
     }
 
+  
     // Listen for the beforeinstallprompt event (Android/Desktop Chrome)
     const handleBeforeInstall = (e: Event) => {
       e.preventDefault();
@@ -45,6 +49,7 @@ export default function PWAInstallPrompt() {
     window.addEventListener('beforeinstallprompt', handleBeforeInstall);
 
     // For iOS, show prompt after a delay if not installed
+   
     if (iOS && !isInStandaloneMode) {
       const timer = setTimeout(() => setShowPrompt(true), 3000);
       return () => {

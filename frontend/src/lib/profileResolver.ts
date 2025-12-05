@@ -301,6 +301,63 @@ export function formatUsername(username: string): string {
 }
 
 /**
+ * Resolve multiple profiles by wallet addresses
+ * This is used after loading conversations to sync user profiles
+ */
+export async function resolveProfilesByWallets(walletAddresses: string[]): Promise<Map<string, BlockStarProfile>> {
+  const results = new Map<string, BlockStarProfile>();
+  const toFetch: string[] = [];
+  
+  // Check cache first
+  for (const wallet of walletAddresses) {
+    const normalizedWallet = wallet.toLowerCase();
+    const cached = walletProfileCache.get(normalizedWallet);
+    if (cached && cached.expires > Date.now()) {
+      results.set(normalizedWallet, cached.profile);
+    } else {
+      toFetch.push(normalizedWallet);
+    }
+  }
+  
+  if (toFetch.length === 0) {
+    console.log(`📋 All ${walletAddresses.length} profiles found in cache`);
+    return results;
+  }
+  
+  console.log(`📋 Fetching ${toFetch.length} profiles from server (${results.size} cached)`);
+  
+  try {
+    const response = await fetch(`${API_BASE}/api/profile/resolve/wallets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ walletAddresses: toFetch }),
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      
+      if (data.success && data.profiles) {
+        for (const [wallet, value] of Object.entries(data.profiles)) {
+          if ((value as any).profile) {
+            const profile = (value as any).profile as BlockStarProfile;
+            results.set(wallet.toLowerCase(), profile);
+            
+            // Cache the profile
+            cacheProfile(profile);
+          }
+        }
+      }
+      
+      console.log(`📋 Resolved ${results.size} total profiles`);
+    }
+  } catch (error) {
+    console.error('Error resolving profiles by wallets:', error);
+  }
+  
+  return results;
+}
+
+/**
  * Clear local profile cache
  */
 export function clearProfileCache(username?: string): void {
@@ -325,6 +382,7 @@ export function getCachedProfile(username: string): BlockStarProfile | null {
 export default {
   resolveProfile,
   resolveProfiles,
+  resolveProfilesByWallets,
   getResolverUrl,
   extractNftUsername,
   isBlockStarDomain,
@@ -332,4 +390,5 @@ export default {
   clearProfileCache,
   getCachedProfile,
   cacheProfileByWallet,
+  getProfileByWallet,
 };
