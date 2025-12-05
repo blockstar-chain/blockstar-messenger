@@ -18,10 +18,7 @@ export class BlockchainService {
   private nftContract: ethers.Contract | null = null;
 
   async connectWallet(): Promise<Boolean> {
-    if (typeof window.ethereum === 'undefined') {
-      throw new Error('Please install MetaMask or another Web3 wallet');
-    }
-
+   
     try {
       this.provider = new ethers.JsonRpcProvider(BLOCKSTAR_RPC_URL);
 
