@@ -3,6 +3,7 @@ import { useAppStore } from '@/store';
 import { db, dbHelpers } from '@/lib/database';
 import { webSocketService } from '@/lib/websocket';
 import { webRTCService } from '@/lib/webrtc';
+import { isNative, platform } from '@/lib/mediaPermissions';
 import { encryptionService } from '@/lib/encryption';
 import { voiceMessageService } from '@/lib/voice-message-service';
 import { notificationService } from '@/lib/notifications';
@@ -1838,13 +1839,42 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
     } catch (error: any) {
       toast.dismiss('call-init');
       console.error('Call initiation error:', error);
+      console.error('Error name:', error.name);
+      console.error('Error message:', error.message);
       
-      if (error.name === 'NotAllowedError') {
-        toast.error('Please allow microphone/camera access');
-      } else if (error.name === 'NotFoundError') {
-        toast.error('No microphone/camera found');
+      // Show user-friendly error message
+      // The webRTCService now returns properly formatted error messages
+      const errorMessage = error.message || 'Failed to start call';
+      
+      // Check if it's a permission error and show appropriate message
+      if (errorMessage.toLowerCase().includes('permission denied') || 
+          errorMessage.toLowerCase().includes('permission') ||
+          error.name === 'NotAllowedError') {
+        
+        // Show a more detailed toast with instructions for mobile
+        if (isNative) {
+          if (platform === 'android') {
+            toast.error(
+              '🎤 Microphone permission required!\n\nGo to Settings > Apps > BlockStar > Permissions and enable Microphone.',
+              { duration: 8000 }
+            );
+          } else if (platform === 'ios') {
+            toast.error(
+              '🎤 Microphone permission required!\n\nGo to Settings > BlockStar and enable Microphone.',
+              { duration: 8000 }
+            );
+          } else {
+            toast.error('🎤 ' + errorMessage, { duration: 6000 });
+          }
+        } else {
+          toast.error('🎤 Please allow microphone access in your browser settings', { duration: 5000 });
+        }
+      } else if (errorMessage.toLowerCase().includes('not found') || error.name === 'NotFoundError') {
+        toast.error('🎤 No microphone found. Please connect a microphone.', { duration: 5000 });
+      } else if (errorMessage.toLowerCase().includes('in use') || error.name === 'NotReadableError') {
+        toast.error('🎤 Microphone is in use by another app. Please close other apps.', { duration: 5000 });
       } else {
-        toast.error('Failed to start call: ' + error.message);
+        toast.error('Failed to start call: ' + errorMessage, { duration: 5000 });
       }
     }
   };

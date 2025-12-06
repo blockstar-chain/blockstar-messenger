@@ -89,11 +89,11 @@ export default function AuthPage() {
     }
   };
 
-  // useEffect(() => {
-  //   if(address){
-  //       handleConnectWallet();
-  //   }
-  // }, [address])
+  useEffect(() => {
+    if(address){
+        handleConnectWallet();
+    }
+  }, [address])
 
   const StepIcon = ({ step, icon: Icon }: { step: string; icon: any }) => {
     const isActive = currentStep === step;
@@ -205,10 +205,7 @@ export default function AuthPage() {
 
   
           <ConnectButton isConnecting={isConnecting} className="w-full bg-gradient-to-r from-primary-500 to-cyan-500 hover:from-primary-600 hover:to-cyan-600 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 shadow-glow hover:shadow-glow-lg" />
-          <button onClick={()=>signMessageAsync({message : "This is test"})} className="w-full bg-gradient-to-r from-primary-500 to-cyan-500 hover:from-primary-600 hover:to-cyan-600 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 shadow-glow hover:shadow-glow-lg">
-              Sign Message
-          </button>
-        
+            
           {/* Info */}
           <div className="mt-6 p-4 bg-dark-200 border border-midnight rounded-xl">
             <p className="text-sm text-secondary text-center">

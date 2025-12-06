@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { useAppStore } from '@/store';
 import { webRTCService } from '@/lib/webrtc';
 import { webSocketService } from '@/lib/websocket';
+import { isNative, platform } from '@/lib/mediaPermissions';
 import { Phone, PhoneOff, Video, Users } from 'lucide-react';
 import { truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
 import toast from 'react-hot-toast';
@@ -190,7 +191,37 @@ export default function IncomingCallModal() {
     } catch (error: any) {
       toast.dismiss('call-accept');
       console.error('Error accepting call:', error);
-      toast.error(error.message || 'Failed to connect. Check microphone permissions.');
+      console.error('Error name:', error.name);
+      console.error('Error message:', error.message);
+      
+      // Show user-friendly error message based on platform
+      const errorMessage = error.message || 'Failed to connect';
+      
+      if (errorMessage.toLowerCase().includes('permission denied') || 
+          errorMessage.toLowerCase().includes('permission') ||
+          error.name === 'NotAllowedError') {
+        
+        if (isNative) {
+          if (platform === 'android') {
+            toast.error(
+              '🎤 Microphone permission required!\n\nGo to Settings > Apps > BlockStar > Permissions and enable Microphone.',
+              { duration: 8000 }
+            );
+          } else if (platform === 'ios') {
+            toast.error(
+              '🎤 Microphone permission required!\n\nGo to Settings > BlockStar and enable Microphone.',
+              { duration: 8000 }
+            );
+          } else {
+            toast.error('🎤 ' + errorMessage, { duration: 6000 });
+          }
+        } else {
+          toast.error('🎤 Please allow microphone access in your browser settings', { duration: 5000 });
+        }
+      } else {
+        toast.error(errorMessage, { duration: 5000 });
+      }
+      
       handleReject();
     }
   };

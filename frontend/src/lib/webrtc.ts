@@ -1,5 +1,6 @@
 import SimplePeer from 'simple-peer';
 import { WebRTCConnection } from '@/types';
+import { requestCallPermissions, getPermissionErrorMessage, isNative, platform } from './mediaPermissions';
 
 // Get TURN server config from environment or use free public servers
 const TURN_SERVER_URL = process.env.NEXT_PUBLIC_TURN_SERVER_URL;
@@ -64,9 +65,31 @@ export class WebRTCService {
       console.log('========================================');
       console.log('📱 INITIALIZING LOCAL STREAM');
       console.log('📱 Audio only:', audioOnly);
+      console.log('📱 Platform:', platform, 'isNative:', isNative);
       console.log('========================================');
+
+      // On native platforms, we need to request permissions first
+      // This triggers the native permission dialog
+      if (isNative) {
+        console.log('📱 Native platform detected - requesting permissions first...');
+        
+        const permResult = await requestCallPermissions(!audioOnly);
+        
+        if (!permResult.success) {
+          console.error('❌ Permission request failed:', permResult.error);
+          throw new Error(permResult.error || 'Permission denied');
+        }
+        
+        console.log('✅ Permissions granted:', {
+          microphone: permResult.microphone,
+          camera: permResult.camera,
+        });
+        
+        // Small delay to ensure permissions are fully processed
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
       
-      // First, enumerate devices to check what's available
+      // Now enumerate devices to check what's available
       const devices = await navigator.mediaDevices.enumerateDevices();
       const audioInputs = devices.filter(d => d.kind === 'audioinput');
       const videoInputs = devices.filter(d => d.kind === 'videoinput');
@@ -87,7 +110,7 @@ export class WebRTCService {
         },
       };
 
-      console.log('📱 Requesting getUserMedia...');
+      console.log('📱 Requesting getUserMedia with constraints:', JSON.stringify(constraints));
       this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
       
       console.log('📱 Got stream with', this.localStream.getTracks().length, 'tracks');
@@ -125,11 +148,22 @@ export class WebRTCService {
       return this.localStream;
     } catch (error: any) {
       console.error('❌ Failed to get local stream:', error);
+      console.error('❌ Error name:', error.name);
+      console.error('❌ Error message:', error.message);
       
       // If video failed but audio might work, try audio-only
       if (!audioOnly && (error.name === 'NotFoundError' || error.name === 'NotAllowedError' || error.name === 'NotReadableError')) {
         console.log('📱 Video failed, trying audio-only fallback...');
         try {
+          // On native, request just audio permission
+          if (isNative) {
+            const audioPermResult = await requestCallPermissions(false);
+            if (!audioPermResult.microphone) {
+              throw new Error(getPermissionErrorMessage(error));
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+          
           const audioOnlyConstraints: MediaStreamConstraints = {
             audio: {
               echoCancellation: true,
@@ -153,20 +187,14 @@ export class WebRTCService {
           
           this.startAudioMonitor(this.localStream, 'LOCAL');
           return this.localStream;
-        } catch (audioError) {
+        } catch (audioError: any) {
           console.error('❌ Audio-only fallback also failed:', audioError);
+          throw new Error(getPermissionErrorMessage(audioError));
         }
       }
       
-      if (error.name === 'NotAllowedError') {
-        throw new Error('Microphone permission denied');
-      } else if (error.name === 'NotFoundError') {
-        throw new Error('No microphone found');
-      } else if (error.name === 'NotReadableError') {
-        throw new Error('Microphone in use by another app');
-      }
-      
-      throw error;
+      // Return user-friendly error message
+      throw new Error(getPermissionErrorMessage(error));
     }
   }
 
