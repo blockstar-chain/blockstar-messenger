@@ -4,7 +4,7 @@ import { webSocketService } from '@/lib/websocket';
 import { webRTCService } from '@/lib/webrtc';
 import { syncFromServer } from '@/lib/syncService';
 import { db } from '@/lib/database';
-import toast, { Toaster } from 'react-hot-toast';
+import toast from 'react-hot-toast';
 import Sidebar from './Sidebar';
 import ChatArea from './ChatArea';
 import CallModal from './CallModal';
@@ -17,9 +17,7 @@ export default function MainLayout() {
     currentUser, 
     isAuthenticated, 
     isSidebarOpen,
-    setSidebarOpen,
     setIncomingCall,
-    activeCall,
     setActiveCall,
     setCallModalOpen,
     setConversations,
@@ -349,27 +347,6 @@ export default function MainLayout() {
 
   return (
     <div className="flex h-[100dvh] bg-midnight overflow-hidden">
-      <Toaster
-        position="top-center"
-        containerClassName="!top-safe"
-        toastOptions={{
-          duration: 3000,
-          style: {
-            background: '#06060c',
-            color: '#fff',
-            border: '1px solid #12121f',
-            borderRadius: '12px',
-            fontSize: '14px',
-            maxWidth: '90vw',
-          },
-          success: {
-            iconTheme: { primary: '#00d67f', secondary: '#fff' },
-          },
-          error: {
-            iconTheme: { primary: '#ff3b5c', secondary: '#fff' },
-          },
-        }}
-      />
       
       {/* Desktop Layout: Sidebar always visible */}
       <div className="hidden md:flex md:w-80 lg:w-96 flex-shrink-0 h-full">

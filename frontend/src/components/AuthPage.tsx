@@ -10,10 +10,12 @@ import logoImg from '@/images/logo.png';
 import Image from 'next/image';
 import ConnectButton from './ConnectButton';
 import { useAppKitAccount } from '@reown/appkit/react';
+import { useSignMessage } from 'wagmi';
 
 
 export default function AuthPage() {
   const { address } = useAppKitAccount();
+  const { signMessageAsync } = useSignMessage();
   const { setCurrentUser, setAuthenticated } = useAppStore();
   const [isConnecting, setIsConnecting] = useState(false);
   const [currentStep, setCurrentStep] = useState<'connect' | 'verify' | 'encrypt'>('connect');
@@ -44,7 +46,7 @@ export default function AuthPage() {
 
       // Initialize encryption with wallet-derived keys
       const signMessageFn = async (message: string) => {
-        return await blockchainService.signMessage(message);
+        return await signMessageAsync({message});
       };
 
       await encryptionService.initialize(address, signMessageFn);

@@ -117,7 +117,27 @@ export default function RootLayout({
       </head>
       <body className={`${fontClass} bg-midnight text-white antialiased`}>
         <WalletProvider initialState={initialState}>
-          <Toaster position='top-right' />
+          <Toaster
+            position="top-center"
+            containerClassName="!top-safe"
+            toastOptions={{
+              duration: 3000,
+              style: {
+                background: '#06060c',
+                color: '#fff',
+                border: '1px solid #12121f',
+                borderRadius: '12px',
+                fontSize: '14px',
+                maxWidth: '90vw',
+              },
+              success: {
+                iconTheme: { primary: '#00d67f', secondary: '#fff' },
+              },
+              error: {
+                iconTheme: { primary: '#ff3b5c', secondary: '#fff' },
+              },
+            }}
+          />
           {children}
         </WalletProvider>
       </body>

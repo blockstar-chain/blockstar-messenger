@@ -1244,7 +1244,9 @@ export default function Sidebar({
 
         {/* Content based on active tab */}
         {activeTab === 'contacts' ? (
-          <ContactsSection onConversationSelect={onConversationSelect} />
+          <div className="flex-1 overflow-hidden min-h-0">
+            <ContactsSection onConversationSelect={onConversationSelect} />
+          </div>
         ) : (
           <>
         {/* Conversations List */}

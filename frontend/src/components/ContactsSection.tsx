@@ -33,7 +33,11 @@ let currentUserWallet: string | null = null;
 // Cache for contacts (for sync helper)
 let contactsCache: Set<string> = new Set();
 
-export default function ContactsSection() {
+interface ContactsSectionProps {
+  onConversationSelect?: () => void;
+}
+
+export default function ContactsSection({ onConversationSelect }: ContactsSectionProps) {
   const { currentUser, setActiveConversation, addConversation, conversations } = useAppStore();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [filteredContacts, setFilteredContacts] = useState<Contact[]>([]);
@@ -75,13 +79,45 @@ export default function ContactsSection() {
         
         if (data.success && data.contacts) {
           // First, collect all wallet addresses
-          const walletAddresses = data.contacts.map((c: ServerContact) => c.contact_wallet);
+          const walletAddresses = data.contacts.map((c: ServerContact) => c.contact_wallet.toLowerCase());
           
-          // Batch resolve all profiles at once (more efficient)
+          console.log(`📋 Loading ${walletAddresses.length} contacts, resolving profiles...`);
+          
+          // Step 1: Try batch resolve (uses cache and bulk endpoint)
           const profilesMap = await resolveProfilesByWallets(walletAddresses);
+          
+          // Step 2: For any missing profiles, try fetching from backend profile endpoint
+          const missingWallets = walletAddresses.filter((w: string) => !profilesMap.has(w));
+          
+          if (missingWallets.length > 0) {
+            console.log(`📋 ${missingWallets.length} profiles not in cache, fetching from backend...`);
+            
+            // Fetch profiles individually from backend (they might have nftName stored)
+            await Promise.all(missingWallets.map(async (wallet: string) => {
+              try {
+                const profileResponse = await fetch(`${API_URL}/api/profile/${wallet}`);
+                if (profileResponse.ok) {
+                  const profileData = await profileResponse.json();
+                  if (profileData.success && profileData.profile?.nftName) {
+                    // Resolve the full profile from NFT domain
+                    const resolved = await resolveProfile(profileData.profile.nftName);
+                    if (resolved) {
+                      profilesMap.set(wallet, resolved);
+                      // Cache it for future use
+                      cacheProfileByWallet(wallet, resolved);
+                      console.log(`📋 Resolved profile for ${wallet}: @${resolved.username}`);
+                    }
+                  }
+                }
+              } catch (err) {
+                // Individual fetch failed, continue with others
+              }
+            }));
+          }
           
           // Convert server format to client format with resolved profiles
           const contactsWithProfiles = data.contacts.map((serverContact: ServerContact) => {
+            const wallet = serverContact.contact_wallet.toLowerCase();
             const contact: Contact = {
               id: serverContact.id,
               walletAddress: serverContact.contact_wallet,
@@ -91,10 +127,13 @@ export default function ContactsSection() {
             };
             
             // Get profile from the batch result
-            const profile = profilesMap.get(serverContact.contact_wallet.toLowerCase()) || null;
+            const profile = profilesMap.get(wallet) || null;
             
             return { ...contact, profile };
           });
+          
+          const withProfiles = contactsWithProfiles.filter((c: Contact) => c.profile).length;
+          console.log(`📋 Loaded ${contactsWithProfiles.length} contacts, ${withProfiles} with @names`);
           
           // Sort contacts alphabetically by display name (nickname > @username > wallet address)
           const sortedContacts = contactsWithProfiles.sort((a: Contact, b: Contact) => {
@@ -404,6 +443,7 @@ export default function ContactsSection() {
     
     if (existingConv) {
       setActiveConversation(conversationId);
+      onConversationSelect?.();
     } else {
       // Create new conversation locally
       const newConv = {
@@ -418,6 +458,7 @@ export default function ContactsSection() {
       await db.conversations.put(newConv);
       addConversation(newConv);
       setActiveConversation(conversationId);
+      onConversationSelect?.();
     }
   };
 
@@ -432,13 +473,14 @@ export default function ContactsSection() {
 
   return (
     <>
-      <div className="flex flex-col h-full">
-        {/* Header */}
-        <div className="p-4 border-b border-midnight">
-          <div className="flex items-center justify-between mb-4">
+      {/* Remove h-full since parent controls height; use flex to fill available space */}
+      <div className="flex flex-col min-h-0 h-full">
+        {/* Header - fixed height */}
+        <div className="p-3 md:p-4 border-b border-midnight flex-shrink-0">
+          <div className="flex items-center justify-between mb-3 md:mb-4">
             <div className="flex items-center gap-2">
               <Users size={20} className="text-primary-400" />
-              <h2 className="text-lg font-semibold text-white">Contacts</h2>
+              <h2 className="text-base md:text-lg font-semibold text-white">Contacts</h2>
               <span className="text-xs text-muted bg-dark-200 px-2 py-0.5 rounded-full">
                 {contacts.length}
               </span>
@@ -446,7 +488,7 @@ export default function ContactsSection() {
             <div className="flex items-center gap-2">
               <button
                 onClick={loadContacts}
-                className="p-2 text-muted hover:text-white hover:bg-dark-200 rounded-lg transition"
+                className="p-2.5 md:p-2 text-muted hover:text-white hover:bg-dark-200 rounded-lg transition active:bg-dark-100"
                 title="Refresh contacts"
                 disabled={loadingContacts}
               >
@@ -454,7 +496,7 @@ export default function ContactsSection() {
               </button>
               <button
                 onClick={() => setShowAddModal(true)}
-                className="p-2 bg-primary-500 hover:bg-primary-600 text-white rounded-lg transition"
+                className="p-2.5 md:p-2 bg-primary-500 hover:bg-primary-600 text-white rounded-lg transition active:bg-primary-700"
                 title="Add Contact"
               >
                 <UserPlus size={18} />
@@ -470,13 +512,14 @@ export default function ContactsSection() {
               placeholder="Search contacts..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 bg-card border border-midnight rounded-xl text-white placeholder-muted focus:outline-none focus:border-primary-500 transition"
+              className="w-full pl-10 pr-4 py-2.5 bg-card border border-midnight rounded-xl text-white placeholder-muted focus:outline-none focus:border-primary-500 transition text-base"
+              style={{ fontSize: '16px' }}
             />
           </div>
         </div>
 
-        {/* Contacts List */}
-        <div className="flex-1 overflow-y-auto">
+        {/* Contacts List - scrollable, takes remaining space */}
+        <div className="flex-1 overflow-y-auto min-h-0">
           {loadingContacts ? (
             <div className="flex items-center justify-center h-full">
               <div className="w-8 h-8 border-2 border-primary-500/30 border-t-primary-500 rounded-full animate-spin" />
