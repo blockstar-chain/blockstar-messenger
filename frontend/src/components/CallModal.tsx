@@ -2,7 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '@/store';
 import { webRTCService } from '@/lib/webrtc';
 import { webSocketService } from '@/lib/websocket';
-import { PhoneOff, Mic, MicOff, Video, VideoOff, Users } from 'lucide-react';
+import { initCallAudio, resetCallAudio, toggleSpeaker, isSpeakerEnabled } from '@/lib/audioRouting';
+import { isNative } from '@/lib/mediaPermissions';
+import { PhoneOff, Mic, MicOff, Video, VideoOff, Users, Volume2, VolumeX } from 'lucide-react';
 import { truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
 import { resolveProfile, type BlockStarProfile } from '@/lib/profileResolver';
 import toast from 'react-hot-toast';
@@ -18,6 +20,7 @@ export default function CallModal() {
   const { activeCall, setActiveCall, isCallModalOpen, setCallModalOpen, currentUser } = useAppStore();
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
+  const [isSpeakerOn, setIsSpeakerOn] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
   const [callStatus, setCallStatus] = useState<'connecting' | 'ringing' | 'active' | 'ended'>('connecting');
   const [hasRemoteStream, setHasRemoteStream] = useState(false);
@@ -201,13 +204,24 @@ export default function CallModal() {
     loadProfiles();
   }, [activeCall?.participants, isGroupCall, currentUser?.walletAddress, currentUser?.avatar, API_URL]);
 
-  // Set up local video when modal opens
+  // Set up local video and audio routing when modal opens
   useEffect(() => {
     if (!activeCall || !isCallModalOpen) return;
 
     hasEnded.current = false;
     setHasRemoteStream(false);
     setRemoteAudioPlaying(false);
+    setIsSpeakerOn(false);
+    
+    // Initialize call audio routing (earpiece mode for native)
+    if (isNative) {
+      console.log('📞 Initializing call audio routing...');
+      initCallAudio().then(() => {
+        console.log('✅ Call audio initialized - using earpiece');
+      }).catch(err => {
+        console.error('❌ Failed to initialize call audio:', err);
+      });
+    }
     
     // Get the existing local stream and display it
     const localStream = webRTCService.getLocalStream();
@@ -215,6 +229,13 @@ export default function CallModal() {
       localVideoRef.current.srcObject = localStream;
     }
 
+    // Cleanup: reset audio routing when modal closes
+    return () => {
+      if (isNative) {
+        console.log('📞 Resetting call audio routing...');
+        resetCallAudio();
+      }
+    };
   }, [activeCall?.id, isCallModalOpen]);
 
   // Watch for call status changes from store
@@ -403,6 +424,16 @@ export default function CallModal() {
   const handleToggleVideo = () => {
     const enabled = webRTCService.toggleVideo();
     setIsVideoEnabled(enabled);
+  };
+
+  const handleToggleSpeaker = async () => {
+    try {
+      const speakerOn = await toggleSpeaker();
+      setIsSpeakerOn(speakerOn);
+      toast.success(speakerOn ? '🔊 Speaker on' : '📱 Using earpiece', { duration: 2000 });
+    } catch (error) {
+      console.error('Failed to toggle speaker:', error);
+    }
   };
 
   const handlePlayAudio = () => {
@@ -848,7 +879,8 @@ export default function CallModal() {
 
         {/* Call Controls */}
         <div className="absolute bottom-12 left-1/2 -translate-x-1/2">
-          <div className="flex items-center gap-6 bg-card/80 backdrop-blur-sm px-8 py-4 rounded-full border border-midnight">
+          <div className="flex items-center gap-4 bg-card/80 backdrop-blur-sm px-6 py-4 rounded-full border border-midnight">
+            {/* Mute Button */}
             <button
               onClick={handleToggleAudio}
               className={`p-4 rounded-full transition-all duration-200 ${
@@ -865,6 +897,26 @@ export default function CallModal() {
               )}
             </button>
 
+            {/* Speaker Toggle Button (for native mobile) */}
+            {isNative && (
+              <button
+                onClick={handleToggleSpeaker}
+                className={`p-4 rounded-full transition-all duration-200 ${
+                  isSpeakerOn 
+                    ? 'bg-primary-500 hover:bg-primary-600' 
+                    : 'bg-dark-200 hover:bg-dark-100'
+                }`}
+                title={isSpeakerOn ? 'Use earpiece' : 'Use speaker'}
+              >
+                {isSpeakerOn ? (
+                  <Volume2 size={24} className="text-white" />
+                ) : (
+                  <VolumeX size={24} className="text-white" />
+                )}
+              </button>
+            )}
+
+            {/* End Call Button */}
             <button
               onClick={() => handleEndCall(false)}
               className="p-5 bg-danger-500 hover:bg-danger-600 rounded-full transition-all duration-200 transform hover:scale-105 shadow-glow"
@@ -873,6 +925,7 @@ export default function CallModal() {
               <PhoneOff size={28} className="text-white" />
             </button>
 
+            {/* Video Toggle Button */}
             {isVideoCall && (
               <button
                 onClick={handleToggleVideo}
