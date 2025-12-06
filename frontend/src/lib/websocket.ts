@@ -183,7 +183,7 @@ export class WebSocketService {
   /**
    * Initiate a call
    */
-  initiateCall(recipientAddress: string, callType: 'audio' | 'video', offer: any, callId: string): void {
+  initiateCall(recipientAddress: string, callType: 'audio' | 'video', offer: any, callId: string, callerName?: string): void {
     if (!this.socket || !this.socket.connected) {
       throw new Error('Not connected to messaging server');
     }
@@ -192,6 +192,7 @@ export class WebSocketService {
       recipientAddress,
       callType,
       callId,
+      callerName,
       hasOffer: !!offer,
     });
 
@@ -200,6 +201,7 @@ export class WebSocketService {
       callType,
       offer,
       callId,
+      callerName, // Include caller's @name so recipient can display it
     });
   }
 

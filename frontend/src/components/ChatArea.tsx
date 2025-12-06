@@ -1799,13 +1799,17 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         
         let offerSent = false;
         
+        // Get caller name for display on recipient side
+        const callerName = currentUser.username?.replace('@', '') || '';
+        
         webRTCService.createCall(
           callId,
           type === 'audio',
           (signal) => {
             if (signal.type === 'offer' && !offerSent) {
               console.log('📤 Sending OFFER to:', otherParticipant);
-              webSocketService.initiateCall(otherParticipant!, type, signal, callId);
+              console.log('📤 Caller name:', callerName);
+              webSocketService.initiateCall(otherParticipant!, type, signal, callId, callerName);
               offerSent = true;
             } else if (signal.candidate || signal.type === 'candidate') {
               console.log('📤 Sending ICE candidate');

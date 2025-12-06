@@ -2,12 +2,24 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '@/store';
 import { webRTCService } from '@/lib/webrtc';
 import { webSocketService } from '@/lib/websocket';
-import { initCallAudio, resetCallAudio, toggleSpeaker, isSpeakerEnabled } from '@/lib/audioRouting';
-import { isNative } from '@/lib/mediaPermissions';
-import { PhoneOff, Mic, MicOff, Video, VideoOff, Users, Volume2, VolumeX } from 'lucide-react';
+import { initCallAudio, resetCallAudio, toggleSpeaker } from '@/lib/audioRouting';
+import { Capacitor } from '@capacitor/core';
+import { PhoneOff, Mic, MicOff, Video, VideoOff, Users, Volume2, Volume1 } from 'lucide-react';
 import { truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
 import { resolveProfile, type BlockStarProfile } from '@/lib/profileResolver';
 import toast from 'react-hot-toast';
+
+// Check if running on mobile (native or mobile browser)
+const isMobileDevice = () => {
+  if (typeof window === 'undefined') return false;
+  
+  // Check Capacitor native platform
+  if (Capacitor.isNativePlatform()) return true;
+  
+  // Check for mobile browser
+  const userAgent = navigator.userAgent || navigator.vendor || (window as any).opera;
+  return /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(userAgent.toLowerCase());
+};
 
 interface ParticipantStream {
   address: string;
@@ -213,11 +225,17 @@ export default function CallModal() {
     setRemoteAudioPlaying(false);
     setIsSpeakerOn(false);
     
-    // Initialize call audio routing (earpiece mode for native)
-    if (isNative) {
-      console.log('📞 Initializing call audio routing...');
+    const isMobile = isMobileDevice();
+    
+    // Initialize call audio routing (earpiece mode for mobile)
+    if (isMobile) {
+      console.log('📞 Mobile device detected - initializing call audio routing...');
+      console.log('📞 Capacitor native:', Capacitor.isNativePlatform());
+      console.log('📞 Platform:', Capacitor.getPlatform());
+      
       initCallAudio().then(() => {
         console.log('✅ Call audio initialized - using earpiece');
+        toast.success('📱 Using earpiece', { duration: 2000 });
       }).catch(err => {
         console.error('❌ Failed to initialize call audio:', err);
       });
@@ -231,7 +249,7 @@ export default function CallModal() {
 
     // Cleanup: reset audio routing when modal closes
     return () => {
-      if (isNative) {
+      if (isMobile) {
         console.log('📞 Resetting call audio routing...');
         resetCallAudio();
       }
@@ -897,8 +915,8 @@ export default function CallModal() {
               )}
             </button>
 
-            {/* Speaker Toggle Button (for native mobile) */}
-            {isNative && (
+            {/* Speaker Toggle Button (for mobile devices) */}
+            {isMobileDevice() && (
               <button
                 onClick={handleToggleSpeaker}
                 className={`p-4 rounded-full transition-all duration-200 ${
@@ -911,7 +929,7 @@ export default function CallModal() {
                 {isSpeakerOn ? (
                   <Volume2 size={24} className="text-white" />
                 ) : (
-                  <VolumeX size={24} className="text-white" />
+                  <Volume1 size={24} className="text-white" />
                 )}
               </button>
             )}

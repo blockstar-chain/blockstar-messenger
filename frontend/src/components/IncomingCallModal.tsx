@@ -1,15 +1,66 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '@/store';
 import { webRTCService } from '@/lib/webrtc';
 import { webSocketService } from '@/lib/websocket';
 import { isNative, platform } from '@/lib/mediaPermissions';
+import { initCallAudio } from '@/lib/audioRouting';
 import { Phone, PhoneOff, Video, Users } from 'lucide-react';
 import { truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
+import { resolveProfile, type BlockStarProfile } from '@/lib/profileResolver';
 import toast from 'react-hot-toast';
 
 export default function IncomingCallModal() {
   const { incomingCall, setIncomingCall, setActiveCall, setCallModalOpen, currentUser } = useAppStore();
   const ringtoneRef = useRef<HTMLAudioElement | null>(null);
+  const [callerProfile, setCallerProfile] = useState<BlockStarProfile | null>(null);
+  const [avatarFailed, setAvatarFailed] = useState(false);
+
+  const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
+
+  // Load caller profile when incoming call arrives
+  useEffect(() => {
+    if (!incomingCall?.callerId) return;
+
+    const loadCallerProfile = async () => {
+      try {
+        console.log('📞 Loading caller profile for:', incomingCall.callerId);
+        
+        // First check if callerName was passed with the call
+        if ((incomingCall as any).callerName) {
+          console.log('📞 Using callerName from call data:', (incomingCall as any).callerName);
+          const profile = await resolveProfile((incomingCall as any).callerName);
+          if (profile) {
+            console.log('✅ Resolved caller profile:', profile.username, profile.avatar);
+            setCallerProfile(profile);
+            return;
+          }
+        }
+
+        // Try to fetch from backend API
+        const response = await fetch(`${API_URL}/api/profile/${incomingCall.callerId.toLowerCase()}`);
+        if (response.ok) {
+          const data = await response.json();
+          console.log('📞 Caller profile API response:', data);
+          
+          if (data.success && data.profile?.nftName) {
+            const profile = await resolveProfile(data.profile.nftName);
+            if (profile) {
+              console.log('✅ Resolved caller profile:', profile.username, profile.avatar);
+              setCallerProfile(profile);
+              return;
+            }
+          }
+        }
+
+        console.log('⚠️ Could not resolve caller profile');
+      } catch (error) {
+        console.error('Error loading caller profile:', error);
+      }
+    };
+
+    loadCallerProfile();
+    setAvatarFailed(false);
+  }, [incomingCall?.callerId, API_URL]);
 
   // Play ringtone
   useEffect(() => {
@@ -54,6 +105,15 @@ export default function IncomingCallModal() {
     try {
       toast.loading('Connecting...', { id: 'call-accept' });
       
+      // Initialize call audio routing FIRST (earpiece mode)
+      console.log('📞 Initializing call audio routing...');
+      try {
+        await initCallAudio();
+        console.log('✅ Call audio initialized - using earpiece');
+      } catch (audioErr) {
+        console.warn('⚠️ Could not initialize call audio routing:', audioErr);
+      }
+      
       const audioOnly = incomingCall.type === 'audio';
       
       console.log('========================================');
@@ -61,6 +121,7 @@ export default function IncomingCallModal() {
       console.log('   Call ID:', incomingCall.id);
       console.log('   Call type:', incomingCall.type);
       console.log('   Caller:', incomingCall.callerId);
+      console.log('   Caller name:', callerProfile?.username || 'unknown');
       console.log('   Is group call:', isGroupCall);
       console.log('========================================');
       
@@ -134,11 +195,12 @@ export default function IncomingCallModal() {
           sessionStorage.removeItem('incomingCallOffer');
         }
 
-        // Set active call with group properties
+        // Set active call with group properties and caller info
         setActiveCall({ 
           ...incomingCall, 
           status: 'active',
           isGroupCall: true,
+          callerProfile: callerProfile,
         });
       } else {
         // DIRECT CALL ACCEPT
@@ -179,8 +241,12 @@ export default function IncomingCallModal() {
           console.error('❌ No offer found in session storage!');
         }
 
-        // Set active call
-        setActiveCall({ ...incomingCall, status: 'active' });
+        // Set active call with caller profile info
+        setActiveCall({ 
+          ...incomingCall, 
+          status: 'active',
+          callerProfile: callerProfile,
+        });
       }
       
       setIncomingCall(null);
@@ -245,13 +311,18 @@ export default function IncomingCallModal() {
     }
     
     sessionStorage.removeItem('incomingCallOffer');
+    setCallerProfile(null);
     setIncomingCall(null);
   };
 
   const isVideoCall = incomingCall.type === 'video';
+  
+  // Get display name - prefer @username over wallet address
   const displayName = isGroupCall 
     ? ((incomingCall as any).groupName || 'Group Call')
-    : truncateAddress(incomingCall.callerId);
+    : callerProfile?.username 
+      ? `@${callerProfile.username}`
+      : truncateAddress(incomingCall.callerId);
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center">
@@ -259,13 +330,22 @@ export default function IncomingCallModal() {
         <div className="text-center">
           {/* Caller avatar with animation */}
           <div className="relative inline-block mb-6">
-            <div className={`w-28 h-28 rounded-full flex items-center justify-center text-white text-3xl font-semibold shadow-glow-lg ${
-              isGroupCall 
-                ? 'bg-gradient-to-br from-purple-500 to-pink-500' 
-                : 'bg-gradient-to-br from-primary-500 to-cyan-500'
-            }`}>
-              {isGroupCall ? <Users size={48} /> : getInitials(incomingCall.callerId)}
-            </div>
+            {callerProfile?.avatar && !avatarFailed ? (
+              <img
+                src={callerProfile.avatar}
+                alt=""
+                className="w-28 h-28 rounded-full object-cover shadow-glow-lg ring-4 ring-primary-500"
+                onError={() => setAvatarFailed(true)}
+              />
+            ) : (
+              <div className={`w-28 h-28 rounded-full flex items-center justify-center text-white text-3xl font-semibold shadow-glow-lg ${
+                isGroupCall 
+                  ? 'bg-gradient-to-br from-purple-500 to-pink-500' 
+                  : getAvatarColor(callerProfile?.username || incomingCall.callerId)
+              }`}>
+                {isGroupCall ? <Users size={48} /> : getInitials(callerProfile?.username || incomingCall.callerId)}
+              </div>
+            )}
             {/* Animated ring */}
             <div className="absolute inset-0 rounded-full border-4 border-primary-500 animate-ping opacity-30" />
           </div>
@@ -274,17 +354,25 @@ export default function IncomingCallModal() {
             Incoming {isGroupCall ? 'Group ' : ''}{isVideoCall ? 'Video' : 'Voice'} Call
           </h2>
           
-          <p className="text-secondary mb-2">
+          {/* Display @username or wallet address */}
+          <p className="text-secondary text-lg mb-1">
             {displayName}
           </p>
           
-          {isGroupCall && (
+          {/* Show wallet address as secondary info if we have a username */}
+          {!isGroupCall && callerProfile?.username && (
             <p className="text-xs text-muted mb-6">
-              From: {truncateAddress(incomingCall.callerId)}
+              {truncateAddress(incomingCall.callerId)}
             </p>
           )}
           
-          {!isGroupCall && <div className="mb-8" />}
+          {isGroupCall && (
+            <p className="text-xs text-muted mb-6">
+              From: {callerProfile?.username ? `@${callerProfile.username}` : truncateAddress(incomingCall.callerId)}
+            </p>
+          )}
+          
+          {!isGroupCall && !callerProfile?.username && <div className="mb-8" />}
 
           {/* Action buttons */}
           <div className="flex justify-center gap-8">
