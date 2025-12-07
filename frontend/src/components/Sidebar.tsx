@@ -721,7 +721,7 @@ export default function Sidebar({
     setLoadingProfile(true);
 
     let targetAddress = addressToUse;
-        console.log('targetAddress' , targetAddress)
+        
     // Check if it's an @name format (e.g., "@david", "david@blockstar" or just "david")
     if (!targetAddress.startsWith('0x')) {
   

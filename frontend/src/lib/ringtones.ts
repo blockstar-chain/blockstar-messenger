@@ -19,23 +19,21 @@ export interface RingtoneSettings {
 // Available ringtones
 export const RINGTONES: RingtoneOption[] = [
   // Incoming call ringtones
-  { id: 'incoming-gentle', name: 'Gentle Ring', file: '/sounds/ringtones/incoming-gentle.mp3', category: 'incoming' },
-  { id: 'incoming-classic', name: 'Classic Phone', file: '/sounds/ringtones/incoming-classic.mp3', category: 'incoming' },
   { id: 'incoming-modern', name: 'Modern Pulse', file: '/sounds/ringtones/incoming-modern.mp3', category: 'incoming' },
-  { id: 'incoming-chime', name: 'Crystal Chime', file: '/sounds/ringtones/incoming-chime.mp3', category: 'incoming' },
-  { id: 'incoming-aurora', name: 'Aurora', file: '/sounds/ringtones/incoming-aurora.mp3', category: 'incoming' },
+  { id: 'incoming-classic', name: 'Classic Phone', file: '/sounds/ringtones/incoming-classic.mp3', category: 'incoming' },
+  { id: 'incoming-gentle', name: 'Gentle Ring', file: '/sounds/ringtones/incoming-gentle.mp3', category: 'incoming' },
+  
   
   // Outgoing call tones (ringback tones)
-  { id: 'outgoing-standard', name: 'Standard Ring', file: '/sounds/ringtones/outgoing-standard.mp3', category: 'outgoing' },
-  { id: 'outgoing-soft', name: 'Soft Pulse', file: '/sounds/ringtones/outgoing-soft.mp3', category: 'outgoing' },
-  { id: 'outgoing-digital', name: 'Digital Tone', file: '/sounds/ringtones/outgoing-digital.mp3', category: 'outgoing' },
+  { id: 'outgoing-modern', name: 'Modern Pulse', file: '/sounds/ringtones/outgoing-modern.mp3', category: 'outgoing' },
+  { id: 'outgoing-classic', name: 'Classic Phone', file: '/sounds/ringtones/outgoing-classic.mp3', category: 'outgoing' },
+  { id: 'outgoing-gentle', name: 'Gentle Ring', file: '/sounds/ringtones/outgoing-gentle.mp3', category: 'outgoing' },
   
   // Message notification sounds
-  { id: 'message-pop', name: 'Pop', file: '/sounds/ringtones/message-pop.mp3', category: 'message' },
-  { id: 'message-chime', name: 'Chime', file: '/sounds/ringtones/message-chime.mp3', category: 'message' },
-  { id: 'message-ding', name: 'Ding', file: '/sounds/ringtones/message-ding.mp3', category: 'message' },
-  { id: 'message-bubble', name: 'Bubble', file: '/sounds/ringtones/message-bubble.mp3', category: 'message' },
   { id: 'message-subtle', name: 'Subtle', file: '/sounds/ringtones/message-subtle.mp3', category: 'message' },
+  { id: 'message-chime', name: 'Chime', file: '/sounds/ringtones/message-chime.mp3', category: 'message' },
+  { id: 'message-sonar', name: 'Sonar', file: '/sounds/ringtones/message-sonar.mp3', category: 'message' },
+  
 ];
 
 const STORAGE_KEY = 'blockstar_ringtone_settings';
