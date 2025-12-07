@@ -29,7 +29,7 @@ public class IncomingCallService extends Service {
         );
 
         Notification notification = new NotificationCompat.Builder(this, "incoming_calls")
-                .setSmallIcon(R.drawable.ic_call)
+                .setSmallIcon(android.R.drawable.sym_call_incoming)
                 .setContentTitle("Incoming Call")
                 .setContentText(caller + " is calling…")
                 .setPriority(NotificationCompat.PRIORITY_MAX)
