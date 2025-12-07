@@ -4,6 +4,7 @@ import { webRTCService } from '@/lib/webrtc';
 import { webSocketService } from '@/lib/websocket';
 import { isNative, platform } from '@/lib/mediaPermissions';
 import { initCallAudio } from '@/lib/audioRouting';
+import { ringtoneService } from '@/lib/ringtones';
 import { Phone, PhoneOff, Video, Users } from 'lucide-react';
 import { truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
 import { resolveProfile, type BlockStarProfile } from '@/lib/profileResolver';
@@ -62,15 +63,13 @@ export default function IncomingCallModal() {
     setAvatarFailed(false);
   }, [incomingCall?.callerId, API_URL]);
 
-  // Play ringtone
+  // Play ringtone using ringtone service
   useEffect(() => {
     if (incomingCall) {
-      // Create and play ringtone
-      ringtoneRef.current = new Audio('/sounds/ringtone.mp3');
-      ringtoneRef.current.loop = true;
-      ringtoneRef.current.volume = 0.5;
-      ringtoneRef.current.play().catch(() => {
-        // Autoplay might be blocked
+      // Play incoming call ringtone from service
+      ringtoneService.playIncomingRingtone().then(audio => {
+        ringtoneRef.current = audio;
+      }).catch(() => {
         console.log('Ringtone autoplay blocked');
       });
 
@@ -82,10 +81,8 @@ export default function IncomingCallModal() {
 
       return () => {
         clearTimeout(timeout);
-        if (ringtoneRef.current) {
-          ringtoneRef.current.pause();
-          ringtoneRef.current = null;
-        }
+        ringtoneService.stopCurrentSound();
+        ringtoneRef.current = null;
       };
     }
   }, [incomingCall]);
@@ -96,11 +93,8 @@ export default function IncomingCallModal() {
     (Array.isArray(incomingCall.participants) && incomingCall.participants.length > 2);
 
   const handleAccept = async () => {
-    // Stop ringtone
-    if (ringtoneRef.current) {
-      ringtoneRef.current.pause();
-      ringtoneRef.current = null;
-    }
+    // Stop ringtone using service
+    ringtoneService.stopCurrentSound();
 
     try {
       toast.loading('Connecting...', { id: 'call-accept' });
@@ -293,11 +287,8 @@ export default function IncomingCallModal() {
   };
 
   const handleReject = () => {
-    // Stop ringtone
-    if (ringtoneRef.current) {
-      ringtoneRef.current.pause();
-      ringtoneRef.current = null;
-    }
+    // Stop ringtone using service
+    ringtoneService.stopCurrentSound();
 
     if (incomingCall) {
       if (isGroupCall) {

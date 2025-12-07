@@ -18,6 +18,7 @@ import { addToContacts, isContact } from './ContactsSection';
 import MeshStatusIndicator from './MeshStatusIndicator';
 import MeshQRConnect from './MeshQRConnect';
 import NotificationSettingsPanel from './NotificationSettings';
+import RingtoneSettingsPanel from './RingtoneSettings';
 import { useDisconnect } from '@reown/appkit/react';
 
 // Cache for decrypted message previews
@@ -150,16 +151,17 @@ export default function Sidebar({
   const [memberInput, setMemberInput] = useState('');
   const [groupMemberProfiles, setGroupMemberProfiles] = useState<Record<string, BlockStarProfile | null>>({});
   const [groupAddMode, setGroupAddMode] = useState<'search' | 'contacts'>('search');
+  const [directAddMode, setDirectAddMode] = useState<'search' | 'contacts'>('search');
   const [availableContacts, setAvailableContacts] = useState<Array<{ walletAddress: string; nickname?: string; profile?: BlockStarProfile | null }>>([]);
   
   // Profile modal state
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [selectedProfileAddress, setSelectedProfileAddress] = useState<string | null>(null);
 
-  // Load contacts for group creation when switching to group mode
+  // Load contacts when showing new chat modal
   useEffect(() => {
-    const loadContactsForGroup = async () => {
-      if (chatMode !== 'group' || !currentUser?.walletAddress) return;
+    const loadContactsForChat = async () => {
+      if (!showNewChatModal || !currentUser?.walletAddress) return;
       
       try {
         const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
@@ -194,12 +196,12 @@ export default function Sidebar({
           }
         }
       } catch (error) {
-        console.error('Error loading contacts for group:', error);
+        console.error('Error loading contacts:', error);
       }
     };
     
-    loadContactsForGroup();
-  }, [chatMode, currentUser?.walletAddress]);
+    loadContactsForChat();
+  }, [showNewChatModal, currentUser?.walletAddress]);
 
   // Load conversations when component mounts or currentUser changes
   useEffect(() => {
@@ -421,17 +423,40 @@ export default function Sidebar({
     };
     
     if (searchQuery) {
+      const query = searchQuery.toLowerCase();
       setFilteredConversations(
-        sortByRecent(conversations.filter((conv) =>
-          conv.participants.some((p) =>
-            p.toLowerCase().includes(searchQuery.toLowerCase())
-          ) || (conv as any).groupName?.toLowerCase().includes(searchQuery.toLowerCase())
-        ))
+        sortByRecent(conversations.filter((conv) => {
+          // Search in participant addresses
+          const matchesAddress = conv.participants.some((p) =>
+            p.toLowerCase().includes(query)
+          );
+          
+          // Search in group name
+          const matchesGroupName = (conv as any).groupName?.toLowerCase().includes(query);
+          
+          // Search in usernames from contact profiles
+          const matchesUsername = conv.participants.some((p) => {
+            const profile = contactProfiles[p.toLowerCase()];
+            return profile?.username?.toLowerCase().includes(query);
+          });
+          
+          // Search in nicknames
+          const matchesNickname = conv.participants.some((p) => {
+            const profile = contactProfiles[p.toLowerCase()];
+            // Check if the username starts with @ and matches
+            if (query.startsWith('@')) {
+              return profile?.username?.toLowerCase().includes(query.slice(1));
+            }
+            return false;
+          });
+          
+          return matchesAddress || matchesGroupName || matchesUsername || matchesNickname;
+        }))
       );
     } else {
       setFilteredConversations(sortByRecent(conversations));
     }
-  }, [searchQuery, conversations]);
+  }, [searchQuery, conversations, contactProfiles]);
 
   const loadConversations = async () => {
     if (!currentUser?.walletAddress) return;
@@ -683,8 +708,10 @@ export default function Sidebar({
     }
   };
 
-  const handleStartNewChat = async () => {
-    if (!newChatAddress.trim()) {
+  const handleStartNewChat = async (addressOverride?: string) => {
+    const addressToUse = addressOverride || newChatAddress.trim();
+    
+    if (!addressToUse) {
       toast.error('Please enter a wallet address or @name');
       return;
     }
@@ -693,7 +720,7 @@ export default function Sidebar({
     if (loadingProfile) return;
     setLoadingProfile(true);
 
-    let targetAddress = newChatAddress.trim();
+    let targetAddress = addressToUse;
 
     // Check if it's an @name format (e.g., "@david", "david@blockstar" or just "david")
     if (!targetAddress.startsWith('0x')) {
@@ -1034,6 +1061,7 @@ export default function Sidebar({
     setMemberInput('');
     setChatMode('direct');
     setGroupAddMode('search');
+    setDirectAddMode('search');
   };
 
   const handleLogout = async() => {
@@ -1534,25 +1562,99 @@ export default function Sidebar({
             {chatMode === 'direct' ? (
               /* Direct Chat */
               <>
-                <p className="text-secondary mb-2">
-                  Enter a wallet address or @name to start chatting.
+                <p className="text-secondary mb-3">
+                  Start a conversation with a contact or enter a new address.
                 </p>
 
-                <div className="text-xs text-muted mb-4 space-y-1">
-                  <p>Examples:</p>
-                  <p className="font-mono text-cyan-500">user@blockstar</p>
-                  <p className="font-mono text-cyan-500">user</p>
-                  <p className="font-mono text-cyan-500">0x123...abcd</p>
+                {/* Toggle between Search and Contacts */}
+                <div className="flex gap-2 mb-3">
+                  <button
+                    onClick={() => setDirectAddMode('search')}
+                    className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition ${
+                      directAddMode === 'search'
+                        ? 'bg-primary-500 text-white'
+                        : 'bg-dark-200 text-secondary hover:text-white'
+                    }`}
+                  >
+                    <Search size={14} />
+                    Enter Address
+                  </button>
+                  <button
+                    onClick={() => setDirectAddMode('contacts')}
+                    className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition ${
+                      directAddMode === 'contacts'
+                        ? 'bg-primary-500 text-white'
+                        : 'bg-dark-200 text-secondary hover:text-white'
+                    }`}
+                  >
+                    <BookUser size={14} />
+                    Contacts ({availableContacts.length})
+                  </button>
                 </div>
 
-                <input
-                  type="text"
-                  placeholder="@name or 0x..."
-                  value={newChatAddress}
-                  onChange={(e) => setNewChatAddress(e.target.value)}
-                  className="w-full px-4 py-3 bg-dark-200 border border-midnight rounded-xl text-white placeholder-muted focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500/50 transition mb-4"
-                  onKeyDown={(e) => e.key === 'Enter' && handleStartNewChat()}
-                />
+                {directAddMode === 'search' ? (
+                  <>
+                    <div className="text-xs text-muted mb-3 space-y-1">
+                      <p>Examples:</p>
+                      <p className="font-mono text-cyan-500">user@blockstar</p>
+                      <p className="font-mono text-cyan-500">user</p>
+                      <p className="font-mono text-cyan-500">0x123...abcd</p>
+                    </div>
+
+                    <input
+                      type="text"
+                      placeholder="@name or 0x..."
+                      value={newChatAddress}
+                      onChange={(e) => setNewChatAddress(e.target.value)}
+                      className="w-full px-4 py-3 bg-dark-200 border border-midnight rounded-xl text-white placeholder-muted focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500/50 transition mb-4"
+                      onKeyDown={(e) => e.key === 'Enter' && handleStartNewChat()}
+                    />
+                  </>
+                ) : (
+                  <div className="max-h-48 overflow-y-auto space-y-1 mb-4">
+                    {availableContacts.length === 0 ? (
+                      <p className="text-center text-muted text-sm py-6">
+                        No contacts yet. Add contacts from the Contacts tab.
+                      </p>
+                    ) : (
+                      availableContacts.map((contact) => (
+                        <button
+                          key={contact.walletAddress}
+                          onClick={() => {
+                            setNewChatAddress(contact.walletAddress);
+                            handleStartNewChat(contact.walletAddress);
+                          }}
+                          className="w-full flex items-center gap-3 px-3 py-3 bg-dark-200 hover:bg-midnight rounded-xl transition"
+                        >
+                          {contact.profile?.avatar ? (
+                            <img
+                              src={contact.profile.avatar}
+                              alt=""
+                              className="w-10 h-10 rounded-full object-cover"
+                            />
+                          ) : (
+                            <div
+                              className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-semibold ${getAvatarColor(contact.walletAddress)}`}
+                            >
+                              {getInitials(contact.profile?.username || contact.nickname || contact.walletAddress)}
+                            </div>
+                          )}
+                          <div className="flex-1 text-left min-w-0">
+                            <p className="text-sm text-white font-medium truncate">
+                              {contact.profile?.username 
+                                ? `@${contact.profile.username}`
+                                : contact.nickname || truncateAddress(contact.walletAddress)}
+                            </p>
+                            {(contact.profile?.username || contact.nickname) && (
+                              <p className="text-xs text-muted truncate">{truncateAddress(contact.walletAddress)}</p>
+                            )}
+                          </div>
+                          <MessageSquare size={16} className="text-primary-400 flex-shrink-0" />
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
 
                 <div className="flex gap-3">
                   <button
@@ -1561,12 +1663,14 @@ export default function Sidebar({
                   >
                     Cancel
                   </button>
-                  <button
-                    onClick={handleStartNewChat}
-                    className="flex-1 px-4 py-3 bg-primary-500 text-white rounded-xl hover:bg-primary-600 transition shadow-glow"
-                  >
-                    Start Chat
-                  </button>
+                  {directAddMode === 'search' && (
+                    <button
+                      onClick={handleStartNewChat}
+                      className="flex-1 px-4 py-3 bg-primary-500 text-white rounded-xl hover:bg-primary-600 transition shadow-glow"
+                    >
+                      Start Chat
+                    </button>
+                  )}
                 </div>
               </>
             ) : (
@@ -1883,6 +1987,14 @@ export default function Sidebar({
                   Notifications
                 </h4>
                 <NotificationSettingsPanel />
+              </div>
+
+              {/* Sounds & Ringtones Section */}
+              <div>
+                <h4 className="font-semibold text-white mb-3 flex items-center gap-2">
+                  🔔 Sounds & Ringtones
+                </h4>
+                <RingtoneSettingsPanel />
               </div>
 
               {/* About Section */}

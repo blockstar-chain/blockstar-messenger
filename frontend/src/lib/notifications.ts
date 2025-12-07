@@ -198,21 +198,27 @@ class NotificationService {
   }
 
   /**
-   * Play notification sound
+   * Play notification sound using ringtone service
    */
   async playSound(): Promise<void> {
     if (!this.settings.enabled || !this.settings.sound) return;
     
     try {
-      if (this.notificationSound) {
-        this.notificationSound.currentTime = 0;
-        this.notificationSound.volume = this.settings.soundVolume;
-        await this.notificationSound.play();
-      }
+      // Use ringtone service for message sounds
+      const { ringtoneService } = await import('@/lib/ringtones');
+      await ringtoneService.playMessageSound();
     } catch (error) {
-      // Audio play might fail, try generated sound as fallback
-      console.warn('Could not play notification sound file, using generated sound');
-      this.playGeneratedSound();
+      // Fallback to local audio element or generated sound
+      console.warn('Could not play message sound from service, using fallback');
+      try {
+        if (this.notificationSound) {
+          this.notificationSound.currentTime = 0;
+          this.notificationSound.volume = this.settings.soundVolume;
+          await this.notificationSound.play();
+        }
+      } catch (e) {
+        this.playGeneratedSound();
+      }
     }
   }
 

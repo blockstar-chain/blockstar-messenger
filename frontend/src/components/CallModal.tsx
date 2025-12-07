@@ -3,6 +3,7 @@ import { useAppStore } from '@/store';
 import { webRTCService } from '@/lib/webrtc';
 import { webSocketService } from '@/lib/websocket';
 import { initCallAudio, resetCallAudio, toggleSpeaker } from '@/lib/audioRouting';
+import { ringtoneService } from '@/lib/ringtones';
 import { Capacitor } from '@capacitor/core';
 import { PhoneOff, Mic, MicOff, Video, VideoOff, Users, Volume2, Volume1 } from 'lucide-react';
 import { truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
@@ -270,6 +271,22 @@ export default function CallModal() {
       setCallStatus('active');
     }
   }, [activeCall?.status, activeCall?.callerId, activeCall?.id, currentUser?.walletAddress]);
+
+  // Play outgoing tone when calling (ringing status)
+  useEffect(() => {
+    if (callStatus === 'ringing') {
+      // Play outgoing call tone
+      console.log('📞 Playing outgoing call tone...');
+      ringtoneService.playOutgoingTone();
+    } else {
+      // Stop the tone when status changes (call connected or ended)
+      ringtoneService.stopCurrentSound();
+    }
+
+    return () => {
+      ringtoneService.stopCurrentSound();
+    };
+  }, [callStatus]);
 
   // Duration timer
   useEffect(() => {
@@ -736,9 +753,9 @@ export default function CallModal() {
               {(!isVideoCall || callStatus !== 'active') && (
                 <div className="flex flex-col items-center">
                   {/* Both avatars side by side */}
-                  <div className="flex items-center justify-center gap-8 mb-8">
+                  <div className="flex items-start justify-center gap-8 mb-8">
                     {/* Your avatar */}
-                    <div className="flex flex-col items-center">
+                    <div className="flex flex-col items-center w-28">
                       {(currentUser?.avatar || myProfile?.avatar) ? (
                         <img
                           src={currentUser?.avatar || myProfile?.avatar}
@@ -752,7 +769,7 @@ export default function CallModal() {
                           {getInitials(myProfile?.username || currentUser?.username || currentUser?.walletAddress || '')}
                         </div>
                       )}
-                      <p className="text-white font-medium text-sm">
+                      <p className="text-white font-medium text-sm text-center">
                         {myProfile?.username 
                           ? `@${myProfile.username}`
                           : currentUser?.username 
@@ -764,7 +781,7 @@ export default function CallModal() {
                     </div>
                     
                     {/* Call status indicator between avatars */}
-                    <div className="flex flex-col items-center">
+                    <div className="flex flex-col items-center justify-center pt-6">
                       <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
                         callStatus === 'active' ? 'bg-success-500/20' : 'bg-primary-500/20'
                       }`}>
@@ -779,7 +796,7 @@ export default function CallModal() {
                     </div>
                     
                     {/* Other party avatar */}
-                    <div className="flex flex-col items-center">
+                    <div className="flex flex-col items-center w-28">
                       {otherPartyProfile?.avatar ? (
                         <img
                           src={otherPartyProfile.avatar}
@@ -793,12 +810,14 @@ export default function CallModal() {
                           {getInitials(otherPartyProfile?.username || otherParty as string || '')}
                         </div>
                       )}
-                      <p className="text-white font-medium text-sm">
+                      <p className="text-white font-medium text-sm text-center">
                         {otherPartyProfile?.username 
                           ? `@${otherPartyProfile.username}`
                           : truncateAddress(otherParty as string || '')
                         }
                       </p>
+                      {/* Placeholder to match "You" label height */}
+                      <p className="text-transparent text-xs">.</p>
                     </div>
                   </div>
                   

@@ -9,6 +9,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import db from './database/db';
 import profileResolver from './services/profileResolver';
+import pushService from './services/pushNotificationService';
 
 dotenv.config();
 
@@ -216,7 +217,7 @@ app.delete('/api/push-token', async (req, res) => {
   }
 });
 
-// Send push notification when message is sent
+// Send push notification when message is sent or call is initiated
 async function sendPushNotification(
   recipientWallet: string, 
   title: string, 
@@ -227,19 +228,25 @@ async function sendPushNotification(
     const tokens = await db.getPushTokens(recipientWallet);
 
     if (tokens.length === 0) {
-      console.log(`📱 No push tokens for ${recipientWallet}`);
+      console.log(`📱 No push tokens for ${recipientWallet.substring(0, 10)}...`);
       return;
     }
 
+    console.log(`📱 Sending push to ${tokens.length} device(s) for ${recipientWallet.substring(0, 10)}...`);
+
     for (const { push_token, platform } of tokens) {
       try {
-        if (platform === 'ios') {
-          // Send via APNs
-          await sendAPNsPush(push_token, { title, body, data });
-        } else if (platform === 'android') {
-          // Send via FCM
-          await sendFCMPush(push_token, { title, body, data });
+        // Convert data values to strings (FCM requirement)
+        const stringData: Record<string, string> = {};
+        for (const [key, value] of Object.entries(data)) {
+          stringData[key] = typeof value === 'string' ? value : JSON.stringify(value);
         }
+
+        await pushService.sendFCMPush(push_token, {
+          title,
+          body,
+          data: stringData,
+        }, platform as 'ios' | 'android');
       } catch (err) {
         console.error(`Failed to send push to ${platform}:`, err);
       }
@@ -249,91 +256,54 @@ async function sendPushNotification(
   }
 }
 
-// APNs push notification (placeholder - requires Apple Push Notification service setup)
-async function sendAPNsPush(
-  token: string, 
-  payload: { title: string; body: string; data: Record<string, any> }
-): Promise<void> {
-  // TODO: Implement APNs push notification
-  // This requires:
-  // 1. APNs certificate or key from Apple Developer account
-  // 2. Use a library like 'apn' or '@parse/node-apn'
-  
-  console.log(`📱 [APNs] Would send push to iOS device: ${token.substring(0, 20)}...`);
-  console.log(`   Title: ${payload.title}`);
-  console.log(`   Body: ${payload.body}`);
-  
-  // Example implementation with node-apn:
-  /*
-  const apn = require('apn');
-  const options = {
-    token: {
-      key: process.env.APNS_KEY_PATH,
-      keyId: process.env.APNS_KEY_ID,
-      teamId: process.env.APNS_TEAM_ID,
-    },
-    production: process.env.NODE_ENV === 'production',
-  };
-  
-  const apnProvider = new apn.Provider(options);
-  const notification = new apn.Notification();
-  notification.expiry = Math.floor(Date.now() / 1000) + 3600;
-  notification.badge = 1;
-  notification.sound = 'default';
-  notification.alert = { title: payload.title, body: payload.body };
-  notification.payload = payload.data;
-  notification.topic = 'com.blockstar.cypher';
-  
-  await apnProvider.send(notification, token);
-  */
+// Send call-specific push notification (high priority)
+async function sendCallPushNotification(
+  recipientWallet: string,
+  callId: string,
+  callerId: string,
+  callerName: string | undefined,
+  callType: 'audio' | 'video'
+): Promise<boolean> {
+  try {
+    const tokens = await db.getPushTokens(recipientWallet);
+
+    if (tokens.length === 0) {
+      console.log(`📱 No push tokens for ${recipientWallet.substring(0, 10)}... - cannot send call notification`);
+      return false;
+    }
+
+    console.log(`📞 Sending call notification to ${tokens.length} device(s)`);
+
+    let sent = false;
+    for (const { push_token, platform } of tokens) {
+      try {
+        const success = await pushService.sendCallNotification(
+          push_token,
+          platform as 'ios' | 'android',
+          {
+            callId,
+            callerId,
+            callerName,
+            callType,
+          }
+        );
+        if (success) sent = true;
+      } catch (err) {
+        console.error(`Failed to send call push to ${platform}:`, err);
+      }
+    }
+
+    return sent;
+  } catch (error) {
+    console.error('Error sending call push notification:', error);
+    return false;
+  }
 }
 
-// FCM push notification (placeholder - requires Firebase setup)
-async function sendFCMPush(
-  token: string, 
-  payload: { title: string; body: string; data: Record<string, any> }
-): Promise<void> {
-  // TODO: Implement FCM push notification
-  // This requires:
-  // 1. Firebase service account credentials
-  // 2. Use 'firebase-admin' SDK
-  
-  console.log(`📱 [FCM] Would send push to Android device: ${token.substring(0, 20)}...`);
-  console.log(`   Title: ${payload.title}`);
-  console.log(`   Body: ${payload.body}`);
-  
-  // Example implementation with firebase-admin:
-  /*
-  const admin = require('firebase-admin');
-  
-  if (!admin.apps.length) {
-    admin.initializeApp({
-      credential: admin.credential.cert({
-        projectId: process.env.FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-      }),
-    });
-  }
-  
-  const message = {
-    token: token,
-    notification: {
-      title: payload.title,
-      body: payload.body,
-    },
-    data: payload.data,
-    android: {
-      priority: 'high',
-      notification: {
-        sound: 'default',
-        channelId: 'messages',
-      },
-    },
-  };
-  
-  await admin.messaging().send(message);
-  */
+// Helper function to truncate wallet address for display
+function truncateAddress(address: string): string {
+  if (!address || address.length < 10) return address;
+  return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
 }
 
 // Register or update user's public key
@@ -1934,24 +1904,25 @@ io.on('connection', (socket: Socket) => {
   // Call Events
   // ----------------------
 
-  socket.on('call:initiate', ({ recipientAddress, callType, offer, callId }: any) => {
+  socket.on('call:initiate', async ({ recipientAddress, callType, offer, callId, callerName }: any) => {
     try {
       const recipient = recipientAddress.toLowerCase();
       const recipientSocketId = activeConnections.get(recipient);
+      const finalCallId = callId || `${address}-${recipient}-${Date.now()}`;
+
+      console.log('Call initiated:', {
+        from: address,
+        to: recipient,
+        callId: finalCallId,
+        type: callType,
+        recipientOnline: !!recipientSocketId
+      });
 
       if (recipientSocketId) {
-        // Use the callId provided by the caller, or create one if not provided (backward compatibility)
-        const finalCallId = callId || `${address}-${recipient}-${Date.now()}`;
-
-        console.log('Call initiated:', {
-          from: address,
-          to: recipient,
-          callId: finalCallId,
-          type: callType
-        });
-
+        // Recipient is online - send via WebSocket
         io.to(recipientSocketId).emit('call:incoming', {
           callerId: address,
+          callerName: callerName, // Pass caller's @name
           callType,
           offer,
           callId: finalCallId,
@@ -1960,10 +1931,44 @@ io.on('connection', (socket: Socket) => {
         // Confirm call initiated to caller with the SAME call ID
         socket.emit('call:initiated', { callId: finalCallId, recipientAddress: recipient });
       } else {
-        socket.emit('call:unavailable', {
-          recipientAddress: recipient,
-          reason: 'User is offline',
-        });
+        // Recipient is OFFLINE - try to send push notification
+        console.log(`📞 Recipient ${recipient} is offline, attempting push notification...`);
+
+        // Get caller's profile for display name
+        let displayName = callerName;
+        if (!displayName) {
+          try {
+            const callerProfile = await db.getUserByWallet(address);
+            displayName = callerProfile?.username || truncateAddress(address);
+          } catch {
+            displayName = truncateAddress(address);
+          }
+        }
+
+        // Send push notification
+        const pushSent = await sendCallPushNotification(
+          recipient,
+          finalCallId,
+          address,
+          displayName,
+          callType
+        );
+
+        if (pushSent) {
+          console.log(`📞 Push notification sent for call ${finalCallId}`);
+          // Tell the caller we're trying to reach them via push
+          socket.emit('call:initiated', { 
+            callId: finalCallId, 
+            recipientAddress: recipient,
+            viaPush: true // Indicate this went via push, not direct socket
+          });
+        } else {
+          // No push tokens or push failed
+          socket.emit('call:unavailable', {
+            recipientAddress: recipient,
+            reason: 'User is offline and push notifications unavailable',
+          });
+        }
       }
     } catch (error) {
       console.error('Error initiating call:', error);
@@ -2421,6 +2426,9 @@ async function startServer() {
       console.error('   Set MONGODB_URI environment variable to enable persistence.');
     }
 
+    // Initialize Firebase for push notifications
+    const firebaseInitialized = pushService.initializeFirebase();
+
     httpServer.listen(PORT, () => {
       console.log('');
       console.log('══════════════════════════════════════════════════════════════');
@@ -2428,11 +2436,13 @@ async function startServer() {
       console.log('══════════════════════════════════════════════════════════════');
       console.log('');
       console.log('📦 Database:', dbInitialized ? 'Connected (MongoDB)' : 'NOT CONNECTED');
+      console.log('📱 Push Notifications:', firebaseInitialized ? 'Enabled (Firebase)' : 'DISABLED');
       console.log('');
       console.log('🔗 Endpoints:');
       console.log(`   Health check: http://localhost:${PORT}/health`);
       console.log(`   Key registration: POST http://localhost:${PORT}/api/keys/register`);
       console.log(`   Get user key: GET http://localhost:${PORT}/api/keys/:address`);
+      console.log(`   Push token: POST/DELETE http://localhost:${PORT}/api/push-token`);
       console.log('');
       console.log('══════════════════════════════════════════════════════════════');
     });
