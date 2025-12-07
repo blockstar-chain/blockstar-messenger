@@ -4,6 +4,7 @@ import { webSocketService } from '@/lib/websocket';
 import { webRTCService } from '@/lib/webrtc';
 import { syncFromServer } from '@/lib/syncService';
 import { db } from '@/lib/database';
+import { initPushNotifications } from '@/lib/capacitor';
 import toast from 'react-hot-toast';
 import Sidebar from './Sidebar';
 import ChatArea from './ChatArea';
@@ -91,6 +92,117 @@ export default function MainLayout() {
     }
   }, [activeConversationId]);
 
+  // Initialize push notifications (will only work on native platforms)
+  useEffect(() => {
+    if (!isAuthenticated || !currentUser) return;
+
+    const setupPushNotifications = async () => {
+      try {
+        const pushInitialized = await initPushNotifications(currentUser.walletAddress, {
+          onNotificationReceived: (notification) => {
+            console.log('📱 Push notification received (app in foreground):', notification);
+
+            // Handle incoming call notification when app is in foreground
+            if (notification.data?.type === 'incoming_call') {
+              console.log('📞 Incoming call via push notification:', {
+                callId: notification.data.callId,
+                callerId: notification.data.callerId,
+                callerName: notification.data.callerName,
+                callType: notification.data.callType,
+              });
+
+              // Store the call offer in session storage if provided
+              if (notification.data.offer) {
+                try {
+                  sessionStorage.setItem('incomingCallOffer', notification.data.offer);
+                  console.log('📞 Stored call offer from push notification');
+                } catch (e) {
+                  console.error('Failed to store offer:', e);
+                }
+              }
+
+              // Store caller name
+              if (notification.data.callerName) {
+                sessionStorage.setItem('incomingCallCallerName', notification.data.callerName);
+              }
+
+              // Show incoming call modal
+              setIncomingCall({
+                id: notification.data.callId,
+                callerId: notification.data.callerId,
+                recipientId: currentUser.walletAddress,
+                type: notification.data.callType as 'audio' | 'video',
+                status: 'ringing',
+                startTime: Date.now(),
+              } as any);
+
+              toast.success(
+                `📞 Incoming ${notification.data.callType} call from ${notification.data.callerName || 'Unknown'}`,
+                { duration: 3000 }
+              );
+            }
+          },
+          onNotificationAction: (action) => {
+            console.log('📱 Push notification tapped (app was in background):', action);
+
+            // Handle notification tap when app was in background/closed
+            const data = action.notification.data;
+            if (data?.type === 'incoming_call') {
+              console.log('📞 Opening incoming call from notification tap:', {
+                callId: data.callId,
+                callerId: data.callerId,
+                callerName: data.callerName,
+                callType: data.callType,
+              });
+
+              // Store the call offer if provided
+              if (data.offer) {
+                try {
+                  sessionStorage.setItem('incomingCallOffer', data.offer);
+                  console.log('📞 Stored call offer from notification tap');
+                } catch (e) {
+                  console.error('Failed to store offer:', e);
+                }
+              }
+
+              // Store caller name
+              if (data.callerName) {
+                sessionStorage.setItem('incomingCallCallerName', data.callerName);
+              }
+
+              // Show incoming call modal
+              setIncomingCall({
+                id: data.callId,
+                callerId: data.callerId,
+                recipientId: currentUser.walletAddress,
+                type: data.callType as 'audio' | 'video',
+                status: 'ringing',
+                startTime: Date.now(),
+                isGroupCall: data.isGroupCall === 'true' || data.isGroupCall === true,
+              } as any);
+            }
+          },
+          onRegistration: (token) => {
+            console.log('📱 Push token registered in MainLayout:', token.substring(0, 20) + '...');
+          },
+          onError: (error) => {
+            console.error('📱 Push notification error in MainLayout:', error);
+          },
+        });
+
+        if (pushInitialized) {
+          console.log('✅ Push notifications initialized in MainLayout');
+        } else {
+          console.log('ℹ️ Push notifications not available (web platform)');
+        }
+      } catch (error) {
+        console.error('Failed to initialize push notifications in MainLayout:', error);
+      }
+    };
+
+    setupPushNotifications();
+  }, [isAuthenticated, currentUser, setIncomingCall]);
+
   // Sync data from server on startup
   useEffect(() => {
     if (!isAuthenticated || !currentUser) return;
@@ -151,10 +263,15 @@ export default function MainLayout() {
     console.log('🔧 Setting up call handlers for:', currentUser.walletAddress);
 
     const unsubscribeIncoming = webSocketService.on('call:incoming', (data: any) => {
-      console.log('📞 INCOMING CALL received:', data.callId);
+      console.log('📞 INCOMING CALL received via WebSocket:', data.callId);
       
       if (data.offer && data.callerId && data.callerId.toLowerCase() !== currentUser.walletAddress.toLowerCase()) {
         toast('📞 Incoming call...', { icon: '📞', duration: 5000 });
+        
+        // Store caller name if provided
+        if (data.callerName) {
+          sessionStorage.setItem('incomingCallCallerName', data.callerName);
+        }
         
         setIncomingCall({
           id: data.callId,
@@ -247,8 +364,15 @@ export default function MainLayout() {
     const unsubscribeGroupCallIncoming = webSocketService.on('group:call:incoming', async (data: any) => {
       const { callId, callType, offer, callerAddress, groupName, participants, peerId } = data;
       
+      console.log('📞 INCOMING GROUP CALL received via WebSocket:', callId);
+      
       if (offer) {
         sessionStorage.setItem('incomingCallOffer', JSON.stringify(offer));
+      }
+      
+      // Store caller address as caller name for group calls
+      if (callerAddress) {
+        sessionStorage.setItem('incomingCallCallerName', callerAddress);
       }
       
       setIncomingCall({

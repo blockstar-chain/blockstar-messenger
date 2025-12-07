@@ -33,7 +33,7 @@ let pushCallbacks: PushNotificationCallbacks = {};
  * Initialize push notifications for native platforms
  */
 export async function initPushNotifications(
-  walletAddress: string,
+  walletAddress: any,
   callbacks?: PushNotificationCallbacks
 ): Promise<boolean> {
   if (!isNative) {

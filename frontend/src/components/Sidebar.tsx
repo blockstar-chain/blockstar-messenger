@@ -30,7 +30,7 @@ const DELETED_CONVERSATIONS_KEY = 'blockstar_deleted_conversations';
 // Get deleted conversations for current user
 export const getDeletedConversations = (walletAddress?: string): Set<string> => {
   try {
-    const key = walletAddress 
+    const key = walletAddress
       ? `${DELETED_CONVERSATIONS_KEY}_${walletAddress.toLowerCase()}`
       : DELETED_CONVERSATIONS_KEY;
     const stored = localStorage.getItem(key);
@@ -45,7 +45,7 @@ export const getDeletedConversations = (walletAddress?: string): Set<string> => 
 
 // Add a conversation to deleted list for current user
 export const addDeletedConversation = (conversationId: string, walletAddress?: string) => {
-  const key = walletAddress 
+  const key = walletAddress
     ? `${DELETED_CONVERSATIONS_KEY}_${walletAddress.toLowerCase()}`
     : DELETED_CONVERSATIONS_KEY;
   const deleted = getDeletedConversations(walletAddress);
@@ -61,7 +61,7 @@ export const isConversationDeleted = (conversationId: string, walletAddress?: st
 
 // Remove a conversation from deleted list (when new message arrives)
 export const removeFromDeletedConversations = (conversationId: string, walletAddress?: string) => {
-  const key = walletAddress 
+  const key = walletAddress
     ? `${DELETED_CONVERSATIONS_KEY}_${walletAddress.toLowerCase()}`
     : DELETED_CONVERSATIONS_KEY;
   const deleted = getDeletedConversations(walletAddress);
@@ -74,7 +74,7 @@ export const removeFromDeletedConversations = (conversationId: string, walletAdd
 
 // Clear all deleted conversations for a user (use when fully syncing from server)
 export const clearDeletedConversations = (walletAddress?: string) => {
-  const key = walletAddress 
+  const key = walletAddress
     ? `${DELETED_CONVERSATIONS_KEY}_${walletAddress.toLowerCase()}`
     : DELETED_CONVERSATIONS_KEY;
   localStorage.removeItem(key);
@@ -97,7 +97,7 @@ interface SidebarProps {
   isMobile?: boolean;
 }
 
-export default function Sidebar({ 
+export default function Sidebar({
   onConversationSelect,
   activeTab: controlledActiveTab,
   onTabChange: controlledOnTabChange,
@@ -112,12 +112,12 @@ export default function Sidebar({
   const { currentUser, conversations, setActiveConversation, activeConversationId, setConversations, addConversation } = useAppStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [filteredConversations, setFilteredConversations] = useState<Conversation[]>([]);
-  
+
   // Internal state (used when not controlled by parent)
   const [internalShowNewChatModal, setInternalShowNewChatModal] = useState(false);
   const [internalShowSettingsModal, setInternalShowSettingsModal] = useState(false);
   const [internalActiveTab, setInternalActiveTab] = useState<'messages' | 'contacts'>('messages');
-  
+
   // Use controlled state if provided, otherwise use internal state
   const showNewChatModal = controlledShowNewChat ?? internalShowNewChatModal;
   const setShowNewChatModal = onNewChatModalChange ?? setInternalShowNewChatModal;
@@ -125,12 +125,12 @@ export default function Sidebar({
   const setShowSettingsModal = onSettingsModalChange ?? setInternalShowSettingsModal;
   const activeTab = controlledActiveTab ?? internalActiveTab;
   const setActiveTab = controlledOnTabChange ?? setInternalActiveTab;
-  
+
   // Mesh modal state
   const [internalShowMeshModal, setInternalShowMeshModal] = useState(false);
   const showMeshQRConnect = controlledShowMesh ?? internalShowMeshModal;
   const setShowMeshQRConnect = onMeshModalChange ?? setInternalShowMeshModal;
-  
+
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [newChatAddress, setNewChatAddress] = useState('');
   const [userProfile, setUserProfile] = useState<BlockStarProfile | null>(null);
@@ -153,7 +153,7 @@ export default function Sidebar({
   const [groupAddMode, setGroupAddMode] = useState<'search' | 'contacts'>('search');
   const [directAddMode, setDirectAddMode] = useState<'search' | 'contacts'>('search');
   const [availableContacts, setAvailableContacts] = useState<Array<{ walletAddress: string; nickname?: string; profile?: BlockStarProfile | null }>>([]);
-  
+
   // Profile modal state
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [selectedProfileAddress, setSelectedProfileAddress] = useState<string | null>(null);
@@ -162,7 +162,7 @@ export default function Sidebar({
   useEffect(() => {
     const loadContactsForChat = async () => {
       if (!showNewChatModal || !currentUser?.walletAddress) return;
-      
+
       try {
         const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
         const response = await fetch(`${API_URL}/api/contacts/${currentUser.walletAddress.toLowerCase()}`);
@@ -199,7 +199,7 @@ export default function Sidebar({
         console.error('Error loading contacts:', error);
       }
     };
-    
+
     loadContactsForChat();
   }, [showNewChatModal, currentUser?.walletAddress]);
 
@@ -236,7 +236,7 @@ export default function Sidebar({
         }
         return;
       }
-      
+
       // Also check by participants to avoid duplicates
       const newParticipants = (data.group.participants || []).map((p: string) => p.toLowerCase()).sort().join(',');
       const existingByParticipants = conversations.find(c => {
@@ -244,7 +244,7 @@ export default function Sidebar({
         const existingParticipants = (c.participants || []).map(p => p.toLowerCase()).sort().join(',');
         return existingParticipants === newParticipants;
       });
-      
+
       if (existingByParticipants) {
         console.log('Group already exists by participants:', newParticipants);
         // Update the existing group with the new info - this group has the authoritative name
@@ -307,15 +307,15 @@ export default function Sidebar({
       console.log('🖼️ Received group:avatar:updated event:', data);
 
       // Update the conversation with the new avatar
-      useAppStore.getState().updateConversation(data.groupId, { 
+      useAppStore.getState().updateConversation(data.groupId, {
         groupAvatar: data.avatarUrl,
-        avatar: data.avatarUrl 
+        avatar: data.avatarUrl
       });
 
       // Also update in database
-      db.conversations.update(data.groupId, { 
+      db.conversations.update(data.groupId, {
         groupAvatar: data.avatarUrl,
-        avatar: data.avatarUrl 
+        avatar: data.avatarUrl
       }).catch(console.error);
     });
 
@@ -351,7 +351,7 @@ export default function Sidebar({
 
       for (const address of addresses) {
         const normalizedAddress = address.toLowerCase();
-        
+
         // FIRST check local wallet cache (populated when @name was resolved)
         // This must happen before checking state, because state might have null from previous lookup
         const cachedProfile = getProfileByWallet(address);
@@ -363,7 +363,7 @@ export default function Sidebar({
           }
           continue;
         }
-        
+
         // Skip if already checked (and no cache available)
         if (contactProfiles[normalizedAddress] !== undefined) continue;
 
@@ -421,7 +421,7 @@ export default function Sidebar({
         return bTime - aTime; // Most recent first
       });
     };
-    
+
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       setFilteredConversations(
@@ -430,16 +430,16 @@ export default function Sidebar({
           const matchesAddress = conv.participants.some((p) =>
             p.toLowerCase().includes(query)
           );
-          
+
           // Search in group name
           const matchesGroupName = (conv as any).groupName?.toLowerCase().includes(query);
-          
+
           // Search in usernames from contact profiles
           const matchesUsername = conv.participants.some((p) => {
             const profile = contactProfiles[p.toLowerCase()];
             return profile?.username?.toLowerCase().includes(query);
           });
-          
+
           // Search in nicknames
           const matchesNickname = conv.participants.some((p) => {
             const profile = contactProfiles[p.toLowerCase()];
@@ -449,7 +449,7 @@ export default function Sidebar({
             }
             return false;
           });
-          
+
           return matchesAddress || matchesGroupName || matchesUsername || matchesNickname;
         }))
       );
@@ -460,35 +460,35 @@ export default function Sidebar({
 
   const loadConversations = async () => {
     if (!currentUser?.walletAddress) return;
-    
+
     try {
       const deletedIds = getDeletedConversations(currentUser.walletAddress);
       console.log(`📋 Loading conversations. Deleted IDs in localStorage: ${deletedIds.size}`);
       if (deletedIds.size > 0) {
         console.log(`   Deleted IDs: ${Array.from(deletedIds).join(', ')}`);
       }
-      
+
       let allConversations = await db.conversations.toArray();
       const localGroups = allConversations.filter(c => c.type === 'group');
       const localDirects = allConversations.filter(c => c.type === 'direct');
       console.log(`📋 Found ${allConversations.length} in IndexedDB (${localGroups.length} groups, ${localDirects.length} direct)`);
-      
+
       // CRITICAL: Remove any groups named "Group Chat" that shouldn't exist
       // These are created by bugs and should never be shown to users
-      const groupChatGroups = allConversations.filter(c => 
+      const groupChatGroups = allConversations.filter(c =>
         c.type === 'group' && (c as any).groupName === 'Group Chat'
       );
-      
+
       for (const badGroup of groupChatGroups) {
         // Check if there's a properly named group with the same participants
         const participants = (badGroup.participants || []).map(p => p.toLowerCase()).sort().join(',');
-        const properGroup = allConversations.find(c => 
-          c.type === 'group' && 
+        const properGroup = allConversations.find(c =>
+          c.type === 'group' &&
           c.id !== badGroup.id &&
           (c as any).groupName !== 'Group Chat' &&
           (c.participants || []).map(p => p.toLowerCase()).sort().join(',') === participants
         );
-        
+
         if (properGroup) {
           // There's a proper group with same participants, delete the "Group Chat" one
           console.log(`🗑️ Removing duplicate "Group Chat" group, proper group exists: ${(properGroup as any).groupName}`);
@@ -503,10 +503,10 @@ export default function Sidebar({
           }
         }
       }
-      
+
       // Reload after cleanup
       allConversations = await db.conversations.toArray();
-      
+
       // Filter out deleted conversations
       allConversations = allConversations.filter(c => !deletedIds.has(c.id));
 
@@ -532,7 +532,7 @@ export default function Sidebar({
           const groups = data.conversations?.filter((c: any) => c.type === 'group') || [];
           const directs = data.conversations?.filter((c: any) => c.type === 'direct') || [];
           console.log(`Server conversations: ${data.conversations?.length} total (${groups.length} groups, ${directs.length} direct)`);
-          
+
           if (data.success && data.conversations?.length > 0) {
             for (const serverConv of data.conversations) {
               // Generate a client-style ID for comparison (in case deleted list has this format)
@@ -540,7 +540,7 @@ export default function Sidebar({
               if (serverConv.type === 'direct' && serverConv.participants?.length === 2) {
                 clientStyleId = generateConversationId(serverConv.participants[0], serverConv.participants[1]);
               }
-              
+
               // If server returns a conversation, it means it's NOT hidden on the server
               // So we should trust the server and remove from our local deleted list
               // Check both server ID and client-generated ID
@@ -554,10 +554,10 @@ export default function Sidebar({
                 removeFromDeletedConversations(clientStyleId, currentUser.walletAddress);
                 deletedIds.delete(clientStyleId);
               }
-              
+
               // Check if we already have this conversation locally by ID
               let existingLocal = allConversations.find(c => c.id === serverConv.id);
-              
+
               // For groups, also check if we have a local group with same participants (deduplication)
               if (!existingLocal && serverConv.type === 'group') {
                 const serverParticipants = (serverConv.participants || []).map((p: string) => p.toLowerCase()).sort().join(',');
@@ -566,14 +566,14 @@ export default function Sidebar({
                   const localParticipants = (c.participants || []).map((p: string) => p.toLowerCase()).sort().join(',');
                   return localParticipants === serverParticipants;
                 });
-                
+
                 if (existingLocal) {
                   console.log(`📋 Found duplicate group by participants, using local ID: ${existingLocal.id}`);
                   // Skip this server conversation - we already have it locally
                   continue;
                 }
               }
-              
+
               const conversation: Conversation = {
                 id: serverConv.id,
                 type: serverConv.type || 'direct',
@@ -634,17 +634,17 @@ export default function Sidebar({
       // Deduplicate groups in IndexedDB by participants
       const seenGroupParticipants = new Map<string, Conversation>();
       const duplicatesToRemove: string[] = [];
-      
+
       for (const conv of allConversations) {
         if (conv.type === 'group') {
           const participantsKey = (conv.participants || []).map(p => p.toLowerCase()).sort().join(',');
           const existing = seenGroupParticipants.get(participantsKey);
-          
+
           if (existing) {
             // We have a duplicate - keep the one with proper groupName or more recent
             const existingHasName = (existing as any).groupName && (existing as any).groupName !== 'Group Chat';
             const convHasName = (conv as any).groupName && (conv as any).groupName !== 'Group Chat';
-            
+
             if (convHasName && !existingHasName) {
               // New one has better name, remove old
               duplicatesToRemove.push(existing.id);
@@ -665,7 +665,7 @@ export default function Sidebar({
           }
         }
       }
-      
+
       // Remove duplicates from IndexedDB
       if (duplicatesToRemove.length > 0) {
         console.log(`🧹 Removing ${duplicatesToRemove.length} duplicate groups from IndexedDB`);
@@ -678,14 +678,14 @@ export default function Sidebar({
       }
 
       const sorted = allConversations.sort((a, b) => b.updatedAt - a.updatedAt);
-      
+
       // Log final counts
       const finalGroups = sorted.filter(c => c.type === 'group');
       const finalDirects = sorted.filter(c => c.type === 'direct');
       console.log(`📋 Final: ${sorted.length} conversations (${finalGroups.length} groups, ${finalDirects.length} direct)`);
-      
+
       setConversations(sorted);
-      
+
       // Sync profiles for all participants (needed after cache clear)
       const allParticipants = new Set<string>();
       for (const conv of sorted) {
@@ -695,7 +695,7 @@ export default function Sidebar({
           }
         }
       }
-      
+
       if (allParticipants.size > 0) {
         console.log(`📋 Syncing profiles for ${allParticipants.size} participants...`);
         // Don't await - let it run in background
@@ -715,26 +715,27 @@ export default function Sidebar({
       toast.error('Please enter a wallet address or @name');
       return;
     }
-    
+
     // Prevent double submission
     if (loadingProfile) return;
     setLoadingProfile(true);
 
     let targetAddress = addressToUse;
-
+        console.log('targetAddress' , targetAddress)
     // Check if it's an @name format (e.g., "@david", "david@blockstar" or just "david")
     if (!targetAddress.startsWith('0x')) {
+  
       // It's an @name - need to resolve to wallet address
       toast.loading('Looking up @name...', { id: 'name-lookup' });
 
       try {
         // Extract the name part (handle "@david", "david@blockstar" or just "david")
         let nameToResolve = targetAddress.trim();
-        
+
         if (nameToResolve.startsWith('@')) {
           nameToResolve = nameToResolve.slice(1); // Remove leading @
         }
-        
+
         if (nameToResolve.includes('@')) {
           // "ashish@blockstar" → "ashish"
           nameToResolve = nameToResolve.split('@')[0];
@@ -765,7 +766,7 @@ export default function Sidebar({
         return;
       }
       targetAddress = targetAddress.toLowerCase();
-      
+
       // Try to look up profile for this wallet address
       try {
         const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
@@ -801,16 +802,16 @@ export default function Sidebar({
       // Check for existing conversation (including in IndexedDB)
       let existingConv = conversations.find(conv =>
         conv.type === 'direct' &&
-        conv.participants.map(p => p.toLowerCase()).includes(address) && 
+        conv.participants.map(p => p.toLowerCase()).includes(address) &&
         conv.participants.map(p => p.toLowerCase()).includes(myAddress)
       );
-      
+
       // Also check IndexedDB directly
       if (!existingConv) {
         const allConvs = await db.conversations.toArray();
         existingConv = allConvs.find(conv =>
           conv.type === 'direct' &&
-          conv.participants.map(p => p.toLowerCase()).includes(address) && 
+          conv.participants.map(p => p.toLowerCase()).includes(address) &&
           conv.participants.map(p => p.toLowerCase()).includes(myAddress)
         );
       }
@@ -841,11 +842,11 @@ export default function Sidebar({
           const data = await response.json();
           if (data.success && data.conversation) {
             conversationId = data.conversation.id;
-            
+
             // IMPORTANT: Remove from deleted list - this handles the case where
             // user deleted a chat and is now starting a new one with same person
             removeFromDeletedConversations(conversationId, currentUser?.walletAddress);
-            
+
             // Check if this conversation ID already exists in state
             const existing = conversations.find(c => c.id === conversationId);
             if (existing) {
@@ -907,11 +908,11 @@ export default function Sidebar({
       try {
         // Extract the name part (handle "@kelly", "kelly@blockstar" or just "kelly")
         let nameToResolve = memberAddress;
-        
+
         if (nameToResolve.startsWith('@')) {
           nameToResolve = nameToResolve.slice(1); // Remove leading @
         }
-        
+
         if (nameToResolve.includes('@')) {
           nameToResolve = nameToResolve.split('@')[0]; // Get part before @
         }
@@ -937,7 +938,7 @@ export default function Sidebar({
         return;
       }
       memberAddress = memberAddress.toLowerCase();
-      
+
       // Try to look up profile for this wallet address
       toast.loading('Looking up wallet...', { id: 'member-lookup' });
       try {
@@ -992,24 +993,24 @@ export default function Sidebar({
 
   const addContactToGroup = (contact: { walletAddress: string; nickname?: string; profile?: BlockStarProfile | null }) => {
     const memberAddress = contact.walletAddress.toLowerCase();
-    
+
     // Check not self
     if (memberAddress === currentUser?.walletAddress.toLowerCase()) {
       toast.error("You'll be added automatically");
       return;
     }
-    
+
     // Check not already added
     if (groupMembers.includes(memberAddress)) {
       toast.error('Member already added');
       return;
     }
-    
+
     setGroupMembers([...groupMembers, memberAddress]);
     setGroupMemberProfiles(prev => ({ ...prev, [memberAddress]: contact.profile || null }));
-    
-    const displayName = contact.profile?.username 
-      ? `@${contact.profile.username}` 
+
+    const displayName = contact.profile?.username
+      ? `@${contact.profile.username}`
       : contact.nickname || truncateAddress(memberAddress);
     toast.success(`Added: ${displayName}`);
   };
@@ -1064,7 +1065,7 @@ export default function Sidebar({
     setDirectAddMode('search');
   };
 
-  const handleLogout = async() => {
+  const handleLogout = async () => {
     await disconnect();
     blockchainService.disconnect();
     useAppStore.getState().reset();
@@ -1073,19 +1074,19 @@ export default function Sidebar({
 
   const handleRefresh = async () => {
     if (isRefreshing) return;
-    
+
     setIsRefreshing(true);
     try {
       // Clear message cache to force fresh fetch
       const { dbHelpers } = await import('@/lib/database');
       dbHelpers.clearMessageCache(); // Clear all cache
-      
+
       // Reload conversations
       await loadConversations();
-      
+
       // Dispatch a custom event so ChatArea can reload messages
       window.dispatchEvent(new CustomEvent('blockstar:refresh'));
-      
+
       toast.success('Refreshed!', { duration: 2000 });
     } catch (error) {
       console.error('Error refreshing:', error);
@@ -1105,7 +1106,7 @@ export default function Sidebar({
     try {
       // Track this as deleted so it won't reappear on refresh (user-specific)
       addDeletedConversation(conversationId, currentUser?.walletAddress);
-      
+
       // Call backend to hide conversation for this user
       const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
       try {
@@ -1117,7 +1118,7 @@ export default function Sidebar({
       } catch (apiError) {
         console.warn('Could not notify server of deletion:', apiError);
       }
-      
+
       // Delete locally
       await db.conversations.delete(conversationId);
       await db.messages.where('conversationId').equals(conversationId).delete();
@@ -1247,22 +1248,20 @@ export default function Sidebar({
           <div className="hidden md:flex gap-2 mt-4">
             <button
               onClick={() => setActiveTab('messages')}
-              className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-xl transition ${
-                activeTab === 'messages'
+              className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-xl transition ${activeTab === 'messages'
                   ? 'bg-primary-500/20 text-primary-400 border border-primary-500/30'
                   : 'bg-card text-secondary hover:text-white border border-midnight'
-              }`}
+                }`}
             >
               <MessageSquare size={16} />
               <span className="text-sm font-medium">Messages</span>
             </button>
             <button
               onClick={() => setActiveTab('contacts')}
-              className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-xl transition ${
-                activeTab === 'contacts'
+              className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-xl transition ${activeTab === 'contacts'
                   ? 'bg-primary-500/20 text-primary-400 border border-primary-500/30'
                   : 'bg-card text-secondary hover:text-white border border-midnight'
-              }`}
+                }`}
             >
               <BookUser size={16} />
               <span className="text-sm font-medium">Contacts</span>
@@ -1277,165 +1276,165 @@ export default function Sidebar({
           </div>
         ) : (
           <>
-        {/* Conversations List */}
-        <div className="flex-1 overflow-y-auto">
-          {filteredConversations.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-muted px-4">
-              <MessageSquarePlus size={48} className="mb-4 text-dark-100" />
-              <p className="text-center font-medium text-secondary">No conversations yet</p>
-              <p className="text-sm text-center mt-1 mb-4">Start a new chat to begin messaging</p>
-              <button
-                onClick={() => setShowNewChatModal(true)}
-                className="px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white rounded-lg transition flex items-center gap-2 shadow-glow"
-              >
-                <Plus size={18} />
-                New Chat
-              </button>
-            </div>
-          ) : (
-            filteredConversations.map((conversation) => {
-              const isGroup = conversation.type === 'group';
-              const groupConv = conversation as any; // Type assertion for group properties
-              const otherParticipant = !isGroup ? conversation.participants.find(
-                (p) => p.toLowerCase() !== currentUser?.walletAddress.toLowerCase()
-              ) : null;
-              const isActive = conversation.id === activeConversationId;
-              
-              // Check contactProfiles state first, then fall back to wallet cache
-              const stateProfile = otherParticipant ? contactProfiles[otherParticipant.toLowerCase()] : null;
-              const contactProfile = stateProfile || (otherParticipant ? getProfileByWallet(otherParticipant) : null);
+            {/* Conversations List */}
+            <div className="flex-1 overflow-y-auto">
+              {filteredConversations.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-muted px-4">
+                  <MessageSquarePlus size={48} className="mb-4 text-dark-100" />
+                  <p className="text-center font-medium text-secondary">No conversations yet</p>
+                  <p className="text-sm text-center mt-1 mb-4">Start a new chat to begin messaging</p>
+                  <button
+                    onClick={() => setShowNewChatModal(true)}
+                    className="px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white rounded-lg transition flex items-center gap-2 shadow-glow"
+                  >
+                    <Plus size={18} />
+                    New Chat
+                  </button>
+                </div>
+              ) : (
+                filteredConversations.map((conversation) => {
+                  const isGroup = conversation.type === 'group';
+                  const groupConv = conversation as any; // Type assertion for group properties
+                  const otherParticipant = !isGroup ? conversation.participants.find(
+                    (p) => p.toLowerCase() !== currentUser?.walletAddress.toLowerCase()
+                  ) : null;
+                  const isActive = conversation.id === activeConversationId;
 
-              return (
-                <div
-                  key={conversation.id}
-                  onClick={() => {
-                    setActiveConversation(conversation.id);
-                    onConversationSelect?.();
-                  }}
-                  onMouseEnter={() => setHoveredConversation(conversation.id)}
-                  onMouseLeave={() => setHoveredConversation(null)}
-                  className={`p-3 md:p-4 border-b border-midnight cursor-pointer transition-all relative active:bg-primary-500/20 ${isActive
-                    ? 'bg-primary-500/10 border-l-2 border-l-primary-500'
-                    : 'hover:bg-card'
-                    }`}
-                >
-                  <div className="flex items-start gap-3">
-                    <div 
-                      className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-semibold flex-shrink-0 overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary-500 transition ${isGroup
-                        ? 'bg-gradient-to-br from-purple-500/50 to-pink-500/50'
-                        : 'bg-gradient-to-br from-primary-500/50 to-cyan-500/50'
-                        }`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (!isGroup && otherParticipant) {
-                          setSelectedProfileAddress(otherParticipant);
-                          setShowProfileModal(true);
-                        }
+                  // Check contactProfiles state first, then fall back to wallet cache
+                  const stateProfile = otherParticipant ? contactProfiles[otherParticipant.toLowerCase()] : null;
+                  const contactProfile = stateProfile || (otherParticipant ? getProfileByWallet(otherParticipant) : null);
+
+                  return (
+                    <div
+                      key={conversation.id}
+                      onClick={() => {
+                        setActiveConversation(conversation.id);
+                        onConversationSelect?.();
                       }}
-                      title={isGroup ? 'Group Chat' : 'View Profile'}
+                      onMouseEnter={() => setHoveredConversation(conversation.id)}
+                      onMouseLeave={() => setHoveredConversation(null)}
+                      className={`p-3 md:p-4 border-b border-midnight cursor-pointer transition-all relative active:bg-primary-500/20 ${isActive
+                        ? 'bg-primary-500/10 border-l-2 border-l-primary-500'
+                        : 'hover:bg-card'
+                        }`}
                     >
-                      {isGroup ? (
-                        (groupConv.groupAvatar || groupConv.avatar) ? (
-                          <img
-                            src={groupConv.groupAvatar || groupConv.avatar}
-                            alt={groupConv.groupName || 'Group'}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <Users size={20} />
-                        )
-                      ) : contactProfile?.avatar ? (
-                        <img
-                          src={contactProfile.avatar}
-                          alt={contactProfile.username || 'Avatar'}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        getInitials(contactProfile?.username || otherParticipant || '')
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="truncate">
+                      <div className="flex items-start gap-3">
+                        <div
+                          className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-semibold flex-shrink-0 overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary-500 transition ${isGroup
+                            ? 'bg-gradient-to-br from-purple-500/50 to-pink-500/50'
+                            : 'bg-gradient-to-br from-primary-500/50 to-cyan-500/50'
+                            }`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!isGroup && otherParticipant) {
+                              setSelectedProfileAddress(otherParticipant);
+                              setShowProfileModal(true);
+                            }
+                          }}
+                          title={isGroup ? 'Group Chat' : 'View Profile'}
+                        >
                           {isGroup ? (
-                            <>
-                              <p className="font-semibold text-white truncate">{groupConv.groupName || 'Group Chat'}</p>
-                              <p className="text-xs text-muted truncate">{conversation.participants.length} members</p>
-                            </>
-                          ) : contactProfile?.username ? (
-                            <>
-                              <p className="font-semibold text-white truncate">@{contactProfile.username}</p>
-                              <p className="text-xs text-muted truncate">{truncateAddress(otherParticipant || '')}</p>
-                            </>
+                            (groupConv.groupAvatar || groupConv.avatar) ? (
+                              <img
+                                src={groupConv.groupAvatar || groupConv.avatar}
+                                alt={groupConv.groupName || 'Group'}
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <Users size={20} />
+                            )
+                          ) : contactProfile?.avatar ? (
+                            <img
+                              src={contactProfile.avatar}
+                              alt={contactProfile.username || 'Avatar'}
+                              className="w-full h-full object-cover"
+                            />
                           ) : (
-                            <p className="font-semibold text-white truncate">
-                              {truncateAddress(otherParticipant || '')}
-                            </p>
+                            getInitials(contactProfile?.username || otherParticipant || '')
                           )}
                         </div>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          {conversation.lastMessage && (
-                            <span className="text-xs text-muted">
-                              {formatTimestamp(conversation.lastMessage.timestamp)}
-                            </span>
-                          )}
-                          {conversation.unreadCount > 0 && !isActive && (
-                            <span className="min-w-[20px] h-5 px-1.5 bg-primary-500 text-white text-xs font-bold rounded-full flex items-center justify-center">
-                              {conversation.unreadCount > 99 ? '99+' : conversation.unreadCount}
-                            </span>
-                          )}
-                          {hoveredConversation === conversation.id && (
-                            <button
-                              onClick={(e) => handleDeleteConversation(e, conversation.id)}
-                              className="p-1 hover:bg-danger-500/20 rounded transition"
-                              title="Delete conversation"
-                            >
-                              <Trash2 size={14} className="text-danger-500" />
-                            </button>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between mb-1">
+                            <div className="truncate">
+                              {isGroup ? (
+                                <>
+                                  <p className="font-semibold text-white truncate">{groupConv.groupName || 'Group Chat'}</p>
+                                  <p className="text-xs text-muted truncate">{conversation.participants.length} members</p>
+                                </>
+                              ) : contactProfile?.username ? (
+                                <>
+                                  <p className="font-semibold text-white truncate">@{contactProfile.username}</p>
+                                  <p className="text-xs text-muted truncate">{truncateAddress(otherParticipant || '')}</p>
+                                </>
+                              ) : (
+                                <p className="font-semibold text-white truncate">
+                                  {truncateAddress(otherParticipant || '')}
+                                </p>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              {conversation.lastMessage && (
+                                <span className="text-xs text-muted">
+                                  {formatTimestamp(conversation.lastMessage.timestamp)}
+                                </span>
+                              )}
+                              {conversation.unreadCount > 0 && !isActive && (
+                                <span className="min-w-[20px] h-5 px-1.5 bg-primary-500 text-white text-xs font-bold rounded-full flex items-center justify-center">
+                                  {conversation.unreadCount > 99 ? '99+' : conversation.unreadCount}
+                                </span>
+                              )}
+                              {hoveredConversation === conversation.id && (
+                                <button
+                                  onClick={(e) => handleDeleteConversation(e, conversation.id)}
+                                  className="p-1 hover:bg-danger-500/20 rounded transition"
+                                  title="Delete conversation"
+                                >
+                                  <Trash2 size={14} className="text-danger-500" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {conversation.lastMessage ? (
+                            <p className="text-sm text-secondary truncate">
+                              {(() => {
+                                const content = conversation.lastMessage.content;
+                                // Handle non-string content (like JSON objects for voice/file messages)
+                                if (typeof content !== 'string') {
+                                  return '📎 Attachment';
+                                }
+                                // Handle encrypted group message marker
+                                if (content === '__ENCRYPTED_GROUP__') {
+                                  return '🔒 Encrypted message';
+                                }
+                                // Check if it's a JSON voice/file message
+                                if (content.startsWith('{"type":"voice"')) {
+                                  return '🎤 Voice message';
+                                }
+                                if (content.startsWith('{"type":') || content.startsWith('{"url":')) {
+                                  return '📎 Attachment';
+                                }
+                                // Check if content looks like encrypted (base64 with no spaces)
+                                // const looksEncrypted = /^[A-Za-z0-9+/=]+$/.test(content) &&
+                                //   content.length > 20 &&
+                                //   !content.includes(' ');
+                                // if (looksEncrypted) {
+                                //   return '🔒 Encrypted message';
+                                // }
+                                // Regular text message
+                                const displayContent = content.substring(0, 40);
+                                return displayContent + (content.length > 40 ? '...' : '');
+                              })()}
+                            </p>
+                          ) : (
+                            <p className="text-sm text-muted italic">No messages yet</p>
                           )}
                         </div>
                       </div>
-                      {conversation.lastMessage ? (
-                        <p className="text-sm text-secondary truncate">
-                          {(() => {
-                            const content = conversation.lastMessage.content;
-                            // Handle non-string content (like JSON objects for voice/file messages)
-                            if (typeof content !== 'string') {
-                              return '📎 Attachment';
-                            }
-                            // Handle encrypted group message marker
-                            if (content === '__ENCRYPTED_GROUP__') {
-                              return '🔒 Encrypted message';
-                            }
-                            // Check if it's a JSON voice/file message
-                            if (content.startsWith('{"type":"voice"')) {
-                              return '🎤 Voice message';
-                            }
-                            if (content.startsWith('{"type":') || content.startsWith('{"url":')) {
-                              return '📎 Attachment';
-                            }
-                            // Check if content looks like encrypted (base64 with no spaces)
-                            // const looksEncrypted = /^[A-Za-z0-9+/=]+$/.test(content) &&
-                            //   content.length > 20 &&
-                            //   !content.includes(' ');
-                            // if (looksEncrypted) {
-                            //   return '🔒 Encrypted message';
-                            // }
-                            // Regular text message
-                            const displayContent = content.substring(0, 40);
-                            return displayContent + (content.length > 40 ? '...' : '');
-                          })()}
-                        </p>
-                      ) : (
-                        <p className="text-sm text-muted italic">No messages yet</p>
-                      )}
                     </div>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
+                  );
+                })
+              )}
+            </div>
           </>
         )}
       </div>
@@ -1451,33 +1450,33 @@ export default function Sidebar({
           walletAddress={selectedProfileAddress}
           onStartChat={async () => {
             if (!currentUser || !selectedProfileAddress) return;
-            
+
             const address = selectedProfileAddress.toLowerCase();
             const myAddress = currentUser.walletAddress.toLowerCase();
-            
+
             // Check for existing conversation
             let existingConv = conversations.find(conv =>
               conv.type === 'direct' &&
-              conv.participants.map(p => p.toLowerCase()).includes(address) && 
+              conv.participants.map(p => p.toLowerCase()).includes(address) &&
               conv.participants.map(p => p.toLowerCase()).includes(myAddress)
             );
-            
+
             if (existingConv) {
               setActiveConversation(existingConv.id);
               return;
             }
-            
+
             // Create new conversation via API
             const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
             let conversationId: string;
-            
+
             try {
               const response = await fetch(`${API_URL}/api/conversations/direct`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ user1: myAddress, user2: address }),
               });
-              
+
               if (response.ok) {
                 const data = await response.json();
                 if (data.success && data.conversation) {
@@ -1491,7 +1490,7 @@ export default function Sidebar({
             } catch (error) {
               conversationId = generateConversationId(myAddress, address);
             }
-            
+
             // Create the conversation object
             const newConversation: Conversation = {
               id: conversationId,
@@ -1501,7 +1500,7 @@ export default function Sidebar({
               createdAt: Date.now(),
               updatedAt: Date.now(),
             };
-            
+
             // Save to database and store
             await db.conversations.put(newConversation);
             addConversation(newConversation);
@@ -1570,22 +1569,20 @@ export default function Sidebar({
                 <div className="flex gap-2 mb-3">
                   <button
                     onClick={() => setDirectAddMode('search')}
-                    className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition ${
-                      directAddMode === 'search'
+                    className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition ${directAddMode === 'search'
                         ? 'bg-primary-500 text-white'
                         : 'bg-dark-200 text-secondary hover:text-white'
-                    }`}
+                      }`}
                   >
                     <Search size={14} />
                     Enter Address
                   </button>
                   <button
                     onClick={() => setDirectAddMode('contacts')}
-                    className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition ${
-                      directAddMode === 'contacts'
+                    className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition ${directAddMode === 'contacts'
                         ? 'bg-primary-500 text-white'
                         : 'bg-dark-200 text-secondary hover:text-white'
-                    }`}
+                      }`}
                   >
                     <BookUser size={14} />
                     Contacts ({availableContacts.length})
@@ -1641,7 +1638,7 @@ export default function Sidebar({
                           )}
                           <div className="flex-1 text-left min-w-0">
                             <p className="text-sm text-white font-medium truncate">
-                              {contact.profile?.username 
+                              {contact.profile?.username
                                 ? `@${contact.profile.username}`
                                 : contact.nickname || truncateAddress(contact.walletAddress)}
                             </p>
@@ -1665,7 +1662,8 @@ export default function Sidebar({
                   </button>
                   {directAddMode === 'search' && (
                     <button
-                      onClick={handleStartNewChat}
+                      type='button'
+                      onClick={()=>handleStartNewChat()}
                       className="flex-1 px-4 py-3 bg-primary-500 text-white rounded-xl hover:bg-primary-600 transition shadow-glow"
                     >
                       Start Chat
@@ -1716,33 +1714,31 @@ export default function Sidebar({
                 {/* Add Members */}
                 <div className="mb-4">
                   <label className="block text-sm text-secondary mb-2">Add Members</label>
-                  
+
                   {/* Toggle between Search and Contacts */}
                   <div className="flex gap-2 mb-3">
                     <button
                       onClick={() => setGroupAddMode('search')}
-                      className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition ${
-                        groupAddMode === 'search'
+                      className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition ${groupAddMode === 'search'
                           ? 'bg-primary-500 text-white'
                           : 'bg-dark-200 text-secondary hover:text-white'
-                      }`}
+                        }`}
                     >
                       <Search size={14} />
                       Search
                     </button>
                     <button
                       onClick={() => setGroupAddMode('contacts')}
-                      className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition ${
-                        groupAddMode === 'contacts'
+                      className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition ${groupAddMode === 'contacts'
                           ? 'bg-primary-500 text-white'
                           : 'bg-dark-200 text-secondary hover:text-white'
-                      }`}
+                        }`}
                     >
                       <BookUser size={14} />
                       Contacts ({availableContacts.filter(c => !groupMembers.includes(c.walletAddress.toLowerCase())).length})
                     </button>
                   </div>
-                  
+
                   {groupAddMode === 'search' ? (
                     <div className="flex gap-2">
                       <input
@@ -1789,7 +1785,7 @@ export default function Sidebar({
                               )}
                               <div className="flex-1 text-left min-w-0">
                                 <p className="text-sm text-white font-medium truncate">
-                                  {contact.profile?.username 
+                                  {contact.profile?.username
                                     ? `@${contact.profile.username}`
                                     : contact.nickname || truncateAddress(contact.walletAddress)}
                                 </p>

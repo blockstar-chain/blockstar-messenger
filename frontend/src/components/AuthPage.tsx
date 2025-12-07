@@ -4,6 +4,7 @@ import { blockchainService } from '@/lib/blockchain';
 import { encryptionService } from '@/lib/encryption';
 import { webSocketService } from '@/lib/websocket';
 import { resolveProfile } from '@/lib/profileResolver';
+import { initPushNotifications } from '@/lib/capacitor';
 import { Wallet, Shield, Lock, CheckCircle, Sparkles } from 'lucide-react';
 import toast from 'react-hot-toast';
 import logoImg from '@/images/logo.png';
@@ -12,11 +13,10 @@ import ConnectButton from './ConnectButton';
 import { useAppKitAccount } from '@reown/appkit/react';
 import { useSignMessage } from 'wagmi';
 
-
 export default function AuthPage() {
   const { address } = useAppKitAccount();
   const { signMessageAsync } = useSignMessage();
-  const { setCurrentUser, setAuthenticated } = useAppStore();
+  const { setCurrentUser, setAuthenticated, setIncomingCall } = useAppStore();
   const [isConnecting, setIsConnecting] = useState(false);
   const [currentStep, setCurrentStep] = useState<'connect' | 'verify' | 'encrypt'>('connect');
 
@@ -26,14 +26,14 @@ export default function AuthPage() {
     try {
       setCurrentStep('connect');
       const contractconnect = await blockchainService.connectWallet();
-      if(!contractconnect){
+      if (!contractconnect) {
         return false;
       }
 
       setCurrentStep('verify');
       // Verify NFT ownership
       const nftMetadata = await blockchainService.verifyNFTOwnership(address);
-      
+
       if (!nftMetadata) {
         toast.error('No @name NFT found. Please purchase an @name NFT to continue.');
         setIsConnecting(false);
@@ -46,7 +46,7 @@ export default function AuthPage() {
 
       // Initialize encryption with wallet-derived keys
       const signMessageFn = async (message: string) => {
-        return await signMessageAsync({message});
+        return await signMessageAsync({ message });
       };
 
       await encryptionService.initialize(address, signMessageFn);
@@ -78,6 +78,115 @@ export default function AuthPage() {
         status: 'online',
       });
 
+      // Initialize push notifications for mobile (only on native platforms)
+      try {
+        const pushInitialized = await initPushNotifications(address, {
+          onNotificationReceived: (notification) => {
+            console.log('📱 Push notification received (foreground):', notification);
+
+            // Handle incoming call notification when app is in foreground
+            if (notification.data?.type === 'incoming_call') {
+              console.log('📞 Incoming call notification:', {
+                callId: notification.data.callId,
+                callerId: notification.data.callerId,
+                callerName: notification.data.callerName,
+                callType: notification.data.callType,
+              });
+
+              // Store the call offer in session storage if provided
+              if (notification.data.offer) {
+                try {
+                  sessionStorage.setItem('incomingCallOffer', notification.data.offer);
+                  console.log('📞 Stored call offer in session storage');
+                } catch (e) {
+                  console.error('Failed to store offer:', e);
+                }
+              }
+
+              // Show incoming call modal using the same format as MainLayout
+              setIncomingCall({
+                id: notification.data.callId,
+                callerId: notification.data.callerId,
+                recipientId: address,
+                type: notification.data.callType as 'audio' | 'video',
+                status: 'ringing',
+                startTime: Date.now(),
+                // Store caller name in a way that won't cause type errors
+                // The IncomingCallModal will read it as (incomingCall as any).callerName
+              } as any);
+
+              // Store caller name separately if needed by IncomingCallModal
+              if (notification.data.callerName) {
+                sessionStorage.setItem('incomingCallCallerName', notification.data.callerName);
+              }
+
+              // Show toast notification
+              toast.success(
+                `Incoming ${notification.data.callType} call from ${notification.data.callerName || 'Unknown'}`,
+                { duration: 3000 }
+              );
+            }
+          },
+          onNotificationAction: (action) => {
+            console.log('📱 Push notification tapped (background):', action);
+
+            // Handle notification tap when app was in background/closed
+            const data = action.notification.data;
+            if (data?.type === 'incoming_call') {
+              console.log('📞 Opening incoming call from background tap:', {
+                callId: data.callId,
+                callerId: data.callerId,
+                callerName: data.callerName,
+                callType: data.callType,
+              });
+
+              // Store the call offer if provided
+              if (data.offer) {
+                try {
+                  sessionStorage.setItem('incomingCallOffer', data.offer);
+                  console.log('📞 Stored call offer in session storage');
+                } catch (e) {
+                  console.error('Failed to store offer:', e);
+                }
+              }
+
+              // Store caller name
+              if (data.callerName) {
+                sessionStorage.setItem('incomingCallCallerName', data.callerName);
+              }
+
+              // Show incoming call modal
+              setIncomingCall({
+                id: data.callId,
+                callerId: data.callerId,
+                recipientId: address,
+                type: data.callType as 'audio' | 'video',
+                status: 'ringing',
+                startTime: Date.now(),
+                isGroupCall: data.isGroupCall === 'true' || data.isGroupCall === true,
+              } as any);
+            }
+          },
+          onRegistration: (token) => {
+            console.log('📱 Push token registered:', token.substring(0, 20) + '...');
+            toast.success('Push notifications enabled!', { duration: 2000 });
+          },
+          onError: (error) => {
+            console.error('📱 Push notification error:', error);
+            toast.error('Could not enable push notifications', { duration: 3000 });
+          },
+        });
+
+        if (pushInitialized) {
+          console.log('✅ Push notifications initialized successfully');
+        } else {
+          console.log('ℹ️ Push notifications not available (web platform)');
+        }
+      } catch (pushError) {
+        console.error('Failed to initialize push notifications:', pushError);
+        // Don't block authentication if push fails
+      }
+
       setAuthenticated(true);
       toast.success('Successfully authenticated!');
     } catch (error: any) {
@@ -90,10 +199,10 @@ export default function AuthPage() {
   };
 
   useEffect(() => {
-    if(address){
-        handleConnectWallet();
+    if (address) {
+      handleConnectWallet();
     }
-  }, [address])
+  }, [address]);
 
   const StepIcon = ({ step, icon: Icon }: { step: string; icon: any }) => {
     const isActive = currentStep === step;
@@ -103,10 +212,10 @@ export default function AuthPage() {
 
     return (
       <div className={`p-3 rounded-xl transition-all duration-300 ${isActive
-        ? 'bg-gradient-to-br from-primary-500 to-cyan-500 shadow-glow'
-        : isComplete
-          ? 'bg-success-500/20 border border-success-500/50'
-          : 'bg-dark-200 border border-midnight'
+          ? 'bg-gradient-to-br from-primary-500 to-cyan-500 shadow-glow'
+          : isComplete
+            ? 'bg-success-500/20 border border-success-500/50'
+            : 'bg-dark-200 border border-midnight'
         }`}>
         <Icon
           size={22}
@@ -203,9 +312,8 @@ export default function AuthPage() {
             </div>
           </div>
 
-  
           <ConnectButton isConnecting={isConnecting} className="w-full bg-gradient-to-r from-primary-500 to-cyan-500 hover:from-primary-600 hover:to-cyan-600 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 shadow-glow hover:shadow-glow-lg" />
-            
+
           {/* Info */}
           <div className="mt-6 p-4 bg-dark-200 border border-midnight rounded-xl">
             <p className="text-sm text-secondary text-center">
