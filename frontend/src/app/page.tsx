@@ -5,9 +5,17 @@ import { useAppStore } from '@/store';
 import AuthPage from '@/components/AuthPage';
 import MainLayout from '@/components/MainLayout';
 import PWAInstallPrompt from '@/components/PWAInstallPrompt';
+import { initAppLifecycle } from '@/lib/capacitor';
 
 export default function HomePage() {
   const { isAuthenticated } = useAppStore();
+
+
+  useEffect(() => {
+    if(isAuthenticated){
+      initAppLifecycle()
+    }
+  }, [isAuthenticated]);
 
   // Register service worker for PWA
   useEffect(() => {

@@ -28,7 +28,7 @@ export function initializeFirebase(): boolean {
         privateKey,
       }),
     });
-    
+
     firebaseInitialized = true;
     console.log('🔥 Firebase Admin SDK initialized');
     return true;
@@ -118,15 +118,15 @@ export async function sendFCMPush(
     return true;
   } catch (error: any) {
     console.error(`📱 [FCM] Failed to send push to ${platform}:`, error.message);
-    
+
     // Handle specific error codes
     if (error.code === 'messaging/registration-token-not-registered' ||
-        error.code === 'messaging/invalid-registration-token') {
+      error.code === 'messaging/invalid-registration-token') {
       // Token is invalid, should be removed from database
       console.log(`📱 [FCM] Token is invalid, should be removed: ${token.substring(0, 20)}...`);
       return false;
     }
-    
+
     return false;
   }
 }
@@ -139,83 +139,48 @@ export async function sendCallNotification(
   platform: 'ios' | 'android',
   callPayload: CallPushPayload
 ): Promise<boolean> {
-  if (!firebaseInitialized) {
-    console.log('📱 [FCM] Firebase not initialized, skipping call notification');
-    return false;
+  if (!firebaseInitialized) return false;
+
+  const message: admin.messaging.Message = {
+    token,
+    data: {
+      type: 'incoming_call',
+      callId: callPayload.callId,
+      callerId: callPayload.callerId,
+      callerName: callPayload.callerName || '',
+      callType: callPayload.callType,
+      timestamp: Date.now().toString(),
+    },
+  };
+
+  if (platform === 'android') {
+    message.android = {
+      priority: 'high',
+      ttl: 30000,
+      // ❗ NO notification: block here
+    };
   }
 
-  const callerDisplay = callPayload.callerName || 
-    `${callPayload.callerId.substring(0, 6)}...${callPayload.callerId.substring(38)}`;
-
-  try {
-    const message: admin.messaging.Message = {
-      token,
-      // Data-only message for background handling
-      data: {
-        type: 'incoming_call',
-        callId: callPayload.callId,
-        callerId: callPayload.callerId,
-        callerName: callPayload.callerName || '',
-        callType: callPayload.callType,
-        timestamp: Date.now().toString(),
+  if (platform === 'ios') {
+    // unchanged (iOS can use notification block)
+    message.apns = {
+      headers: { 'apns-priority': '10', 'apns-push-type': 'alert' },
+      payload: {
+        aps: {
+          alert: {
+            title: `Incoming ${callPayload.callType} call`,
+            body: `${callPayload.callerName || ''} is calling...`,
+          },
+          sound: 'ringtone.caf',
+          badge: 1,
+          'content-available': 1,
+        },
       },
     };
-
-    if (platform === 'android') {
-      // Android: Use data message for CallKit-like behavior
-      message.android = {
-        priority: 'high',
-        ttl: 30000, // 30 seconds
-        // For Android, we use a data-only message so the app can handle it
-        // and show a full-screen incoming call UI
-        notification: {
-          channelId: 'incoming_calls',
-          priority: 'max',
-          sound: 'ringtone',
-          vibrateTimingsMillis: [0, 500, 200, 500],
-          visibility: 'public',
-          tag: `call_${callPayload.callId}`,
-          title: `Incoming ${callPayload.callType} call`,
-          body: `${callerDisplay} is calling...`,
-        },
-      };
-    } else if (platform === 'ios') {
-      // iOS: Use VoIP push or regular push with CallKit integration
-      message.apns = {
-        headers: {
-          'apns-priority': '10',
-          'apns-push-type': 'alert', // Use 'voip' if using PushKit
-          'apns-expiration': Math.floor(Date.now() / 1000 + 30).toString(),
-        },
-        payload: {
-          aps: {
-            alert: {
-              title: `Incoming ${callPayload.callType} call`,
-              body: `${callerDisplay} is calling...`,
-            },
-            badge: 1,
-            sound: 'ringtone.caf',
-            'content-available': 1,
-            'mutable-content': 1,
-            category: 'INCOMING_CALL',
-            'interruption-level': 'time-sensitive',
-          },
-          // Custom data for the app
-          callId: callPayload.callId,
-          callerId: callPayload.callerId,
-          callerName: callPayload.callerName || '',
-          callType: callPayload.callType,
-        },
-      };
-    }
-
-    const response = await admin.messaging().send(message);
-    console.log(`📞 [FCM] Call notification sent to ${platform}: ${response}`);
-    return true;
-  } catch (error: any) {
-    console.error(`📞 [FCM] Failed to send call notification:`, error.message);
-    return false;
   }
+
+  await admin.messaging().send(message);
+  return true;
 }
 
 /**
