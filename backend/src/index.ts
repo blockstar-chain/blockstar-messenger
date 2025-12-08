@@ -118,6 +118,23 @@ const lastSeenTimes = new Map<string, number>(); // walletAddress -> timestamp
 // REST API ENDPOINTS
 // ============================================
 
+app.get('/test-push', async (req, res) => {
+  let recipient = "0xf93389abc18a6acdea5127c727e350bdf7f81156"
+  let finalCallId = "0xad5292d3d35f57cc0d7876cfd7b583dc99637b0d-0xf93389abc18a6acdea5127c727e350bdf7f81156-1765169684666"
+  let address = "0xad5292d3d35f57cc0d7876cfd7b583dc99637b0d"
+  let displayName = "blockstardev"
+  let callType = "audio"
+  const pushSent = await sendCallPushNotification(
+    recipient,
+    finalCallId,
+    address,
+    displayName,
+    callType
+  );
+
+  console.log(pushSent);
+})
+
 // Health check
 app.get('/health', async (req, res) => {
   try {
@@ -166,16 +183,16 @@ app.post('/api/push-token', async (req, res) => {
   const { token, walletAddress, platform } = req.body;
 
   if (!token || !walletAddress || !platform) {
-    return res.status(400).json({ 
-      success: false, 
-      error: 'token, walletAddress, and platform are required' 
+    return res.status(400).json({
+      success: false,
+      error: 'token, walletAddress, and platform are required'
     });
   }
 
   if (!['ios', 'android'].includes(platform)) {
-    return res.status(400).json({ 
-      success: false, 
-      error: 'platform must be ios or android' 
+    return res.status(400).json({
+      success: false,
+      error: 'platform must be ios or android'
     });
   }
 
@@ -201,9 +218,9 @@ app.delete('/api/push-token', async (req, res) => {
   const { token, walletAddress } = req.body;
 
   if (!token || !walletAddress) {
-    return res.status(400).json({ 
-      success: false, 
-      error: 'token and walletAddress are required' 
+    return res.status(400).json({
+      success: false,
+      error: 'token and walletAddress are required'
     });
   }
 
@@ -219,9 +236,9 @@ app.delete('/api/push-token', async (req, res) => {
 
 // Send push notification when message is sent or call is initiated
 async function sendPushNotification(
-  recipientWallet: string, 
-  title: string, 
-  body: string, 
+  recipientWallet: string,
+  title: string,
+  body: string,
   data: Record<string, any>
 ): Promise<void> {
   try {
@@ -262,7 +279,7 @@ async function sendCallPushNotification(
   callId: string,
   callerId: string,
   callerName: string | undefined,
-  callType: 'audio' | 'video'
+  callType: any
 ): Promise<boolean> {
   try {
     const tokens = await db.getPushTokens(recipientWallet);
@@ -534,11 +551,11 @@ app.post('/api/profile/resolve/wallets', async (req, res) => {
 
     // Get users from database to find their usernames
     const users = await db.getUsersByWallets(walletAddresses);
-    
+
     console.log(`📋 Resolving profiles for ${walletAddresses.length} wallets, found ${users.length} users in DB`);
-    
+
     const results: Record<string, any> = {};
-    
+
     // For users with usernames, resolve their full profiles
     const usernamesMap = new Map<string, string>(); // username -> wallet
     for (const user of users) {
@@ -546,13 +563,13 @@ app.post('/api/profile/resolve/wallets', async (req, res) => {
         usernamesMap.set(user.username, user.wallet_address);
       }
     }
-    
+
     // Resolve profiles for users with usernames
     if (usernamesMap.size > 0) {
       const usernames = Array.from(usernamesMap.keys());
       const nftUsernames = usernames.map(u => profileResolver.extractNftUsername(u));
       const profiles = await profileResolver.resolveProfiles(nftUsernames);
-      
+
       profiles.forEach((profile, username) => {
         const wallet = usernamesMap.get(username) || usernamesMap.get(username.toLowerCase());
         if (wallet) {
@@ -563,7 +580,7 @@ app.post('/api/profile/resolve/wallets', async (req, res) => {
         }
       });
     }
-    
+
     // For wallets without profiles, return basic info from DB
     for (const user of users) {
       const wallet = user.wallet_address.toLowerCase();
@@ -585,12 +602,12 @@ app.post('/api/profile/resolve/wallets', async (req, res) => {
         };
       }
     }
-    
+
     console.log(`📋 Resolved ${Object.keys(results).length} profiles`);
 
-    res.json({ 
+    res.json({
       success: true,
-      profiles: results 
+      profiles: results
     });
   } catch (error) {
     console.error('Error resolving profiles by wallets:', error);
@@ -987,7 +1004,7 @@ app.post('/api/conversations/:conversationId/unhide', async (req, res) => {
     }
 
     const normalizedAddress = walletAddress.toLowerCase();
-    
+
     // Remove from hidden_for array
     await db.unhideConversationForUser(conversationId, normalizedAddress);
 
@@ -1006,11 +1023,11 @@ app.get('/api/conversations/:walletAddress/all', async (req, res) => {
     const address = walletAddress.toLowerCase();
 
     const allConversations = await db.getAllUserConversations(address);
-    
+
     const groups = allConversations.filter(c => c.type === 'group');
     const directs = allConversations.filter(c => c.type === 'direct');
     const hidden = allConversations.filter(c => (c as any).hidden_for?.includes(address));
-    
+
     console.log(`📋 [DEBUG] ALL conversations for ${address}:`);
     console.log(`   - ${groups.length} groups, ${directs.length} direct chats`);
     console.log(`   - ${hidden.length} hidden`);
@@ -1223,13 +1240,13 @@ app.get('/api/groups/:groupId/debug', async (req, res) => {
     const { groupId } = req.params;
 
     const group = await db.getGroup(groupId);
-    
+
     if (!group) {
       return res.status(404).json({ error: 'Group not found', groupId });
     }
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       group: {
         _id: group._id?.toString(),
         group_id: group.group_id,
@@ -1251,19 +1268,19 @@ app.post('/api/groups/:groupId/fix', async (req, res) => {
   try {
     const { groupId } = req.params;
     const { walletAddress } = req.body;
-    
+
     if (!walletAddress) {
       return res.status(400).json({ error: 'walletAddress is required' });
     }
-    
+
     const result = await db.fixGroup(groupId, walletAddress);
-    
+
     if (!result.success) {
       return res.status(404).json({ error: 'Group not found or user is not a participant' });
     }
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       message: 'Group fixed',
       updated: result.updated,
       group: {
@@ -1945,6 +1962,12 @@ io.on('connection', (socket: Socket) => {
           }
         }
 
+        console.log("recipient", recipient)
+        console.log("finalCallId", finalCallId)
+        console.log("address", address)
+        console.log("displayName", displayName)
+        console.log("callType", callType)
+
         // Send push notification
         const pushSent = await sendCallPushNotification(
           recipient,
@@ -1957,8 +1980,8 @@ io.on('connection', (socket: Socket) => {
         if (pushSent) {
           console.log(`📞 Push notification sent for call ${finalCallId}`);
           // Tell the caller we're trying to reach them via push
-          socket.emit('call:initiated', { 
-            callId: finalCallId, 
+          socket.emit('call:initiated', {
+            callId: finalCallId,
             recipientAddress: recipient,
             viaPush: true // Indicate this went via push, not direct socket
           });
@@ -2050,7 +2073,7 @@ io.on('connection', (socket: Socket) => {
         participants: group?.participants,
         members: members,
       }, null, 2));
-      
+
       // Ensure createdBy and admins are set if not provided
       if (!group.createdBy) {
         console.log('⚠️ group.createdBy was not set, using socket address:', address);
@@ -2060,7 +2083,7 @@ io.on('connection', (socket: Socket) => {
         console.log('⚠️ group.admins was empty, setting to createdBy:', group.createdBy);
         group.admins = [group.createdBy];
       }
-      
+
       // Save the group to database
       await db.createGroupConversation(group);
       console.log(`📢 Group "${group.groupName}" created by ${address} with members:`, members);
