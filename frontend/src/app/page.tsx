@@ -5,7 +5,7 @@ import { useAppStore } from '@/store';
 import AuthPage from '@/components/AuthPage';
 import MainLayout from '@/components/MainLayout';
 import PWAInstallPrompt from '@/components/PWAInstallPrompt';
-import { initAppLifecycle } from '@/lib/capacitor';
+import { initNativePlugins } from '@/lib/capacitor';
 
 export default function HomePage() {
   const { isAuthenticated } = useAppStore();
@@ -13,7 +13,7 @@ export default function HomePage() {
 
   useEffect(() => {
     if(isAuthenticated){
-      initAppLifecycle()
+      initNativePlugins()
     }
   }, [isAuthenticated]);
 
