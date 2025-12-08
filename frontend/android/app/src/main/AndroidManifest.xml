@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
@@ -39,9 +40,11 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
+    <!-- WiFi Direct (for mesh networking) -->
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" 
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="s" />
+    <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
 
     <application
         android:allowBackup="true"
@@ -92,8 +95,6 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="phoneCall" />
-
-            
 
     </application>
 
