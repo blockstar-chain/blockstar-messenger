@@ -25,13 +25,13 @@ jobs:
       - name: Install npm dependencies
         run: |
           cd frontend
-          npm install
+          yarn install
 
       # 4) Build Next.js + sync Capacitor (android)
       - name: Build frontend & sync Capacitor
         run: |
           cd frontend
-          npm run build
+          yarn build
           npx cap sync android
 
       # 5) Setup Java + Android SDK
