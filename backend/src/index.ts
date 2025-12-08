@@ -132,7 +132,7 @@ app.get('/test-push', async (req, res) => {
     callType
   );
 
-  console.log(pushSent);
+  console.log(pushSent)
 })
 
 // Health check

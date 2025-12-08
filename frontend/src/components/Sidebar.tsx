@@ -16,10 +16,13 @@ import ContactsSection from './ContactsSection';
 import UserProfileModal from './UserProfileModal';
 import { addToContacts, isContact } from './ContactsSection';
 import MeshStatusIndicator from './MeshStatusIndicator';
-import MeshQRConnect from './MeshQRConnect';
+import MeshNetworkModal from './MeshNetworkModal';
+import MeshSettingsSection from './MeshSettingsSection';
+import MeshSettingsComponent from './MeshSettings';
 import NotificationSettingsPanel from './NotificationSettings';
 import RingtoneSettingsPanel from './RingtoneSettings';
 import { useDisconnect } from '@reown/appkit/react';
+import { unregisterPushNotifications } from '@/lib/pushNotifications';
 
 // Cache for decrypted message previews
 const decryptedPreviewCache = new Map<string, string>();
@@ -128,8 +131,11 @@ export default function Sidebar({
 
   // Mesh modal state
   const [internalShowMeshModal, setInternalShowMeshModal] = useState(false);
-  const showMeshQRConnect = controlledShowMesh ?? internalShowMeshModal;
-  const setShowMeshQRConnect = onMeshModalChange ?? setInternalShowMeshModal;
+  const showMeshModal = controlledShowMesh ?? internalShowMeshModal;
+  const setShowMeshModal = onMeshModalChange ?? setInternalShowMeshModal;
+
+  // Mesh settings modal (separate from main mesh tab)
+  const [showMeshSettings, setShowMeshSettings] = useState(false);
 
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [newChatAddress, setNewChatAddress] = useState('');
@@ -710,7 +716,7 @@ export default function Sidebar({
 
   const handleStartNewChat = async (addressOverride?: string) => {
     const addressToUse = addressOverride || newChatAddress.trim();
-    
+
     if (!addressToUse) {
       toast.error('Please enter a wallet address or @name');
       return;
@@ -721,10 +727,10 @@ export default function Sidebar({
     setLoadingProfile(true);
 
     let targetAddress = addressToUse;
-        
+
     // Check if it's an @name format (e.g., "@david", "david@blockstar" or just "david")
     if (!targetAddress.startsWith('0x')) {
-  
+
       // It's an @name - need to resolve to wallet address
       toast.loading('Looking up @name...', { id: 'name-lookup' });
 
@@ -1066,6 +1072,7 @@ export default function Sidebar({
   };
 
   const handleLogout = async () => {
+    await unregisterPushNotifications();
     await disconnect();
     blockchainService.disconnect();
     useAppStore.getState().reset();
@@ -1205,7 +1212,10 @@ export default function Sidebar({
 
           {/* Mesh Network Status - hidden on mobile (in bottom nav) */}
           <div className="mb-3 hidden md:block">
-            <MeshStatusIndicator onOpenQRConnect={() => setShowMeshQRConnect(true)} />
+            <MeshStatusIndicator
+              onClick={() => setShowMeshModal(true)}
+              onOpenSettings={() => setShowMeshSettings(true)}
+            />
           </div>
 
           {/* Current User */}
@@ -1249,8 +1259,8 @@ export default function Sidebar({
             <button
               onClick={() => setActiveTab('messages')}
               className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-xl transition ${activeTab === 'messages'
-                  ? 'bg-primary-500/20 text-primary-400 border border-primary-500/30'
-                  : 'bg-card text-secondary hover:text-white border border-midnight'
+                ? 'bg-primary-500/20 text-primary-400 border border-primary-500/30'
+                : 'bg-card text-secondary hover:text-white border border-midnight'
                 }`}
             >
               <MessageSquare size={16} />
@@ -1259,8 +1269,8 @@ export default function Sidebar({
             <button
               onClick={() => setActiveTab('contacts')}
               className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-xl transition ${activeTab === 'contacts'
-                  ? 'bg-primary-500/20 text-primary-400 border border-primary-500/30'
-                  : 'bg-card text-secondary hover:text-white border border-midnight'
+                ? 'bg-primary-500/20 text-primary-400 border border-primary-500/30'
+                : 'bg-card text-secondary hover:text-white border border-midnight'
                 }`}
             >
               <BookUser size={16} />
@@ -1570,8 +1580,8 @@ export default function Sidebar({
                   <button
                     onClick={() => setDirectAddMode('search')}
                     className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition ${directAddMode === 'search'
-                        ? 'bg-primary-500 text-white'
-                        : 'bg-dark-200 text-secondary hover:text-white'
+                      ? 'bg-primary-500 text-white'
+                      : 'bg-dark-200 text-secondary hover:text-white'
                       }`}
                   >
                     <Search size={14} />
@@ -1580,8 +1590,8 @@ export default function Sidebar({
                   <button
                     onClick={() => setDirectAddMode('contacts')}
                     className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition ${directAddMode === 'contacts'
-                        ? 'bg-primary-500 text-white'
-                        : 'bg-dark-200 text-secondary hover:text-white'
+                      ? 'bg-primary-500 text-white'
+                      : 'bg-dark-200 text-secondary hover:text-white'
                       }`}
                   >
                     <BookUser size={14} />
@@ -1663,7 +1673,7 @@ export default function Sidebar({
                   {directAddMode === 'search' && (
                     <button
                       type='button'
-                      onClick={()=>handleStartNewChat()}
+                      onClick={() => handleStartNewChat()}
                       className="flex-1 px-4 py-3 bg-primary-500 text-white rounded-xl hover:bg-primary-600 transition shadow-glow"
                     >
                       Start Chat
@@ -1720,8 +1730,8 @@ export default function Sidebar({
                     <button
                       onClick={() => setGroupAddMode('search')}
                       className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition ${groupAddMode === 'search'
-                          ? 'bg-primary-500 text-white'
-                          : 'bg-dark-200 text-secondary hover:text-white'
+                        ? 'bg-primary-500 text-white'
+                        : 'bg-dark-200 text-secondary hover:text-white'
                         }`}
                     >
                       <Search size={14} />
@@ -1730,8 +1740,8 @@ export default function Sidebar({
                     <button
                       onClick={() => setGroupAddMode('contacts')}
                       className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition ${groupAddMode === 'contacts'
-                          ? 'bg-primary-500 text-white'
-                          : 'bg-dark-200 text-secondary hover:text-white'
+                        ? 'bg-primary-500 text-white'
+                        : 'bg-dark-200 text-secondary hover:text-white'
                         }`}
                     >
                       <BookUser size={14} />
@@ -1988,9 +1998,15 @@ export default function Sidebar({
               {/* Sounds & Ringtones Section */}
               <div>
                 <h4 className="font-semibold text-white mb-3 flex items-center gap-2">
-                  🔔 Sounds & Ringtones
+                  <Radio size={18} className="text-purple-500" />
+                  Mesh Network
                 </h4>
-                <RingtoneSettingsPanel />
+                <MeshSettingsSection
+                  onOpenFullSettings={() => {
+                    setShowSettingsModal(false);
+                    setShowMeshSettings(true);
+                  }}
+                />
               </div>
 
               {/* About Section */}
@@ -2027,12 +2043,19 @@ export default function Sidebar({
       )}
 
       {/* Mesh QR Connect Modal */}
-      <MeshQRConnect
-        isOpen={showMeshQRConnect}
-        onClose={() => setShowMeshQRConnect(false)}
+      <MeshNetworkModal
+        isOpen={showMeshModal}
+        onClose={() => setShowMeshModal(false)}
         walletAddress={currentUser?.walletAddress || ''}
-        publicKey={encryptionService.getPublicKey() || ''}
+        publicKey={encryptionService.getPublicKey()}
         username={currentUser?.username}
+        avatar={stats?.profile}
+      />
+
+      {/* Mesh Settings Modal (advanced settings) */}
+      <MeshSettingsComponent
+        isOpen={showMeshSettings}
+        onClose={() => setShowMeshSettings(false)}
       />
     </>
   );

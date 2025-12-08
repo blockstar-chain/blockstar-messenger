@@ -1,17 +1,25 @@
 // frontend/src/lib/mesh/MeshNetworkService.ts
-// BlockStar Cypher - Enhanced Mesh Networking with QR Code Exchange
-// Works offline via WebRTC peer-to-peer connections
+// BlockStar Cypher - Complete Mesh Networking Service
+// Supports BLE, WiFi Direct, QR Code exchange, and WebRTC
 
-import { encryptionService } from '../encryption';
+import { Capacitor } from '@capacitor/core';
+import { BleClient, ScanResult, BleDevice } from '@capacitor-community/bluetooth-le';
+
+// ============================================
+// TYPES
+// ============================================
 
 export interface MeshPeer {
   id: string;
   walletAddress: string;
   publicKey: string;
   username?: string;
+  avatar?: string;
   distance: number;
   lastSeen: number;
-  connectionState: 'connecting' | 'connected' | 'disconnected';
+  connectionType: 'ble' | 'wifi-direct' | 'webrtc' | 'local';
+  connectionState: 'discovered' | 'connecting' | 'connected' | 'disconnected';
+  rssi?: number; // Signal strength for BLE
 }
 
 export interface MeshMessage {
@@ -20,10 +28,34 @@ export interface MeshMessage {
   to: string;
   content: string;
   timestamp: number;
-  type: 'text' | 'file' | 'voice' | 'routing' | 'ack';
+  type: 'text' | 'file' | 'voice' | 'routing' | 'ack' | 'discovery' | 'ping';
   hops: string[];
   ttl: number;
   encrypted: boolean;
+}
+
+export interface MeshNetworkStatus {
+  enabled: boolean;
+  isOnline: boolean;
+  isMeshMode: boolean;
+  bleEnabled: boolean;
+  bleScanning: boolean;
+  wifiDirectEnabled: boolean;
+  connectedPeers: number;
+  discoveredPeers: number;
+  queuedMessages: number;
+  lastServerCheck: number;
+}
+
+export interface MeshSettings {
+  enabled: boolean;
+  autoConnect: boolean;
+  bleEnabled: boolean;
+  wifiDirectEnabled: boolean;
+  hybridMode: boolean; // Auto-switch between internet and mesh
+  storeAndForward: boolean;
+  maxHops: number;
+  scanInterval: number; // seconds
 }
 
 export interface ConnectionOffer {
@@ -39,195 +71,586 @@ export interface ConnectionOffer {
   expiresAt: number;
 }
 
-type MessageHandler = (message: MeshMessage) => void;
-type PeerHandler = (peer: MeshPeer, event: 'connected' | 'disconnected') => void;
+type MessageHandler = (message: MeshMessage, peer: MeshPeer) => void;
+type PeerHandler = (peer: MeshPeer, event: 'discovered' | 'connected' | 'disconnected') => void;
 type StatusHandler = (status: MeshNetworkStatus) => void;
+type PermissionHandler = (type: 'bluetooth' | 'location', granted: boolean) => void;
 
-export interface MeshNetworkStatus {
-  isOnline: boolean;
-  isMeshMode: boolean;
-  connectedPeers: number;
-  knownPeers: number;
-  queuedMessages: number;
-  lastServerCheck: number;
-}
+// ============================================
+// CONSTANTS
+// ============================================
+
+const BLOCKSTAR_BLE_SERVICE_UUID = '0000bcff-0000-1000-8000-00805f9b34fb';
+const BLOCKSTAR_BLE_CHAR_UUID = '0000bcfe-0000-1000-8000-00805f9b34fb';
 
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:stun2.l.google.com:19302' },
 ];
 
-const OFFER_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
-const SERVER_CHECK_INTERVAL = 10000; // 10 seconds
-const PEER_TIMEOUT = 30000; // 30 seconds
-const MAX_MESSAGE_TTL = 10;
-const MAX_HOPS = 5;
+const DEFAULT_SETTINGS: MeshSettings = {
+  enabled: false,
+  autoConnect: true,
+  bleEnabled: true,
+  wifiDirectEnabled: false, // Requires more setup
+  hybridMode: true,
+  storeAndForward: true,
+  maxHops: 5,
+  scanInterval: 10,
+};
 
-export class MeshNetworkService {
-  private peers: Map<string, RTCPeerConnection> = new Map();
-  private dataChannels: Map<string, RTCDataChannel> = new Map();
-  private peerInfo: Map<string, MeshPeer> = new Map();
-  private routingTable: Map<string, string[]> = new Map();
+const SERVER_CHECK_INTERVAL = 10000;
+const PEER_TIMEOUT = 60000;
+const BLE_SCAN_DURATION = 5000;
+const MESSAGE_TTL = 300000; // 5 minutes
+
+// ============================================
+// MESH NETWORK SERVICE CLASS
+// ============================================
+
+class MeshNetworkService {
+  // State
+  private isInitialized = false;
+  private isNative = false;
+  private settings: MeshSettings = { ...DEFAULT_SETTINGS };
+  
+  // Identity
+  private myWalletAddress = '';
+  private myPublicKey = '';
+  private myUsername = '';
+  private myAvatar = '';
+  
+  // Network state
+  private isServerOnline = true;
+  private isMeshMode = false;
+  private lastServerCheck = 0;
+  
+  // Peers
+  private discoveredPeers = new Map<string, MeshPeer>();
+  private connectedPeers = new Map<string, MeshPeer>();
+  
+  // WebRTC connections
+  private peerConnections = new Map<string, RTCPeerConnection>();
+  private dataChannels = new Map<string, RTCDataChannel>();
+  private pendingConnections = new Map<string, RTCPeerConnection>();
+  
+  // Message handling
   private messageQueue: MeshMessage[] = [];
-  private processedMessages: Set<string> = new Set();
-  private pendingIceCandidates: Map<string, RTCIceCandidateInit[]> = new Map();
+  private processedMessages = new Set<string>();
+  private routingTable = new Map<string, string[]>(); // destination -> path
   
-  private myWalletAddress: string = '';
-  private myPublicKey: string = '';
-  private myUsername: string = '';
-  
-  private isInitialized: boolean = false;
-  private isMeshMode: boolean = false;
-  private isServerOnline: boolean = true;
+  // Timers
   private serverCheckInterval: NodeJS.Timeout | null = null;
-  private lastServerCheck: number = 0;
+  private bleScanInterval: NodeJS.Timeout | null = null;
+  private peerCleanupInterval: NodeJS.Timeout | null = null;
   
-  private messageHandlers: Set<MessageHandler> = new Set();
-  private peerHandlers: Set<PeerHandler> = new Set();
-  private statusHandlers: Set<StatusHandler> = new Set();
+  // Event handlers
+  private messageHandlers = new Set<MessageHandler>();
+  private peerHandlers = new Set<PeerHandler>();
+  private statusHandlers = new Set<StatusHandler>();
+  private permissionHandlers = new Set<PermissionHandler>();
   
-  private serverUrl: string = '';
-  
+  // BLE state
+  private bleInitialized = false;
+  private bleScanning = false;
+
   // ============================================
   // INITIALIZATION
   // ============================================
-  
+
   async initialize(
-    walletAddress: string, 
-    publicKey: string | Uint8Array | any, 
+    walletAddress: string,
+    publicKey: string | Uint8Array,
     username?: string,
-    serverUrl?: string
-  ): Promise<void> {
-    if (this.isInitialized) return;
-    
-    this.myWalletAddress = walletAddress.toLowerCase();
-    
-    // Convert publicKey to string if needed
-    if (typeof publicKey === 'string') {
-      this.myPublicKey = publicKey;
-    } else if (publicKey instanceof Uint8Array) {
-      this.myPublicKey = Array.from(publicKey)
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
-    } else if (publicKey instanceof ArrayBuffer) {
-      this.myPublicKey = Array.from(new Uint8Array(publicKey))
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
-    } else if (Array.isArray(publicKey)) {
-      this.myPublicKey = publicKey
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
-    } else if (publicKey) {
-      // Fallback to string conversion
-      this.myPublicKey = String(publicKey);
-    } else {
-      this.myPublicKey = '';
-      console.warn('⚠️ MeshNetworkService: No publicKey provided');
+    avatar?: string
+  ): Promise<boolean> {
+    if (this.isInitialized && this.myWalletAddress === walletAddress.toLowerCase()) {
+      return true;
     }
-    
-    console.log('🔑 MeshNetworkService publicKey type:', typeof publicKey, 'converted to:', this.myPublicKey.substring(0, 20) + '...');
-    
+
+    console.log('🔗 ════════════════════════════════════════════════');
+    console.log('🔗 INITIALIZING MESH NETWORK SERVICE');
+    console.log('🔗 ════════════════════════════════════════════════');
+
+    this.myWalletAddress = walletAddress.toLowerCase();
+    this.myPublicKey = this.normalizePublicKey(publicKey);
     this.myUsername = username || '';
-    this.serverUrl = serverUrl || process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
-    
-    // Start server health monitoring
-    this.startServerMonitoring();
-    
-    // Listen for mesh messages
-    window.addEventListener('mesh-signal', this.handleSignalEvent.bind(this));
-    
-    // Start broadcast channel for local discovery
+    this.myAvatar = avatar || '';
+    this.isNative = Capacitor.isNativePlatform();
+
+    // Load saved settings
+    this.loadSettings();
+
+    // Start server connectivity check
+    this.startServerCheck();
+
+    // Start peer cleanup
+    this.startPeerCleanup();
+
+    // Initialize BLE if on native platform and enabled
+    if (this.isNative && this.settings.enabled && this.settings.bleEnabled) {
+      await this.initializeBLE();
+    }
+
+    // Start local discovery (for same-browser/network)
     this.startLocalDiscovery();
-    
+
     this.isInitialized = true;
-    console.log('🔗 Mesh network initialized for:', this.myWalletAddress);
-    
+    this.notifyStatusChange();
+
+    console.log('✅ Mesh network service initialized');
+    console.log('   Platform:', this.isNative ? 'Native' : 'Web');
+    console.log('   Settings:', this.settings);
+
+    return true;
+  }
+
+  // ============================================
+  // SETTINGS MANAGEMENT
+  // ============================================
+
+  loadSettings(): void {
+    try {
+      const saved = localStorage.getItem('meshNetworkSettings');
+      if (saved) {
+        this.settings = { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+      }
+    } catch (e) {
+      console.error('Failed to load mesh settings:', e);
+    }
+  }
+
+  saveSettings(): void {
+    try {
+      localStorage.setItem('meshNetworkSettings', JSON.stringify(this.settings));
+    } catch (e) {
+      console.error('Failed to save mesh settings:', e);
+    }
+  }
+
+  getSettings(): MeshSettings {
+    return { ...this.settings };
+  }
+
+  async updateSettings(newSettings: Partial<MeshSettings>): Promise<void> {
+    const oldEnabled = this.settings.enabled;
+    const oldBleEnabled = this.settings.bleEnabled;
+
+    this.settings = { ...this.settings, ...newSettings };
+    this.saveSettings();
+
+    // Handle enable/disable
+    if (newSettings.enabled !== undefined) {
+      if (newSettings.enabled && !oldEnabled) {
+        await this.enableMeshNetworking();
+      } else if (!newSettings.enabled && oldEnabled) {
+        await this.disableMeshNetworking();
+      }
+    }
+
+    // Handle BLE toggle
+    if (newSettings.bleEnabled !== undefined && this.settings.enabled) {
+      if (newSettings.bleEnabled && !oldBleEnabled) {
+        await this.initializeBLE();
+        this.startBLEScanning();
+      } else if (!newSettings.bleEnabled && oldBleEnabled) {
+        this.stopBLEScanning();
+      }
+    }
+
     this.notifyStatusChange();
   }
-  
+
   // ============================================
-  // SERVER MONITORING & AUTO-FALLBACK
+  // ENABLE/DISABLE MESH NETWORKING
   // ============================================
-  
-  private startServerMonitoring(): void {
-    const checkServer = async () => {
+
+  async enableMeshNetworking(): Promise<boolean> {
+    console.log('🔗 Enabling mesh networking...');
+
+    if (!this.isNative) {
+      console.log('📱 Running on web - limited mesh capabilities');
+      this.settings.enabled = true;
+      this.saveSettings();
+      this.notifyStatusChange();
+      return true;
+    }
+
+    // Check and request permissions
+    const permissionsGranted = await this.requestPermissions();
+    if (!permissionsGranted) {
+      console.error('❌ Required permissions not granted');
+      return false;
+    }
+
+    // Initialize BLE
+    if (this.settings.bleEnabled) {
+      const bleOk = await this.initializeBLE();
+      if (bleOk) {
+        this.startBLEScanning();
+      }
+    }
+
+    this.settings.enabled = true;
+    this.saveSettings();
+    this.notifyStatusChange();
+
+    console.log('✅ Mesh networking enabled');
+    return true;
+  }
+
+  async disableMeshNetworking(): Promise<void> {
+    console.log('🔗 Disabling mesh networking...');
+
+    // Stop BLE scanning
+    this.stopBLEScanning();
+
+    // Disconnect all peers
+    this.disconnectAllPeers();
+
+    this.settings.enabled = false;
+    this.saveSettings();
+    this.notifyStatusChange();
+
+    console.log('✅ Mesh networking disabled');
+  }
+
+  // ============================================
+  // PERMISSIONS
+  // ============================================
+
+  async requestPermissions(): Promise<boolean> {
+    if (!this.isNative) {
+      return true; // Web doesn't need these permissions
+    }
+
+    console.log('📱 Requesting mesh network permissions...');
+
+    try {
+      // Request Bluetooth permissions
+      await BleClient.initialize();
+      
+      // Request location permission (required for BLE scanning on Android)
+      // This is handled by the BLE plugin on Android
+      
+      this.notifyPermissionChange('bluetooth', true);
+      this.notifyPermissionChange('location', true);
+      
+      return true;
+    } catch (error: any) {
+      console.error('Permission request failed:', error);
+      
+      if (error.message?.includes('bluetooth')) {
+        this.notifyPermissionChange('bluetooth', false);
+      }
+      if (error.message?.includes('location')) {
+        this.notifyPermissionChange('location', false);
+      }
+      
+      return false;
+    }
+  }
+
+  async checkPermissions(): Promise<{ bluetooth: boolean; location: boolean }> {
+    if (!this.isNative) {
+      return { bluetooth: true, location: true };
+    }
+
+    try {
+      // Check if BLE is enabled
+      const enabled = await BleClient.isEnabled();
+      return { bluetooth: enabled, location: enabled };
+    } catch {
+      return { bluetooth: false, location: false };
+    }
+  }
+
+  // ============================================
+  // BLUETOOTH LOW ENERGY (BLE)
+  // ============================================
+
+  private async initializeBLE(): Promise<boolean> {
+    if (!this.isNative) {
+      console.log('BLE not available on web platform');
+      return false;
+    }
+
+    if (this.bleInitialized) {
+      return true;
+    }
+
+    try {
+      console.log('📶 Initializing Bluetooth LE...');
+      
+      await BleClient.initialize();
+      
+      // Check if Bluetooth is enabled
+      const enabled = await BleClient.isEnabled();
+      if (!enabled) {
+        console.log('Bluetooth is disabled, requesting enable...');
+        await BleClient.requestEnable();
+      }
+
+      this.bleInitialized = true;
+      console.log('✅ Bluetooth LE initialized');
+      return true;
+    } catch (error) {
+      console.error('❌ Failed to initialize BLE:', error);
+      return false;
+    }
+  }
+
+  private startBLEScanning(): void {
+    if (!this.bleInitialized || this.bleScanning) {
+      return;
+    }
+
+    console.log('📡 Starting BLE scanning...');
+    this.bleScanning = true;
+    this.notifyStatusChange();
+
+    // Scan function
+    const scan = async () => {
+      if (!this.settings.enabled || !this.settings.bleEnabled) {
+        this.stopBLEScanning();
+        return;
+      }
+
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 5000);
-        
-        const response = await fetch(`${this.serverUrl}/api/health`, {
-          signal: controller.signal,
-        });
-        
-        clearTimeout(timeout);
-        
-        const wasOnline = this.isServerOnline;
-        this.isServerOnline = response.ok;
-        this.lastServerCheck = Date.now();
-        
-        if (wasOnline && !this.isServerOnline) {
-          console.log('🔴 Server offline - switching to mesh mode');
-          this.enableMeshMode();
-        } else if (!wasOnline && this.isServerOnline) {
-          console.log('🟢 Server back online - syncing queued messages');
-          this.syncQueuedMessages();
-        }
-        
-        this.notifyStatusChange();
+        await BleClient.requestLEScan(
+          {
+            services: [BLOCKSTAR_BLE_SERVICE_UUID],
+            allowDuplicates: false,
+          },
+          (result: ScanResult) => {
+            this.handleBLEDeviceDiscovered(result);
+          }
+        );
+
+        // Stop scan after duration
+        setTimeout(async () => {
+          try {
+            await BleClient.stopLEScan();
+          } catch (e) {
+            // Ignore stop errors
+          }
+        }, BLE_SCAN_DURATION);
       } catch (error) {
-        const wasOnline = this.isServerOnline;
-        this.isServerOnline = false;
-        this.lastServerCheck = Date.now();
-        
-        if (wasOnline) {
-          console.log('🔴 Server unreachable - switching to mesh mode');
-          this.enableMeshMode();
-        }
-        
-        this.notifyStatusChange();
+        console.error('BLE scan error:', error);
       }
     };
-    
-    // Initial check
-    checkServer();
-    
-    // Periodic checks
-    this.serverCheckInterval = setInterval(checkServer, SERVER_CHECK_INTERVAL);
+
+    // Start first scan
+    scan();
+
+    // Schedule periodic scans
+    this.bleScanInterval = setInterval(scan, this.settings.scanInterval * 1000);
   }
-  
-  private enableMeshMode(): void {
-    this.isMeshMode = true;
-    console.log('📡 Mesh mode enabled');
+
+  private stopBLEScanning(): void {
+    if (this.bleScanInterval) {
+      clearInterval(this.bleScanInterval);
+      this.bleScanInterval = null;
+    }
+
+    if (this.bleScanning) {
+      BleClient.stopLEScan().catch(() => {});
+      this.bleScanning = false;
+      this.notifyStatusChange();
+    }
+
+    console.log('📡 BLE scanning stopped');
+  }
+
+  private handleBLEDeviceDiscovered(result: ScanResult): void {
+    const device = result.device;
+    const rssi = result.rssi;
+    
+    console.log('📶 BLE device discovered:', device.deviceId, 'RSSI:', rssi);
+
+    // Try to read the device's BlockStar info from advertising data
+    const serviceData = result.serviceData?.[BLOCKSTAR_BLE_SERVICE_UUID];
+    if (!serviceData) {
+      return; // Not a BlockStar device
+    }
+
+    try {
+      // Decode peer info from service data
+      const decoder = new TextDecoder();
+      const peerInfoStr = decoder.decode(serviceData);
+      const peerInfo = JSON.parse(peerInfoStr);
+
+      const peerId = peerInfo.walletAddress.toLowerCase();
+      
+      // Don't discover ourselves
+      if (peerId === this.myWalletAddress) {
+        return;
+      }
+
+      // Create or update peer
+      const existingPeer = this.discoveredPeers.get(peerId);
+      const peer: MeshPeer = {
+        id: device.deviceId,
+        walletAddress: peerId,
+        publicKey: peerInfo.publicKey || '',
+        username: peerInfo.username,
+        avatar: peerInfo.avatar,
+        distance: this.rssiToDistance(rssi),
+        lastSeen: Date.now(),
+        connectionType: 'ble',
+        connectionState: existingPeer?.connectionState || 'discovered',
+        rssi,
+      };
+
+      this.discoveredPeers.set(peerId, peer);
+
+      if (!existingPeer) {
+        console.log('🆕 New BlockStar peer discovered:', peer.username || peerId);
+        this.notifyPeerChange(peer, 'discovered');
+      }
+
+      this.notifyStatusChange();
+
+      // Auto-connect if enabled
+      if (this.settings.autoConnect && peer.connectionState === 'discovered') {
+        this.connectToBLEPeer(peer);
+      }
+    } catch (e) {
+      // Not valid BlockStar data
+    }
+  }
+
+  private async connectToBLEPeer(peer: MeshPeer): Promise<boolean> {
+    console.log('🔗 Connecting to BLE peer:', peer.username || peer.walletAddress);
+
+    peer.connectionState = 'connecting';
+    this.discoveredPeers.set(peer.walletAddress, peer);
+    this.notifyStatusChange();
+
+    try {
+      // Connect to the device
+      await BleClient.connect(peer.id, (deviceId) => {
+        console.log('BLE device disconnected:', deviceId);
+        this.handlePeerDisconnect(peer.walletAddress);
+      });
+
+      // Read characteristic to get full peer info
+      const peerData = await BleClient.read(
+        peer.id,
+        BLOCKSTAR_BLE_SERVICE_UUID,
+        BLOCKSTAR_BLE_CHAR_UUID
+      );
+
+      // Now we have the peer's full info, establish WebRTC for data
+      // BLE is slow, so we use it for discovery and use WebRTC for actual data
+
+      peer.connectionState = 'connected';
+      this.connectedPeers.set(peer.walletAddress, peer);
+      this.discoveredPeers.delete(peer.walletAddress);
+      
+      this.notifyPeerChange(peer, 'connected');
+      this.notifyStatusChange();
+
+      console.log('✅ Connected to BLE peer:', peer.username || peer.walletAddress);
+      return true;
+    } catch (error) {
+      console.error('Failed to connect to BLE peer:', error);
+      peer.connectionState = 'disconnected';
+      this.discoveredPeers.set(peer.walletAddress, peer);
+      this.notifyStatusChange();
+      return false;
+    }
+  }
+
+  private rssiToDistance(rssi: number): number {
+    // Approximate distance from RSSI (very rough estimate)
+    // RSSI of -40 is about 1 meter, -70 is about 10 meters
+    if (rssi >= -40) return 1;
+    if (rssi >= -50) return 3;
+    if (rssi >= -60) return 5;
+    if (rssi >= -70) return 10;
+    if (rssi >= -80) return 20;
+    return 30;
+  }
+
+  // ============================================
+  // LOCAL DISCOVERY (Same Network/Browser)
+  // ============================================
+
+  private startLocalDiscovery(): void {
+    if (typeof BroadcastChannel === 'undefined') {
+      return;
+    }
+
+    const discoveryChannel = new BroadcastChannel('blockstar-mesh-discovery');
+    
+    // Announce presence
+    const announce = () => {
+      if (!this.settings.enabled) return;
+      
+      discoveryChannel.postMessage({
+        type: 'announce',
+        walletAddress: this.myWalletAddress,
+        publicKey: this.myPublicKey,
+        username: this.myUsername,
+        avatar: this.myAvatar,
+        timestamp: Date.now(),
+      });
+    };
+
+    // Listen for peers
+    discoveryChannel.onmessage = (event) => {
+      if (!this.settings.enabled) return;
+      if (event.data.walletAddress?.toLowerCase() === this.myWalletAddress) return;
+
+      if (event.data.type === 'announce') {
+        this.handleLocalPeerDiscovery(event.data);
+      }
+    };
+
+    // Announce periodically
+    announce();
+    setInterval(announce, 5000);
+  }
+
+  private handleLocalPeerDiscovery(data: any): void {
+    const peerId = data.walletAddress.toLowerCase();
+
+    if (this.connectedPeers.has(peerId) || peerId === this.myWalletAddress) {
+      return;
+    }
+
+    const existingPeer = this.discoveredPeers.get(peerId);
+    const peer: MeshPeer = {
+      id: peerId,
+      walletAddress: peerId,
+      publicKey: data.publicKey || '',
+      username: data.username,
+      avatar: data.avatar,
+      distance: 0, // Local = same device/network
+      lastSeen: Date.now(),
+      connectionType: 'local',
+      connectionState: existingPeer?.connectionState || 'discovered',
+    };
+
+    this.discoveredPeers.set(peerId, peer);
+
+    if (!existingPeer) {
+      console.log('🆕 Local peer discovered:', peer.username || peerId);
+      this.notifyPeerChange(peer, 'discovered');
+    }
+
     this.notifyStatusChange();
   }
-  
-  private async syncQueuedMessages(): Promise<void> {
-    if (this.messageQueue.length === 0) return;
-    
-    console.log(`📤 Syncing ${this.messageQueue.length} queued messages to server`);
-    
-    // TODO: Send queued messages to server
-    // For now, just clear the queue since server is back
-    this.messageQueue = [];
-    this.isMeshMode = false;
-    
-    this.notifyStatusChange();
-  }
-  
+
   // ============================================
-  // QR CODE CONNECTION EXCHANGE
+  // QR CODE CONNECTION
   // ============================================
-  
-  /**
-   * Generate a connection offer as QR code data
-   * The other device scans this to connect
-   */
+
   async createConnectionOffer(): Promise<{ qrData: string; offer: ConnectionOffer }> {
     const peerConnection = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     const tempId = `pending_${Date.now()}`;
     
-    // Collect ICE candidates
     const iceCandidates: RTCIceCandidateInit[] = [];
     
     peerConnection.onicecandidate = (event) => {
@@ -235,29 +658,28 @@ export class MeshNetworkService {
         iceCandidates.push(event.candidate.toJSON());
       }
     };
-    
-    // Create data channel
+
     const dataChannel = peerConnection.createDataChannel('mesh', { ordered: true });
-    
-    // Create offer
+    this.setupDataChannel(dataChannel, tempId);
+
     const sdpOffer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(sdpOffer);
-    
-    // Wait for ICE gathering to complete
+
+    // Wait for ICE gathering
     await new Promise<void>((resolve) => {
       if (peerConnection.iceGatheringState === 'complete') {
         resolve();
       } else {
-        peerConnection.onicegatheringstatechange = () => {
+        const checkState = () => {
           if (peerConnection.iceGatheringState === 'complete') {
             resolve();
           }
         };
-        // Timeout after 5 seconds
-        setTimeout(resolve, 5000);
+        peerConnection.onicegatheringstatechange = checkState;
+        setTimeout(resolve, 3000);
       }
     });
-    
+
     const offer: ConnectionOffer = {
       type: 'offer',
       sdp: peerConnection.localDescription?.sdp || '',
@@ -268,86 +690,47 @@ export class MeshNetworkService {
         username: this.myUsername,
       },
       timestamp: Date.now(),
-      expiresAt: Date.now() + OFFER_EXPIRY_MS,
+      expiresAt: Date.now() + 300000, // 5 minutes
     };
-    
-    console.log('🔐 Creating connection offer with peerInfo:', {
-      walletAddress: offer.peerInfo.walletAddress?.slice(0, 12),
-      publicKey: typeof offer.peerInfo.publicKey,
-      publicKeyLength: offer.peerInfo.publicKey?.length || 0,
-      username: offer.peerInfo.username,
-    });
-    
-    // Store pending connection
-    this.peers.set(tempId, peerConnection);
-    this.pendingIceCandidates.set(tempId, []);
-    
-    // Setup data channel handlers
-    dataChannel.onopen = () => {
-      console.log('📡 Data channel opened (from offer)');
-    };
-    
-    dataChannel.onmessage = (event) => {
-      this.handleDataChannelMessage(event.data, tempId);
-    };
-    
-    // Compress and encode for QR
+
+    this.pendingConnections.set(tempId, peerConnection);
+
     const qrData = this.encodeForQR(offer);
-    
-    console.log('📱 Connection offer created, scan QR to connect');
-    
+
     return { qrData, offer };
   }
-  
-  /**
-   * Accept a connection offer from QR code scan
-   */
-  async acceptConnectionOffer(qrData: string): Promise<{ qrData: string; answer: ConnectionOffer }> {
-    const offer = this.decodeFromQR(qrData) as ConnectionOffer;
-    
+
+  async processScannedOffer(qrData: string): Promise<{ qrData: string; answer: ConnectionOffer } | null> {
+    const offer = this.decodeFromQR(qrData);
     if (!offer || offer.type !== 'offer') {
-      throw new Error('Invalid connection offer');
+      console.error('Invalid offer data');
+      return null;
     }
-    
-    if (Date.now() > offer.expiresAt) {
-      throw new Error('Connection offer has expired');
-    }
-    
+
     const peerId = offer.peerInfo.walletAddress.toLowerCase();
     
-    // Create peer connection
     const peerConnection = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    
-    // Collect ICE candidates
     const iceCandidates: RTCIceCandidateInit[] = [];
-    
+
     peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
         iceCandidates.push(event.candidate.toJSON());
       }
     };
-    
-    // Handle incoming data channel
+
     peerConnection.ondatachannel = (event) => {
-      const dataChannel = event.channel;
-      this.setupDataChannel(dataChannel, peerId);
+      this.setupDataChannel(event.channel, peerId);
     };
+
+    await peerConnection.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
     
-    // Set remote description (the offer)
-    await peerConnection.setRemoteDescription({
-      type: 'offer',
-      sdp: offer.sdp,
-    });
-    
-    // Add ICE candidates from offer
     for (const candidate of offer.iceCandidates) {
       await peerConnection.addIceCandidate(candidate);
     }
-    
-    // Create answer
+
     const sdpAnswer = await peerConnection.createAnswer();
     await peerConnection.setLocalDescription(sdpAnswer);
-    
+
     // Wait for ICE gathering
     await new Promise<void>((resolve) => {
       if (peerConnection.iceGatheringState === 'complete') {
@@ -358,10 +741,10 @@ export class MeshNetworkService {
             resolve();
           }
         };
-        setTimeout(resolve, 5000);
+        setTimeout(resolve, 3000);
       }
     });
-    
+
     const answer: ConnectionOffer = {
       type: 'answer',
       sdp: peerConnection.localDescription?.sdp || '',
@@ -372,868 +755,669 @@ export class MeshNetworkService {
         username: this.myUsername,
       },
       timestamp: Date.now(),
-      expiresAt: Date.now() + OFFER_EXPIRY_MS,
+      expiresAt: Date.now() + 300000,
     };
-    
-    // Store peer
-    this.peers.set(peerId, peerConnection);
-    this.peerInfo.set(peerId, {
+
+    // Store peer info
+    const peer: MeshPeer = {
       id: peerId,
-      walletAddress: offer.peerInfo.walletAddress,
+      walletAddress: peerId,
       publicKey: offer.peerInfo.publicKey,
       username: offer.peerInfo.username,
-      distance: 1,
+      distance: 0,
       lastSeen: Date.now(),
+      connectionType: 'webrtc',
       connectionState: 'connecting',
-    });
+    };
     
-    const qrAnswerData = this.encodeForQR(answer);
-    
-    console.log('📱 Connection answer created, show QR for other device to scan');
-    
-    return { qrData: qrAnswerData, answer };
+    this.discoveredPeers.set(peerId, peer);
+    this.peerConnections.set(peerId, peerConnection);
+    this.notifyStatusChange();
+
+    const qrDataResponse = this.encodeForQR(answer);
+
+    return { qrData: qrDataResponse, answer };
   }
-  
-  /**
-   * Complete connection by accepting the answer QR code
-   */
-  async completeConnection(qrData: string): Promise<void> {
-    const answer = this.decodeFromQR(qrData) as ConnectionOffer;
-    
+
+  async processScannedAnswer(qrData: string): Promise<boolean> {
+    const answer = this.decodeFromQR(qrData);
     if (!answer || answer.type !== 'answer') {
-      throw new Error('Invalid connection answer');
+      console.error('Invalid answer data');
+      return false;
     }
-    
+
     const peerId = answer.peerInfo.walletAddress.toLowerCase();
-    
+
     // Find the pending connection
-    let pendingId = '';
-    for (const [id, conn] of this.peers.entries()) {
-      if (id.startsWith('pending_')) {
+    let peerConnection: RTCPeerConnection | undefined;
+    let pendingId: string | undefined;
+    
+    for (const [id, conn] of this.pendingConnections) {
+      if (conn.signalingState === 'have-local-offer') {
+        peerConnection = conn;
         pendingId = id;
         break;
       }
     }
-    
-    if (!pendingId) {
-      throw new Error('No pending connection found');
+
+    if (!peerConnection || !pendingId) {
+      console.error('No pending connection found');
+      return false;
     }
-    
-    const peerConnection = this.peers.get(pendingId)!;
-    
-    // Set remote description (the answer)
-    await peerConnection.setRemoteDescription({
-      type: 'answer',
-      sdp: answer.sdp,
-    });
-    
-    // Add ICE candidates
-    for (const candidate of answer.iceCandidates) {
-      await peerConnection.addIceCandidate(candidate);
-    }
-    
-    // Move from pending to real peer ID
-    this.peers.delete(pendingId);
-    this.peers.set(peerId, peerConnection);
-    
-    // Store peer info
-    this.peerInfo.set(peerId, {
-      id: peerId,
-      walletAddress: answer.peerInfo.walletAddress,
-      publicKey: answer.peerInfo.publicKey,
-      username: answer.peerInfo.username,
-      distance: 1,
-      lastSeen: Date.now(),
-      connectionState: 'connecting',
-    });
-    
-    // Setup data channel when it opens
-    peerConnection.ondatachannel = (event) => {
-      this.setupDataChannel(event.channel, peerId);
-    };
-    
-    console.log('✅ Connection completed with:', peerId);
-  }
-  
-  // ============================================
-  // QR CODE ENCODING/DECODING (COMPRESSED)
-  // ============================================
-  
-  // Minify SDP by removing unnecessary lines and shortening
-  private minifySDP(sdp: string): string {
-    const lines = sdp.split('\r\n');
-    const essential: string[] = [];
-    
-    for (const line of lines) {
-      // Skip empty lines and less critical lines for initial connection
-      if (!line) continue;
-      if (line.startsWith('a=extmap:')) continue;
-      if (line.startsWith('a=rtcp-fb:')) continue;
-      if (line.startsWith('a=ssrc-group:')) continue;
-      if (line.startsWith('a=msid-semantic:')) continue;
-      if (line.startsWith('a=ssrc:')) continue;
-      if (line.startsWith('a=rtcp:')) continue;
+
+    try {
+      await peerConnection.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
       
-      // Shorten common prefixes
-      let shortened = line
-        .replace('a=candidate:', 'C:')
-        .replace('a=ice-ufrag:', 'U:')
-        .replace('a=ice-pwd:', 'P:')
-        .replace('a=fingerprint:', 'F:')
-        .replace('a=setup:', 'S:')
-        .replace('a=mid:', 'M:')
-        .replace('a=rtpmap:', 'R:')
-        .replace('a=group:BUNDLE', 'GB:')
-        .replace('a=sctp-port:', 'SP:')
-        .replace('a=max-message-size:', 'MS:')
-        .replace('m=application', 'MA')
-        .replace('c=IN IP4', 'CI4')
-        .replace('UDP/DTLS/SCTP', 'UDS');
-      
-      essential.push(shortened);
-    }
-    
-    return essential.join('|');
-  }
-  
-  // Restore minified SDP
-  private restoreSDP(minified: string): string {
-    const lines = minified.split('|');
-    const restored: string[] = [];
-    
-    for (const line of lines) {
-      let full = line
-        .replace('C:', 'a=candidate:')
-        .replace('U:', 'a=ice-ufrag:')
-        .replace('P:', 'a=ice-pwd:')
-        .replace('F:', 'a=fingerprint:')
-        .replace('S:', 'a=setup:')
-        .replace('M:', 'a=mid:')
-        .replace('R:', 'a=rtpmap:')
-        .replace('GB:', 'a=group:BUNDLE')
-        .replace('SP:', 'a=sctp-port:')
-        .replace('MS:', 'a=max-message-size:')
-        .replace('MA', 'm=application')
-        .replace('CI4', 'c=IN IP4')
-        .replace('UDS', 'UDP/DTLS/SCTP');
-      
-      restored.push(full);
-    }
-    
-    return restored.join('\r\n') + '\r\n';
-  }
-  
-  // Convert publicKey to string (handles various formats)
-  private stringifyPublicKey(publicKey: any): string {
-    if (!publicKey) {
-      return '';
-    }
-    
-    // Already a string
-    if (typeof publicKey === 'string') {
-      return publicKey;
-    }
-    
-    // Uint8Array or ArrayBuffer
-    if (publicKey instanceof Uint8Array) {
-      return Array.from(publicKey)
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
-    }
-    
-    if (publicKey instanceof ArrayBuffer) {
-      return Array.from(new Uint8Array(publicKey))
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
-    }
-    
-    // Array of numbers
-    if (Array.isArray(publicKey)) {
-      return publicKey
-        .map(b => (typeof b === 'number' ? b.toString(16).padStart(2, '0') : String(b)))
-        .join('');
-    }
-    
-    // Object with specific formats (like from some crypto libraries)
-    if (typeof publicKey === 'object') {
-      // Try to convert to JSON string as fallback
-      try {
-        const json = JSON.stringify(publicKey);
-        // Hash it to get a consistent short string
-        return btoa(json).replace(/[^a-zA-Z0-9]/g, '').slice(0, 32);
-      } catch {
-        return '';
+      for (const candidate of answer.iceCandidates) {
+        await peerConnection.addIceCandidate(candidate);
       }
+
+      // Move from pending to connected
+      this.pendingConnections.delete(pendingId);
+      this.peerConnections.set(peerId, peerConnection);
+
+      // Store peer info
+      const peer: MeshPeer = {
+        id: peerId,
+        walletAddress: peerId,
+        publicKey: answer.peerInfo.publicKey,
+        username: answer.peerInfo.username,
+        distance: 0,
+        lastSeen: Date.now(),
+        connectionType: 'webrtc',
+        connectionState: 'connecting',
+      };
+      
+      this.discoveredPeers.set(peerId, peer);
+      this.notifyStatusChange();
+
+      return true;
+    } catch (error) {
+      console.error('Failed to process answer:', error);
+      return false;
     }
-    
-    // Fallback: convert to string
-    return String(publicKey);
   }
-  
+
+  // ============================================
+  // QR ENCODING/DECODING
+  // ============================================
+
   private encodeForQR(data: ConnectionOffer): string {
-    // Aggressively compress the data for smaller QR codes
-    // Only include essential ICE candidates (host and srflx, max 2)
-    const essentialCandidates = data.iceCandidates
-      .filter(c => c.candidate && (c.candidate.includes('typ host') || c.candidate.includes('typ srflx')))
-      .slice(0, 2)
-      .map(c => {
-        // Extract only essential parts of candidate
-        const parts = c.candidate?.split(' ') || [];
-        // Format: foundation component protocol priority ip port typ type
-        if (parts.length >= 8) {
-          return {
-            c: `${parts[0]} ${parts[1]} ${parts[2]} ${parts[3]} ${parts[4]} ${parts[5]} ${parts[6]} ${parts[7]}`,
-            m: c.sdpMid,
-            l: c.sdpMLineIndex,
-          };
-        }
-        return { c: c.candidate?.substring(0, 100), m: c.sdpMid, l: c.sdpMLineIndex };
-      });
-    
+    // Minify the data for smaller QR codes
     const minified = {
       t: data.type === 'offer' ? 'o' : 'a',
       s: this.minifySDP(data.sdp),
-      i: essentialCandidates,
+      i: data.iceCandidates.slice(0, 3).map(c => ({
+        c: (c.candidate || '').replace('candidate:', '').slice(0, 100),
+        m: c.sdpMid,
+        l: c.sdpMLineIndex,
+      })),
       p: {
-        w: String(data.peerInfo.walletAddress || '').slice(0, 12), // First 12 chars (0x + 10)
-        k: this.stringifyPublicKey(data.peerInfo.publicKey).slice(0, 24), // First 24 chars of pubkey
-        u: String(data.peerInfo.username || '').slice(0, 12), // Max 12 chars username
+        w: String(data.peerInfo.walletAddress || '').slice(2, 14),
+        k: String(data.peerInfo.publicKey || '').slice(0, 24),
+        u: String(data.peerInfo.username || '').slice(0, 12),
       },
-      e: Math.floor((data.expiresAt - Date.now()) / 60000), // Minutes until expiry
+      e: Math.floor((data.expiresAt - Date.now()) / 1000),
     };
-    
-    const jsonStr = JSON.stringify(minified);
-    console.log('📊 QR data JSON size:', jsonStr.length, 'characters');
-    
-    // Check if still too large (QR codes can hold ~2953 alphanumeric chars max, but L correction is ~1273)
-    if (jsonStr.length > 1800) {
-      // Further reduce by removing ICE candidates entirely - rely on trickle ICE
-      minified.i = [];
-      const reducedJson = JSON.stringify(minified);
-      console.log('📊 Reduced QR data size:', reducedJson.length, 'characters');
-      
-      if (reducedJson.length > 1800) {
-        throw new Error('The amount of data is too big to be stored in a QR Code');
-      }
-      return btoa(reducedJson);
-    }
-    
-    return btoa(jsonStr);
+
+    return 'BSM1:' + btoa(JSON.stringify(minified));
   }
-  
+
   private decodeFromQR(qrData: string): ConnectionOffer | null {
     try {
-      const minified = JSON.parse(atob(qrData));
-      
-      // Restore ICE candidates
-      const candidates = (minified.i || []).map((c: any) => ({
-        candidate: c.c?.startsWith('candidate:') ? c.c : `candidate:${c.c}`,
-        sdpMid: c.m,
-        sdpMLineIndex: c.l,
-      }));
-      
+      if (!qrData.startsWith('BSM1:')) {
+        return null;
+      }
+
+      const minified = JSON.parse(atob(qrData.slice(5)));
+
       return {
         type: minified.t === 'o' ? 'offer' : 'answer',
         sdp: this.restoreSDP(minified.s),
-        iceCandidates: candidates,
+        iceCandidates: minified.i.map((c: any) => ({
+          candidate: 'candidate:' + c.c,
+          sdpMid: c.m,
+          sdpMLineIndex: c.l,
+        })),
         peerInfo: {
-          // Pad wallet address back to full length if needed
-          walletAddress: minified.p.w.length < 42 ? minified.p.w.padEnd(42, '0') : minified.p.w,
+          walletAddress: '0x' + minified.p.w.padEnd(40, '0'),
           publicKey: minified.p.k,
           username: minified.p.u,
         },
         timestamp: Date.now(),
-        expiresAt: Date.now() + (minified.e * 60000), // Convert minutes back to ms
+        expiresAt: Date.now() + (minified.e * 1000),
       };
     } catch (error) {
       console.error('Failed to decode QR data:', error);
       return null;
     }
   }
-  
+
+  private minifySDP(sdp: string): string {
+    // Remove unnecessary lines and shorten
+    return sdp
+      .split('\n')
+      .filter(line => 
+        line.startsWith('v=') ||
+        line.startsWith('o=') ||
+        line.startsWith('s=') ||
+        line.startsWith('t=') ||
+        line.startsWith('a=group') ||
+        line.startsWith('a=fingerprint') ||
+        line.startsWith('a=ice-ufrag') ||
+        line.startsWith('a=ice-pwd') ||
+        line.startsWith('m=application')
+      )
+      .join('\n')
+      .slice(0, 500);
+  }
+
+  private restoreSDP(minified: string): string {
+    // Add back required lines
+    let sdp = minified;
+    if (!sdp.includes('a=setup:')) {
+      sdp += '\na=setup:actpass';
+    }
+    if (!sdp.includes('a=mid:')) {
+      sdp += '\na=mid:0';
+    }
+    if (!sdp.includes('a=sctp-port:')) {
+      sdp += '\na=sctp-port:5000';
+    }
+    return sdp;
+  }
+
   // ============================================
   // DATA CHANNEL MANAGEMENT
   // ============================================
-  
+
   private setupDataChannel(channel: RTCDataChannel, peerId: string): void {
     this.dataChannels.set(peerId, channel);
-    
+
     channel.onopen = () => {
       console.log(`📡 Data channel opened with: ${peerId}`);
       
-      const peer = this.peerInfo.get(peerId);
+      // Move peer to connected
+      const peer = this.discoveredPeers.get(peerId) || this.connectedPeers.get(peerId);
       if (peer) {
         peer.connectionState = 'connected';
         peer.lastSeen = Date.now();
+        this.connectedPeers.set(peerId, peer);
+        this.discoveredPeers.delete(peerId);
         this.notifyPeerChange(peer, 'connected');
       }
-      
-      // Update routing
+
+      // Update routing table
       this.routingTable.set(peerId, [peerId]);
-      this.broadcastRoutingUpdate();
-      
-      // Send queued messages for this peer
-      this.sendQueuedMessagesTo(peerId);
-      
+
       this.notifyStatusChange();
+
+      // Send queued messages
+      this.sendQueuedMessagesTo(peerId);
     };
-    
+
     channel.onmessage = (event) => {
       this.handleDataChannelMessage(event.data, peerId);
     };
-    
+
     channel.onclose = () => {
       console.log(`📡 Data channel closed with: ${peerId}`);
       this.handlePeerDisconnect(peerId);
     };
-    
+
     channel.onerror = (error) => {
       console.error(`Data channel error with ${peerId}:`, error);
       this.handlePeerDisconnect(peerId);
     };
   }
-  
+
   private handleDataChannelMessage(data: string, fromPeer: string): void {
     try {
       const message = JSON.parse(data) as MeshMessage;
-      
+
       // Update peer last seen
-      const peer = this.peerInfo.get(fromPeer);
+      const peer = this.connectedPeers.get(fromPeer);
       if (peer) {
         peer.lastSeen = Date.now();
       }
-      
-      // Check if we've already processed this message
+
+      // Check for duplicates
       if (this.processedMessages.has(message.id)) {
         return;
       }
       this.processedMessages.add(message.id);
-      
-      // Clean old processed messages (keep last 1000)
-      if (this.processedMessages.size > 1000) {
-        const arr = Array.from(this.processedMessages);
-        this.processedMessages = new Set(arr.slice(-500));
-      }
-      
+
+      // Handle routing messages
       if (message.type === 'routing') {
         this.handleRoutingMessage(message, fromPeer);
         return;
       }
-      
-      if (message.type === 'ack') {
-        this.handleAckMessage(message);
-        return;
-      }
-      
+
       // Check if message is for us
       if (message.to.toLowerCase() === this.myWalletAddress) {
-        this.deliverMessage(message);
-        this.sendAck(message, fromPeer);
-        return;
-      }
-      
-      // Forward message if TTL allows
-      if (message.ttl > 0 && message.hops.length < MAX_HOPS) {
+        // Deliver message
+        this.messageHandlers.forEach(handler => handler(message, peer!));
+        
+        // Send ACK
+        this.sendAck(message.id, fromPeer);
+      } else {
+        // Forward message (multi-hop)
         this.forwardMessage(message, fromPeer);
       }
-    } catch (error) {
-      console.error('Failed to parse mesh message:', error);
+    } catch (e) {
+      console.error('Failed to handle mesh message:', e);
     }
   }
-  
-  private handlePeerDisconnect(peerId: string): void {
-    this.dataChannels.delete(peerId);
-    this.peers.get(peerId)?.close();
-    this.peers.delete(peerId);
-    
-    const peer = this.peerInfo.get(peerId);
-    if (peer) {
-      peer.connectionState = 'disconnected';
-      this.notifyPeerChange(peer, 'disconnected');
-    }
-    
-    // Update routing
-    this.routingTable.delete(peerId);
-    this.rebuildRoutingTable();
-    
-    this.notifyStatusChange();
-  }
-  
+
   // ============================================
   // MESSAGING
   // ============================================
-  
-  /**
-   * Send a message via mesh network
-   */
+
   async sendMessage(
     to: string,
     content: string,
-    type: 'text' | 'file' | 'voice' = 'text'
-  ): Promise<{ success: boolean; messageId: string }> {
-    const toAddress = to.toLowerCase();
-    
-    // Encrypt message if we have recipient's public key
-    let encryptedContent = content;
-    let isEncrypted = false;
-    
-    const recipientPeer = this.peerInfo.get(toAddress);
-    if (recipientPeer?.publicKey && encryptionService.isReady()) {
-      try {
-        encryptedContent = await encryptionService.encryptForRecipient(
-          content,
-          recipientPeer.publicKey
-        );
-        isEncrypted = true;
-      } catch (error) {
-        console.warn('Could not encrypt mesh message:', error);
-      }
-    }
-    
+    type: MeshMessage['type'] = 'text'
+  ): Promise<{ sent: boolean; queued: boolean; error?: string }> {
     const message: MeshMessage = {
-      id: `mesh_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      id: `${this.myWalletAddress}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       from: this.myWalletAddress,
-      to: toAddress,
-      content: encryptedContent,
+      to: to.toLowerCase(),
+      content,
       timestamp: Date.now(),
       type,
-      hops: [],
-      ttl: MAX_MESSAGE_TTL,
-      encrypted: isEncrypted,
+      hops: [this.myWalletAddress],
+      ttl: this.settings.maxHops,
+      encrypted: false, // TODO: Add encryption
     };
-    
-    // Try direct connection first
-    const directChannel = this.dataChannels.get(toAddress);
-    if (directChannel && directChannel.readyState === 'open') {
-      directChannel.send(JSON.stringify(message));
-      console.log('📨 Sent direct mesh message to:', toAddress);
-      return { success: true, messageId: message.id };
-    }
-    
-    // Try routing
-    const route = this.routingTable.get(toAddress);
-    if (route && route.length > 0) {
-      const nextHop = route[0];
-      const channel = this.dataChannels.get(nextHop);
-      if (channel && channel.readyState === 'open') {
-        message.hops.push(this.myWalletAddress);
+
+    // Try direct send
+    const channel = this.dataChannels.get(to.toLowerCase());
+    if (channel?.readyState === 'open') {
+      try {
         channel.send(JSON.stringify(message));
-        console.log('📨 Sent routed mesh message via:', nextHop);
-        return { success: true, messageId: message.id };
+        return { sent: true, queued: false };
+      } catch (e) {
+        console.error('Failed to send direct message:', e);
       }
     }
-    
-    // Queue message for later
-    this.messageQueue.push(message);
-    console.log('📥 Queued mesh message for:', toAddress);
-    this.notifyStatusChange();
-    
-    return { success: false, messageId: message.id };
-  }
-  
-  private forwardMessage(message: MeshMessage, fromPeer: string): void {
-    message.hops.push(this.myWalletAddress);
-    message.ttl--;
-    
-    // Find route to destination
-    const route = this.routingTable.get(message.to);
-    
+
+    // Try routing
+    const route = this.routingTable.get(to.toLowerCase());
     if (route && route.length > 0) {
       const nextHop = route[0];
-      // Don't send back to where it came from
-      if (nextHop !== fromPeer) {
-        const channel = this.dataChannels.get(nextHop);
-        if (channel && channel.readyState === 'open') {
-          channel.send(JSON.stringify(message));
-          console.log('🔄 Forwarded message to:', nextHop);
-          return;
+      const nextChannel = this.dataChannels.get(nextHop);
+      if (nextChannel?.readyState === 'open') {
+        try {
+          nextChannel.send(JSON.stringify(message));
+          return { sent: true, queued: false };
+        } catch (e) {
+          console.error('Failed to send routed message:', e);
         }
       }
     }
-    
-    // Broadcast to all peers except sender
-    this.dataChannels.forEach((channel, peerId) => {
-      if (peerId !== fromPeer && channel.readyState === 'open') {
-        channel.send(JSON.stringify(message));
-      }
-    });
-  }
-  
-  private deliverMessage(message: MeshMessage): void {
-    // Decrypt if encrypted
-    if (message.encrypted && encryptionService.isReady()) {
-      try {
-        const { decrypted } = encryptionService.decryptFromSender(
-          message.content,
-          message.from
-        );
-        message.content = decrypted;
-      } catch (error) {
-        console.warn('Could not decrypt mesh message:', error);
-        message.content = '🔒 [Encrypted message - cannot decrypt]';
-      }
+
+    // Queue message for later
+    if (this.settings.storeAndForward) {
+      this.messageQueue.push(message);
+      this.notifyStatusChange();
+      return { sent: false, queued: true };
     }
-    
-    console.log('📬 Received mesh message from:', message.from);
-    
-    // Notify handlers
-    this.messageHandlers.forEach((handler) => handler(message));
-    
-    // Also dispatch event for app integration
-    window.dispatchEvent(new CustomEvent('mesh-message-received', { detail: message }));
+
+    return { sent: false, queued: false, error: 'No route to peer' };
   }
-  
-  private sendAck(message: MeshMessage, toPeer: string): void {
-    const ack: MeshMessage = {
-      id: `ack_${message.id}`,
-      from: this.myWalletAddress,
-      to: message.from,
-      content: message.id,
-      timestamp: Date.now(),
-      type: 'ack',
-      hops: [],
-      ttl: MAX_MESSAGE_TTL,
-      encrypted: false,
-    };
-    
+
+  private forwardMessage(message: MeshMessage, fromPeer: string): void {
+    // Check TTL
+    if (message.ttl <= 0) {
+      return;
+    }
+
+    // Add ourselves to hops
+    message.hops.push(this.myWalletAddress);
+    message.ttl--;
+
+    // Find route
+    const route = this.routingTable.get(message.to.toLowerCase());
+    if (route && route.length > 0) {
+      const nextHop = route[0];
+      if (nextHop !== fromPeer) {
+        const channel = this.dataChannels.get(nextHop);
+        if (channel?.readyState === 'open') {
+          channel.send(JSON.stringify(message));
+        }
+      }
+    } else {
+      // Broadcast to all peers except sender
+      this.dataChannels.forEach((channel, peerId) => {
+        if (peerId !== fromPeer && channel.readyState === 'open') {
+          channel.send(JSON.stringify(message));
+        }
+      });
+    }
+  }
+
+  private sendAck(messageId: string, toPeer: string): void {
     const channel = this.dataChannels.get(toPeer);
-    if (channel && channel.readyState === 'open') {
+    if (channel?.readyState === 'open') {
+      const ack: MeshMessage = {
+        id: `ack-${messageId}`,
+        from: this.myWalletAddress,
+        to: toPeer,
+        content: messageId,
+        timestamp: Date.now(),
+        type: 'ack',
+        hops: [],
+        ttl: 1,
+        encrypted: false,
+      };
       channel.send(JSON.stringify(ack));
     }
   }
-  
-  private handleAckMessage(message: MeshMessage): void {
-    // Remove from queue if present
-    const originalId = message.content;
-    this.messageQueue = this.messageQueue.filter((m) => m.id !== originalId);
-    this.notifyStatusChange();
-  }
-  
+
   private sendQueuedMessagesTo(peerId: string): void {
-    const toSend = this.messageQueue.filter((m) => m.to === peerId);
+    const toSend = this.messageQueue.filter(m => m.to.toLowerCase() === peerId);
     const channel = this.dataChannels.get(peerId);
-    
-    if (channel && channel.readyState === 'open') {
-      toSend.forEach((message) => {
-        channel.send(JSON.stringify(message));
-      });
-      
-      // Remove sent messages from queue
-      this.messageQueue = this.messageQueue.filter((m) => m.to !== peerId);
+
+    if (channel?.readyState === 'open') {
+      for (const message of toSend) {
+        try {
+          channel.send(JSON.stringify(message));
+          this.messageQueue = this.messageQueue.filter(m => m.id !== message.id);
+        } catch (e) {
+          // Keep in queue
+        }
+      }
       this.notifyStatusChange();
     }
   }
-  
+
   // ============================================
   // ROUTING
   // ============================================
-  
+
   private handleRoutingMessage(message: MeshMessage, fromPeer: string): void {
     try {
-      const routes = JSON.parse(message.content) as Record<string, number>;
+      const routeUpdate = JSON.parse(message.content);
       
-      for (const [destination, distance] of Object.entries(routes)) {
-        if (destination === this.myWalletAddress) continue;
+      // Update routing table with info from peer
+      for (const [dest, hops] of Object.entries(routeUpdate as Record<string, string[]>)) {
+        if (dest === this.myWalletAddress) continue;
         
-        const newDistance = distance + 1;
-        const existingRoute = this.routingTable.get(destination);
+        const newPath = [fromPeer, ...hops];
+        const existingPath = this.routingTable.get(dest);
         
-        if (!existingRoute || newDistance < existingRoute.length) {
-          this.routingTable.set(destination, [fromPeer, ...Array(distance).fill('*')]);
+        if (!existingPath || newPath.length < existingPath.length) {
+          this.routingTable.set(dest, newPath);
         }
       }
-    } catch (error) {
-      console.error('Failed to parse routing message:', error);
+    } catch (e) {
+      console.error('Failed to handle routing message:', e);
     }
   }
-  
+
   private broadcastRoutingUpdate(): void {
-    const routes: Record<string, number> = {};
+    const routeInfo: Record<string, string[]> = {};
     
-    // Add self
-    routes[this.myWalletAddress] = 0;
-    
-    // Add known routes
-    this.routingTable.forEach((path, destination) => {
-      routes[destination] = path.length;
+    // Include direct connections
+    this.dataChannels.forEach((_, peerId) => {
+      routeInfo[peerId] = [];
     });
-    
+
+    // Include known routes
+    this.routingTable.forEach((path, dest) => {
+      routeInfo[dest] = path;
+    });
+
     const message: MeshMessage = {
-      id: `routing_${Date.now()}`,
+      id: `route-${Date.now()}`,
       from: this.myWalletAddress,
-      to: 'broadcast',
-      content: JSON.stringify(routes),
+      to: '',
+      content: JSON.stringify(routeInfo),
       timestamp: Date.now(),
       type: 'routing',
-      hops: [],
-      ttl: 3,
+      hops: [this.myWalletAddress],
+      ttl: 2,
       encrypted: false,
     };
-    
+
     this.dataChannels.forEach((channel) => {
       if (channel.readyState === 'open') {
         channel.send(JSON.stringify(message));
       }
     });
   }
-  
-  private rebuildRoutingTable(): void {
-    // Keep only direct connections
-    const directPeers = new Set(this.dataChannels.keys());
-    
-    this.routingTable.forEach((_, destination) => {
-      if (!directPeers.has(destination)) {
-        this.routingTable.delete(destination);
-      }
-    });
-    
-    // Request routing updates
-    this.broadcastRoutingUpdate();
-  }
-  
+
   // ============================================
-  // LOCAL DISCOVERY (Same Network)
+  // SERVER CONNECTIVITY CHECK
   // ============================================
-  
-  private startLocalDiscovery(): void {
-    if (typeof BroadcastChannel === 'undefined') return;
-    
-    const discoveryChannel = new BroadcastChannel('blockstar-mesh-discovery');
-    const signalingChannel = new BroadcastChannel('blockstar-mesh-signaling');
-    
-    // Announce presence
-    const announce = () => {
-      discoveryChannel.postMessage({
-        type: 'announce',
-        walletAddress: this.myWalletAddress,
-        publicKey: this.myPublicKey,
-        username: this.myUsername,
-        timestamp: Date.now(),
-      });
-    };
-    
-    // Listen for peers
-    discoveryChannel.onmessage = (event) => {
-      if (event.data.walletAddress === this.myWalletAddress) return;
-      
-      if (event.data.type === 'announce') {
-        this.handleLocalPeerDiscovery(event.data);
-      }
-    };
-    
-    // Handle signaling
-    signalingChannel.onmessage = (event) => {
-      if (event.data.to === this.myWalletAddress) {
-        this.handleSignalingMessage(event.data);
-      }
-    };
-    
-    // Announce periodically
-    announce();
-    setInterval(announce, 5000);
-  }
-  
-  private handleLocalPeerDiscovery(data: any): void {
-    const peerId = data.walletAddress.toLowerCase();
-    
-    if (this.peerInfo.has(peerId) || this.peers.has(peerId)) return;
-    
-    console.log('📡 Discovered local peer:', peerId);
-    
-    // Automatically connect
-    this.connectToLocalPeer(peerId, data.publicKey, data.username);
-  }
-  
-  private async connectToLocalPeer(peerId: string, publicKey: string, username?: string): Promise<void> {
-    const peerConnection = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    
-    peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        const channel = new BroadcastChannel('blockstar-mesh-signaling');
-        channel.postMessage({
-          type: 'ice-candidate',
-          from: this.myWalletAddress,
-          to: peerId,
-          candidate: event.candidate.toJSON(),
+
+  private startServerCheck(): void {
+    const checkServer = async () => {
+      try {
+        const response = await fetch('/api/ping', { 
+          method: 'GET',
+          signal: AbortSignal.timeout(5000),
         });
+        
+        const wasOffline = !this.isServerOnline;
+        this.isServerOnline = response.ok;
+        this.lastServerCheck = Date.now();
+
+        if (wasOffline && this.isServerOnline) {
+          console.log('🌐 Server connection restored');
+          this.isMeshMode = false;
+          this.syncQueuedMessages();
+        }
+
+        this.notifyStatusChange();
+      } catch {
+        if (this.isServerOnline) {
+          console.log('📡 Server offline - switching to mesh mode');
+          this.isServerOnline = false;
+          this.isMeshMode = this.settings.enabled && this.settings.hybridMode;
+          this.notifyStatusChange();
+        }
       }
     };
-    
-    const dataChannel = peerConnection.createDataChannel('mesh', { ordered: true });
-    this.setupDataChannel(dataChannel, peerId);
-    
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-    
-    // Send offer via broadcast channel
-    const channel = new BroadcastChannel('blockstar-mesh-signaling');
-    channel.postMessage({
-      type: 'offer',
-      from: this.myWalletAddress,
-      to: peerId,
-      sdp: offer.sdp,
-      publicKey: this.myPublicKey,
-      username: this.myUsername,
-    });
-    
-    this.peers.set(peerId, peerConnection);
-    this.peerInfo.set(peerId, {
-      id: peerId,
-      walletAddress: peerId,
-      publicKey,
-      username,
-      distance: 1,
-      lastSeen: Date.now(),
-      connectionState: 'connecting',
-    });
+
+    checkServer();
+    this.serverCheckInterval = setInterval(checkServer, SERVER_CHECK_INTERVAL);
   }
-  
-  private async handleSignalingMessage(data: any): Promise<void> {
-    const peerId = data.from.toLowerCase();
+
+  private async syncQueuedMessages(): Promise<void> {
+    if (this.messageQueue.length === 0) return;
+
+    console.log(`📤 Syncing ${this.messageQueue.length} queued messages`);
     
-    if (data.type === 'offer') {
-      const peerConnection = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-      
-      peerConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-          const channel = new BroadcastChannel('blockstar-mesh-signaling');
-          channel.postMessage({
-            type: 'ice-candidate',
-            from: this.myWalletAddress,
-            to: peerId,
-            candidate: event.candidate.toJSON(),
-          });
-        }
-      };
-      
-      peerConnection.ondatachannel = (event) => {
-        this.setupDataChannel(event.channel, peerId);
-      };
-      
-      await peerConnection.setRemoteDescription({ type: 'offer', sdp: data.sdp });
-      
-      const answer = await peerConnection.createAnswer();
-      await peerConnection.setLocalDescription(answer);
-      
-      const channel = new BroadcastChannel('blockstar-mesh-signaling');
-      channel.postMessage({
-        type: 'answer',
-        from: this.myWalletAddress,
-        to: peerId,
-        sdp: answer.sdp,
-      });
-      
-      this.peers.set(peerId, peerConnection);
-      this.peerInfo.set(peerId, {
-        id: peerId,
-        walletAddress: peerId,
-        publicKey: data.publicKey,
-        username: data.username,
-        distance: 1,
-        lastSeen: Date.now(),
-        connectionState: 'connecting',
-      });
-    } else if (data.type === 'answer') {
-      const peerConnection = this.peers.get(peerId);
-      if (peerConnection) {
-        await peerConnection.setRemoteDescription({ type: 'answer', sdp: data.sdp });
-      }
-    } else if (data.type === 'ice-candidate') {
-      const peerConnection = this.peers.get(peerId);
-      if (peerConnection) {
-        await peerConnection.addIceCandidate(data.candidate);
-      }
+    // TODO: Send queued messages to server
+    this.messageQueue = [];
+    this.notifyStatusChange();
+  }
+
+  // ============================================
+  // PEER MANAGEMENT
+  // ============================================
+
+  private handlePeerDisconnect(peerId: string): void {
+    const peer = this.connectedPeers.get(peerId);
+    
+    // Clean up connection
+    this.dataChannels.delete(peerId);
+    this.peerConnections.get(peerId)?.close();
+    this.peerConnections.delete(peerId);
+    
+    // Move back to discovered
+    if (peer) {
+      peer.connectionState = 'disconnected';
+      this.connectedPeers.delete(peerId);
+      this.discoveredPeers.set(peerId, peer);
+      this.notifyPeerChange(peer, 'disconnected');
     }
+
+    // Remove from routing table
+    this.routingTable.delete(peerId);
+    
+    this.notifyStatusChange();
   }
-  
-  private handleSignalEvent(event: Event): void {
-    const customEvent = event as CustomEvent;
-    this.handleSignalingMessage(customEvent.detail);
+
+  private disconnectAllPeers(): void {
+    this.dataChannels.forEach((channel, peerId) => {
+      channel.close();
+      this.handlePeerDisconnect(peerId);
+    });
+
+    this.pendingConnections.forEach((conn) => conn.close());
+    this.pendingConnections.clear();
   }
-  
+
+  private startPeerCleanup(): void {
+    this.peerCleanupInterval = setInterval(() => {
+      const now = Date.now();
+      
+      // Clean up stale discovered peers
+      this.discoveredPeers.forEach((peer, id) => {
+        if (now - peer.lastSeen > PEER_TIMEOUT) {
+          this.discoveredPeers.delete(id);
+        }
+      });
+
+      // Clean up old processed messages
+      if (this.processedMessages.size > 1000) {
+        const toKeep = Array.from(this.processedMessages).slice(-500);
+        this.processedMessages = new Set(toKeep);
+      }
+
+      this.notifyStatusChange();
+    }, 30000);
+  }
+
   // ============================================
   // EVENT HANDLERS
   // ============================================
-  
+
   onMessage(handler: MessageHandler): () => void {
     this.messageHandlers.add(handler);
     return () => this.messageHandlers.delete(handler);
   }
-  
+
   onPeerChange(handler: PeerHandler): () => void {
     this.peerHandlers.add(handler);
     return () => this.peerHandlers.delete(handler);
   }
-  
+
   onStatusChange(handler: StatusHandler): () => void {
     this.statusHandlers.add(handler);
+    handler(this.getStatus()); // Initial call
     return () => this.statusHandlers.delete(handler);
   }
-  
-  private notifyPeerChange(peer: MeshPeer, event: 'connected' | 'disconnected'): void {
-    this.peerHandlers.forEach((handler) => handler(peer, event));
+
+  onPermissionChange(handler: PermissionHandler): () => void {
+    this.permissionHandlers.add(handler);
+    return () => this.permissionHandlers.delete(handler);
   }
-  
+
+  private notifyPeerChange(peer: MeshPeer, event: 'discovered' | 'connected' | 'disconnected'): void {
+    this.peerHandlers.forEach(handler => handler(peer, event));
+  }
+
   private notifyStatusChange(): void {
     const status = this.getStatus();
-    this.statusHandlers.forEach((handler) => handler(status));
+    this.statusHandlers.forEach(handler => handler(status));
   }
-  
+
+  private notifyPermissionChange(type: 'bluetooth' | 'location', granted: boolean): void {
+    this.permissionHandlers.forEach(handler => handler(type, granted));
+  }
+
   // ============================================
   // GETTERS
   // ============================================
-  
+
   getStatus(): MeshNetworkStatus {
     return {
+      enabled: this.settings.enabled,
       isOnline: this.isServerOnline,
       isMeshMode: this.isMeshMode,
-      connectedPeers: this.dataChannels.size,
-      knownPeers: this.peerInfo.size,
+      bleEnabled: this.settings.bleEnabled && this.bleInitialized,
+      bleScanning: this.bleScanning,
+      wifiDirectEnabled: this.settings.wifiDirectEnabled,
+      connectedPeers: this.connectedPeers.size,
+      discoveredPeers: this.discoveredPeers.size,
       queuedMessages: this.messageQueue.length,
       lastServerCheck: this.lastServerCheck,
     };
   }
-  
+
   getConnectedPeers(): MeshPeer[] {
-    return Array.from(this.peerInfo.values()).filter(
-      (p) => p.connectionState === 'connected'
-    );
+    return Array.from(this.connectedPeers.values());
   }
-  
-  getPeerInfo(walletAddress: string): MeshPeer | undefined {
-    return this.peerInfo.get(walletAddress.toLowerCase());
+
+  getDiscoveredPeers(): MeshPeer[] {
+    return Array.from(this.discoveredPeers.values());
   }
-  
+
+  getAllPeers(): MeshPeer[] {
+    return [...this.getConnectedPeers(), ...this.getDiscoveredPeers()];
+  }
+
   isConnectedTo(walletAddress: string): boolean {
-    const channel = this.dataChannels.get(walletAddress.toLowerCase());
-    return channel?.readyState === 'open';
+    return this.connectedPeers.has(walletAddress.toLowerCase());
   }
-  
+
+  // ============================================
+  // UTILITIES
+  // ============================================
+
+  private normalizePublicKey(key: string | Uint8Array | any): string {
+    if (typeof key === 'string') {
+      return key;
+    }
+    if (key instanceof Uint8Array) {
+      return Array.from(key).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+    if (key instanceof ArrayBuffer) {
+      return Array.from(new Uint8Array(key)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+    if (Array.isArray(key)) {
+      return key.map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+    try {
+      return btoa(JSON.stringify(key));
+    } catch {
+      return '';
+    }
+  }
+
   // ============================================
   // CLEANUP
   // ============================================
-  
+
   shutdown(): void {
     if (this.serverCheckInterval) {
       clearInterval(this.serverCheckInterval);
     }
-    
-    this.dataChannels.forEach((channel) => channel.close());
-    this.peers.forEach((conn) => conn.close());
-    
-    this.peers.clear();
-    this.dataChannels.clear();
-    this.peerInfo.clear();
-    this.routingTable.clear();
+    if (this.bleScanInterval) {
+      clearInterval(this.bleScanInterval);
+    }
+    if (this.peerCleanupInterval) {
+      clearInterval(this.peerCleanupInterval);
+    }
+
+    this.stopBLEScanning();
+    this.disconnectAllPeers();
+
+    this.discoveredPeers.clear();
+    this.connectedPeers.clear();
     this.messageQueue = [];
     this.processedMessages.clear();
-    
+    this.routingTable.clear();
+
     this.isInitialized = false;
     this.isMeshMode = false;
-    
+
     console.log('🔗 Mesh network shutdown');
   }
 }
 
-// Singleton instance
+// Singleton
 export const meshNetworkService = new MeshNetworkService();
