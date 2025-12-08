@@ -41,9 +41,9 @@ export interface MeshNetworkStatus {
   isMeshMode: boolean;
   bleEnabled: boolean;
   bleScanning: boolean;
-  wifiDirectEnabled: boolean;      // ADD THIS
-  wifiDirectScanning: boolean;     // ADD THIS
-  wifiDirectConnected: boolean;    // ADD THIS
+  wifiDirectEnabled: boolean;
+  wifiDirectScanning: boolean;     // <-- ADD THIS
+  wifiDirectConnected: boolean;    // <-- ADD THIS
   connectedPeers: number;
   discoveredPeers: number;
   queuedMessages: number;
@@ -94,7 +94,7 @@ const DEFAULT_SETTINGS: MeshSettings = {
   enabled: false,
   autoConnect: true,
   bleEnabled: true,
-  wifiDirectEnabled: true,  // CHANGED FROM false
+  wifiDirectEnabled: true,  // <-- CHANGE THIS FROM false TO true
   hybridMode: true,
   storeAndForward: true,
   maxHops: 5,
@@ -527,7 +527,7 @@ class MeshNetworkService {
         publicKey: peerInfo.publicKey || '',
         username: peerInfo.username,
         avatar: peerInfo.avatar,
-        distance: this.rssiToDistance(rssi),
+        distance: this.rssiToDistance(rssi ?? -100),
         lastSeen: Date.now(),
         connectionType: 'ble',
         connectionState: existingPeer?.connectionState || 'discovered',
@@ -660,14 +660,14 @@ class MeshNetworkService {
     }
   }
 
-  private async stopWifiDirectDiscovery(): Promise<void> {
+  private stopWifiDirectDiscovery(): void {
     if (!this.wifiDirectScanning) {
       return;
     }
 
     console.log('📡 Stopping WiFi Direct discovery...');
 
-    await wifiDirectService.stopDiscovery();
+    wifiDirectService.stopDiscovery();
     this.wifiDirectScanning = false;
     this.notifyStatusChange();
   }
@@ -701,7 +701,9 @@ class MeshNetworkService {
 
     // Convert WiFi Direct peers to mesh peers
     for (const wifiPeer of wifiPeers) {
-      const existingPeer = this.peers.get(wifiPeer.deviceAddress);
+      // Check both discoveredPeers and connectedPeers
+      const existingPeer = this.discoveredPeers.get(wifiPeer.deviceAddress) ||
+        this.connectedPeers.get(wifiPeer.deviceAddress);
 
       if (existingPeer) {
         // Update existing peer
@@ -721,7 +723,7 @@ class MeshNetworkService {
           connectionType: 'wifi-direct',
           connectionState: wifiPeer.status === 'connected' ? 'connected' : 'discovered',
         };
-        this.peers.set(wifiPeer.deviceAddress, meshPeer);
+        this.discoveredPeers.set(wifiPeer.deviceAddress, meshPeer);
         this.notifyPeerChange(meshPeer, 'discovered');
       }
     }
@@ -729,26 +731,34 @@ class MeshNetworkService {
     this.notifyStatusChange();
   }
 
-  private handleWifiDirectConnectionChanged(data: any): void {
+  private handleWifiDirectConnectionChanged(data: { connected: boolean; isGroupOwner?: boolean }): void {
     if (data.connected) {
       console.log('📶 WiFi Direct connected - Group owner:', data.isGroupOwner);
 
       // Find the connected peer and update state
       if (this.wifiDirectConnectedAddress) {
-        const peer = this.peers.get(this.wifiDirectConnectedAddress);
+        const peer = this.discoveredPeers.get(this.wifiDirectConnectedAddress) ||
+          this.connectedPeers.get(this.wifiDirectConnectedAddress);
         if (peer) {
           peer.connectionState = 'connected';
+          // Move from discovered to connected
+          this.discoveredPeers.delete(this.wifiDirectConnectedAddress);
+          this.connectedPeers.set(this.wifiDirectConnectedAddress, peer);
           this.notifyPeerChange(peer, 'connected');
         }
       }
+
+      // Send handshake
+      this.sendWifiDirectHandshake(true);
     } else {
       console.log('📶 WiFi Direct disconnected');
 
       // Update peer state
       if (this.wifiDirectConnectedAddress) {
-        const peer = this.peers.get(this.wifiDirectConnectedAddress);
+        const peer = this.connectedPeers.get(this.wifiDirectConnectedAddress);
         if (peer) {
           peer.connectionState = 'disconnected';
+          this.connectedPeers.delete(this.wifiDirectConnectedAddress);
           this.notifyPeerChange(peer, 'disconnected');
         }
         this.wifiDirectConnectedAddress = null;
@@ -767,24 +777,39 @@ class MeshNetworkService {
       // Handle as mesh message
       if (parsed.type === 'mesh_message') {
         const meshMessage: MeshMessage = parsed.data;
-        this.handleIncomingMessage(meshMessage, this.wifiDirectConnectedAddress || data.from);
+        this.handleRoutingMessage(meshMessage, this.wifiDirectConnectedAddress || data.from);
       } else if (parsed.type === 'handshake') {
         // Handle peer handshake
-        this.handleWifiDirectHandshake(parsed.data, data.from);
+        this.processWifiDirectHandshake(parsed.data, data.from);
       }
     } catch (e) {
       console.error('Failed to parse WiFi Direct message:', e);
     }
   }
 
-  private handleWifiDirectHandshake(data: any, from: string): void {
+  private processWifiDirectHandshake(data: {
+    walletAddress: string;
+    publicKey: string;
+    username?: string;
+    avatar?: string;
+    requestResponse?: boolean;
+  }, from: string): void {
     // Update peer with wallet address and public key
-    const peer = this.peers.get(from) || this.peers.get(this.wifiDirectConnectedAddress || '');
+    const peerId = this.wifiDirectConnectedAddress || from;
+    const peer = this.connectedPeers.get(peerId) || this.discoveredPeers.get(peerId);
+
     if (peer) {
       peer.walletAddress = data.walletAddress;
       peer.publicKey = data.publicKey;
       peer.username = data.username || peer.username;
       peer.avatar = data.avatar;
+
+      // Re-key the peer by wallet address if we got it
+      if (data.walletAddress && peerId !== data.walletAddress.toLowerCase()) {
+        this.connectedPeers.delete(peerId);
+        this.connectedPeers.set(data.walletAddress.toLowerCase(), peer);
+      }
+
       this.notifyPeerChange(peer, 'connected');
     }
 
@@ -802,11 +827,10 @@ class MeshNetworkService {
     const handshake = {
       type: 'handshake',
       data: {
-        walletAddress: this.walletAddress,
-        publicKey: typeof this.publicKey === 'string' ? this.publicKey :
-          this.uint8ArrayToBase64(this.publicKey as Uint8Array),
-        username: this.username,
-        avatar: this.avatar,
+        walletAddress: this.myWalletAddress,
+        publicKey: this.myPublicKey,
+        username: this.myUsername,
+        avatar: this.myAvatar,
         requestResponse,
       },
     };
@@ -1608,16 +1632,6 @@ class MeshNetworkService {
   // ============================================
 
   getStatus(): MeshNetworkStatus {
-    let connectedCount = 0;
-    let discoveredCount = 0;
-
-    // this.peers.forEach((peer) => {
-    //   if (peer.connectionState === 'connected') {
-    //     connectedCount++;
-    //   } else if (peer.connectionState === 'discovered') {
-    //     discoveredCount++;
-    //   }
-    // });
     return {
       enabled: this.settings.enabled,
       isOnline: this.isServerOnline,
@@ -1625,6 +1639,8 @@ class MeshNetworkService {
       bleEnabled: this.settings.bleEnabled && this.bleInitialized,
       bleScanning: this.bleScanning,
       wifiDirectEnabled: this.settings.wifiDirectEnabled,
+      wifiDirectScanning: this.wifiDirectScanning,
+      wifiDirectConnected: this.wifiDirectInitialized && wifiDirectService.isConnected(),
       connectedPeers: this.connectedPeers.size,
       discoveredPeers: this.discoveredPeers.size,
       queuedMessages: this.messageQueue.length,

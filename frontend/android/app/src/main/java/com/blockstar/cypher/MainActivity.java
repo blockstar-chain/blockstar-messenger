@@ -5,13 +5,16 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Notification;
 import android.content.Context;
+import android.content.Intent;
 import android.media.AudioAttributes;
 import android.media.RingtoneManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
-
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.JSObject;
+import com.blockstar.cypher.CallFirebaseMessagingService;
+import com.blockstar.cypher.wifidirect.WifiDirectPlugin;
 
 public class MainActivity extends BridgeActivity {
 
@@ -23,8 +26,13 @@ public class MainActivity extends BridgeActivity {
     public static final String CHANNEL_MESSAGES = "messages";
     public static final String CHANNEL_GENERAL = "general";
 
+    // Store pending call data to be retrieved by JS
+    private static JSObject pendingCallData = null;
+    private static boolean hasPendingCall = false;
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(WifiDirectPlugin.class);  // Add this line
         super.onCreate(savedInstanceState);
 
         Log.d(TAG, "════════════════════════════════════════════════════════════");
@@ -36,6 +44,111 @@ public class MainActivity extends BridgeActivity {
         
         // Register custom plugins
         registerPlugin(AudioRoutingPlugin.class);
+        registerPlugin(IncomingCallPlugin.class);
+        
+        // Check if opened from incoming call notification
+        handleIncomingCallIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        Log.d(TAG, "📞 onNewIntent received");
+        handleIncomingCallIntent(intent);
+    }
+
+    /**
+     * Handle intent from incoming call notification
+     * Stores the call data so JS can retrieve it
+     */
+    private void handleIncomingCallIntent(Intent intent) {
+        if (intent == null) {
+            Log.d(TAG, "📞 No intent to process");
+            return;
+        }
+
+        boolean fromNotification = intent.getBooleanExtra("fromNotification", false);
+        String callId = intent.getStringExtra("callId");
+
+        Log.d(TAG, "📞 Processing intent - fromNotification: " + fromNotification + ", callId: " + callId);
+
+        if (fromNotification && callId != null) {
+            String caller = intent.getStringExtra("caller");
+            String callerId = intent.getStringExtra("callerId");
+            String callType = intent.getStringExtra("callType");
+
+            Log.d(TAG, "════════════════════════════════════════════════════════════");
+            Log.d(TAG, "📞 INCOMING CALL FROM NOTIFICATION");
+            Log.d(TAG, "📞 Call ID: " + callId);
+            Log.d(TAG, "📞 Caller: " + caller);
+            Log.d(TAG, "📞 Caller ID: " + callerId);
+            Log.d(TAG, "📞 Call Type: " + callType);
+            Log.d(TAG, "════════════════════════════════════════════════════════════");
+
+            // Store call data for JS to retrieve
+            pendingCallData = new JSObject();
+            pendingCallData.put("callId", callId);
+            pendingCallData.put("caller", caller != null ? caller : "Unknown");
+            pendingCallData.put("callerId", callerId != null ? callerId : "");
+            pendingCallData.put("callType", callType != null ? callType : "audio");
+            pendingCallData.put("fromNotification", true);
+            pendingCallData.put("timestamp", System.currentTimeMillis());
+            hasPendingCall = true;
+
+            Log.d(TAG, "📞 ✅ Call data stored, waiting for JS to retrieve");
+
+            // Stop the incoming call service (notification was tapped)
+            stopIncomingCallService();
+
+            // Clear the intent extras to prevent re-processing
+            intent.removeExtra("fromNotification");
+            intent.removeExtra("callId");
+        }
+    }
+
+    /**
+     * Stop the IncomingCallService when call is answered/handled
+     */
+    private void stopIncomingCallService() {
+        try {
+            Intent serviceIntent = new Intent(this, IncomingCallService.class);
+            serviceIntent.setAction("CALL_ANSWERED");
+            stopService(serviceIntent);
+            Log.d(TAG, "📞 ✅ IncomingCallService stopped");
+        } catch (Exception e) {
+            Log.e(TAG, "📞 Error stopping service: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Called by IncomingCallPlugin to get pending call data
+     */
+    public static JSObject getPendingCallData() {
+        if (hasPendingCall && pendingCallData != null) {
+            Log.d(TAG, "📞 Returning pending call data to JS");
+            JSObject data = pendingCallData;
+            // Clear after retrieval
+            pendingCallData = null;
+            hasPendingCall = false;
+            return data;
+        }
+        return null;
+    }
+
+    /**
+     * Check if there's a pending call
+     */
+    public static boolean hasPendingCall() {
+        return hasPendingCall;
+    }
+
+    /**
+     * Clear pending call (called when call is handled)
+     */
+    public static void clearPendingCall() {
+        pendingCallData = null;
+        hasPendingCall = false;
+        Log.d(TAG, "📞 Pending call cleared");
     }
 
     /**

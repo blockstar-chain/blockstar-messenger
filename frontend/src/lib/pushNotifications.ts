@@ -9,7 +9,7 @@ import {
   PushNotificationSchema, 
   ActionPerformed 
 } from '@capacitor/push-notifications';
-// import { LocalNotifications } from '@capacitor/local-notifications';
+import { LocalNotifications } from '@capacitor/local-notifications';
 
 // ============================================
 // CONFIGURATION
@@ -117,7 +117,7 @@ export async function initializePushNotifications(
     await PushNotifications.register();
 
     // Step 4: Set up local notifications for Android channels
-    // await setupLocalNotifications();
+    await setupLocalNotifications();
 
     isInitialized = true;
     console.log('✅ Push notifications initialized successfully');
@@ -279,7 +279,7 @@ function handleIncomingCall(data: any): void {
     console.warn('⚠️ Make sure to pass onIncomingCall when initializing');
     
     // Show local notification as fallback
-    // showLocalCallNotification(callData);
+    showLocalCallNotification(callData);
   }
 }
 
@@ -320,71 +320,71 @@ function handleMissedCall(data: any): void {
 /**
  * Set up local notifications (for Android channels and fallback)
  */
-// async function setupLocalNotifications(): Promise<void> {
-//   try {
-//     // Request permission
-//     const permission = await LocalNotifications.requestPermissions();
-//     console.log('📱 Local notification permission:', permission.display);
+async function setupLocalNotifications(): Promise<void> {
+  try {
+    // Request permission
+    const permission = await LocalNotifications.requestPermissions();
+    console.log('📱 Local notification permission:', permission.display);
 
-//     // Create notification channels for Android
-//     if (platform === 'android') {
-//       // Calls channel - HIGH priority
-//       await LocalNotifications.createChannel({
-//         id: 'calls',
-//         name: 'Incoming Calls',
-//         description: 'Notifications for incoming voice and video calls',
-//         importance: 5, // MAX importance (heads-up notification)
-//         visibility: 1, // PUBLIC
-//         sound: 'ringtone.wav',
-//         vibration: true,
-//         lights: true,
-//         lightColor: '#3b82f6',
-//       });
+    // Create notification channels for Android
+    if (platform === 'android') {
+      // Calls channel - HIGH priority
+      await LocalNotifications.createChannel({
+        id: 'calls',
+        name: 'Incoming Calls',
+        description: 'Notifications for incoming voice and video calls',
+        importance: 5, // MAX importance (heads-up notification)
+        visibility: 1, // PUBLIC
+        sound: 'ringtone.wav',
+        vibration: true,
+        lights: true,
+        lightColor: '#3b82f6',
+      });
 
-//       // Messages channel
-//       await LocalNotifications.createChannel({
-//         id: 'messages',
-//         name: 'Messages',
-//         description: 'Notifications for new messages',
-//         importance: 4, // HIGH
-//         sound: 'message.wav',
-//         vibration: true,
-//       });
+      // Messages channel
+      await LocalNotifications.createChannel({
+        id: 'messages',
+        name: 'Messages',
+        description: 'Notifications for new messages',
+        importance: 4, // HIGH
+        sound: 'message.wav',
+        vibration: true,
+      });
 
-//       console.log('✅ Android notification channels created');
-//     }
-//   } catch (error) {
-//     console.error('❌ Error setting up local notifications:', error);
-//   }
-// }
+      console.log('✅ Android notification channels created');
+    }
+  } catch (error) {
+    console.error('❌ Error setting up local notifications:', error);
+  }
+}
 
 /**
  * Show a local notification for incoming call (fallback)
  */
-// async function showLocalCallNotification(callData: IncomingCallData): Promise<void> {
-//   console.log('📱 Showing local call notification as fallback');
+async function showLocalCallNotification(callData: IncomingCallData): Promise<void> {
+  console.log('📱 Showing local call notification as fallback');
 
-//   try {
-//     await LocalNotifications.schedule({
-//       notifications: [
-//         {
-//           id: Date.now(),
-//           title: `Incoming ${callData.callType} call`,
-//           body: `${callData.callerName} is calling you`,
-//           channelId: 'calls',
-//           ongoing: true,
-//           autoCancel: false,
-//           extra: {
-//             type: 'call',
-//             ...callData,
-//           },
-//         },
-//       ],
-//     });
-//   } catch (error) {
-//     console.error('❌ Error showing local notification:', error);
-//   }
-// }
+  try {
+    await LocalNotifications.schedule({
+      notifications: [
+        {
+          id: Date.now(),
+          title: `Incoming ${callData.callType} call`,
+          body: `${callData.callerName} is calling you`,
+          channelId: 'calls',
+          ongoing: true,
+          autoCancel: false,
+          extra: {
+            type: 'call',
+            ...callData,
+          },
+        },
+      ],
+    });
+  } catch (error) {
+    console.error('❌ Error showing local notification:', error);
+  }
+}
 
 // ============================================
 // CLEANUP
