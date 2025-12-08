@@ -23,6 +23,9 @@ import NotificationSettingsPanel from './NotificationSettings';
 import RingtoneSettingsPanel from './RingtoneSettings';
 import { useDisconnect } from '@reown/appkit/react';
 import { unregisterPushNotifications } from '@/lib/pushNotifications';
+import IncomingCallModal from './IncomingCallModal';
+import { useIncomingCallFromNotification, PendingCallData } from '@/hooks/useIncomingCallFromNotification';
+import { Capacitor } from '@capacitor/core';
 
 // Cache for decrypted message previews
 const decryptedPreviewCache = new Map<string, string>();
@@ -146,6 +149,30 @@ export default function Sidebar({
   const domainName = currentUser?.username ? currentUser.username.includes('@') ? currentUser.username.split('@')[0] : currentUser.username : "";
   const stats = useSettingReslover(domainName || '');
   const { disconnect } = useDisconnect()
+  const [showIncomingCall, setShowIncomingCall] = useState(false);
+  const [incomingCallData, setIncomingCallData] = useState<{
+    callId: string;
+    callerId: string;
+    callerName: string;
+    callerAvatar?: string;
+    callType: 'audio' | 'video';
+  } | null>(null);
+
+  const { notifyAnswered, notifyDeclined } = useIncomingCallFromNotification({
+    onIncomingCall: (data: PendingCallData) => {
+      console.log('📞 Incoming call from notification:', data);
+      if (data.callId) {
+        setIncomingCallData({
+          callId: data.callId,
+          callerId: data.callerId || '',
+          callerName: data.caller || 'Unknown',
+          callType: data.callType || 'audio',
+        });
+        setShowIncomingCall(true);
+      }
+    },
+    enabled: !!currentUser?.walletAddress
+  });
 
 
 
@@ -163,6 +190,127 @@ export default function Sidebar({
   // Profile modal state
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [selectedProfileAddress, setSelectedProfileAddress] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!currentUser?.walletAddress) return;
+
+    const handleIncomingCall = async (data: {
+      callId: string;
+      callerId: string;
+      callerName?: string;
+      callType?: 'audio' | 'video';
+    }) => {
+      console.log('📞 Incoming call via socket:', data);
+
+      // Try to resolve caller profile for avatar
+      let callerAvatar: string | undefined;
+      let displayName = data.callerName;
+
+      if (!displayName) {
+        // Try to get from contacts or resolve
+        const cachedProfile = getProfileByWallet(data.callerId);
+        if (cachedProfile) {
+          displayName = cachedProfile.domain;
+          callerAvatar = cachedProfile.avatar;
+        }
+      }
+
+      setIncomingCallData({
+        callId: data.callId,
+        callerId: data.callerId,
+        callerName: displayName || truncateAddress(data.callerId),
+        callerAvatar,
+        callType: data.callType || 'audio',
+      });
+      setShowIncomingCall(true);
+
+      // Play ringtone on web (mobile handles via native notification)
+      if (!Capacitor.isNativePlatform()) {
+        try {
+          // You can add web ringtone here
+          // const audio = new Audio('/sounds/ringtone.mp3');
+          // audio.loop = true;
+          // audio.play();
+        } catch (e) {
+          console.warn('Could not play ringtone:', e);
+        }
+      }
+    };
+
+    const handleCallCancelled = (data: { callId: string }) => {
+      console.log('📞 Call cancelled:', data.callId);
+      if (incomingCallData?.callId === data.callId) {
+        setShowIncomingCall(false);
+        setIncomingCallData(null);
+      }
+    };
+
+    // Subscribe to socket events
+    const unsubscribeIncoming = webSocketService.on('call:incoming', handleIncomingCall);
+    const unsubscribeCancelled = webSocketService.on('call:cancelled', handleCallCancelled);
+
+    return () => {
+      unsubscribeIncoming();
+      unsubscribeCancelled();
+    };
+  }, [currentUser?.walletAddress, incomingCallData?.callId]);
+
+  // Handle answering a call
+  const handleAnswerCall = async () => {
+    if (!incomingCallData) return;
+
+    console.log('📞 Answering call:', incomingCallData.callId);
+
+    // Notify native layer (stops ringtone on mobile)
+    if (Capacitor.isNativePlatform()) {
+      await notifyAnswered(incomingCallData.callId);
+    }
+
+    // Close the modal
+    setShowIncomingCall(false);
+
+    // Tell the server we're answering
+    webSocketService.emit('call:answer', {
+      callId: incomingCallData.callId,
+      callerId: incomingCallData.callerId,
+    });
+
+    // TODO: Navigate to call screen or open call UI
+    // Example: You might have a call modal or navigate to a call page
+    // setActiveCall(incomingCallData);
+    // router.push(`/call/${incomingCallData.callId}`);
+
+    toast.success(`Connecting to ${incomingCallData.callerName}...`);
+
+    // Clear the call data
+    setIncomingCallData(null);
+  };
+
+  // Handle declining a call
+  const handleDeclineCall = async () => {
+    if (!incomingCallData) return;
+
+    console.log('📞 Declining call:', incomingCallData.callId);
+
+    // Notify native layer (stops ringtone on mobile)
+    if (Capacitor.isNativePlatform()) {
+      await notifyDeclined(incomingCallData.callId);
+    }
+
+    // Close the modal
+    setShowIncomingCall(false);
+
+    // Tell the server we're declining
+    webSocketService.emit('call:decline', {
+      callId: incomingCallData.callId,
+      callerId: incomingCallData.callerId,
+    });
+
+    toast('Call declined', { icon: '📞' });
+
+    // Clear the call data
+    setIncomingCallData(null);
+  };
 
   // Load contacts when showing new chat modal
   useEffect(() => {
@@ -2057,6 +2205,17 @@ export default function Sidebar({
         isOpen={showMeshSettings}
         onClose={() => setShowMeshSettings(false)}
       />
+
+      <IncomingCallModal
+        isOpen={showIncomingCall}
+        callerName={incomingCallData?.callerName || 'Unknown'}
+        callerId={incomingCallData?.callerId || ''}
+        callerAvatar={incomingCallData?.callerAvatar}
+        callType={incomingCallData?.callType || 'audio'}
+        onAnswer={handleAnswerCall}
+        onDecline={handleDeclineCall}
+      />
+
     </>
   );
 }

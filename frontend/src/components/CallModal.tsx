@@ -9,14 +9,15 @@ import { PhoneOff, Mic, MicOff, Video, VideoOff, Users, Volume2, Volume1 } from 
 import { truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
 import { resolveProfile, type BlockStarProfile } from '@/lib/profileResolver';
 import toast from 'react-hot-toast';
+import { audioRoutingService } from '@/lib/native/AudioRoutingService';
 
 // Check if running on mobile (native or mobile browser)
 const isMobileDevice = () => {
   if (typeof window === 'undefined') return false;
-  
+
   // Check Capacitor native platform
   if (Capacitor.isNativePlatform()) return true;
-  
+
   // Check for mobile browser
   const userAgent = navigator.userAgent || navigator.vendor || (window as any).opera;
   return /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(userAgent.toLowerCase());
@@ -42,14 +43,14 @@ export default function CallModal() {
   const [myProfile, setMyProfile] = useState<BlockStarProfile | null>(null);
   const [otherPartyProfile, setOtherPartyProfile] = useState<BlockStarProfile | null>(null);
   const [myAvatarFailed, setMyAvatarFailed] = useState(false);
-  
+
   // Reset avatar failed state when call opens
   useEffect(() => {
     if (isCallModalOpen) {
       setMyAvatarFailed(false);
     }
   }, [isCallModalOpen]);
-  
+
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
@@ -63,7 +64,7 @@ export default function CallModal() {
   // Load current user's profile - use same method as other participants
   useEffect(() => {
     if (!currentUser?.walletAddress || !isCallModalOpen) return;
-    
+
     // If currentUser already has an avatar, use it immediately
     if (currentUser.avatar) {
       console.log('✅ [MyProfile] Using currentUser.avatar:', currentUser.avatar);
@@ -81,25 +82,25 @@ export default function CallModal() {
       });
       return;
     }
-    
+
     const loadMyProfile = async () => {
       console.log('🔍 [MyProfile] Starting profile load for:', currentUser.walletAddress);
       console.log('🔍 [MyProfile] Username:', currentUser.username);
-      
+
       try {
         // Method 1: Use the same API call that works for other participants
         const response = await fetch(`${API_URL}/api/profile/${currentUser.walletAddress.toLowerCase()}`);
         console.log('📡 [MyProfile] API response status:', response.status);
-        
+
         if (response.ok) {
           const data = await response.json();
           console.log('📦 [MyProfile] API data:', JSON.stringify(data));
-          
+
           if (data.success && data.profile?.nftName) {
             console.log('🔍 [MyProfile] Resolving nftName:', data.profile.nftName);
             const profile = await resolveProfile(data.profile.nftName);
             console.log('📦 [MyProfile] Resolved profile:', JSON.stringify(profile));
-            
+
             if (profile) {
               console.log('✅ [MyProfile] Setting myProfile with avatar:', profile.avatar);
               setMyProfile(profile);
@@ -107,40 +108,40 @@ export default function CallModal() {
             }
           }
         }
-        
+
         // Method 2: Try resolving by username directly
         if (currentUser.username) {
           const username = currentUser.username.replace('@', ''); // Remove @ if present
           console.log('🔍 [MyProfile] Trying direct username resolve:', username);
-          
+
           const profile = await resolveProfile(username);
           console.log('📦 [MyProfile] Direct resolve result:', JSON.stringify(profile));
-          
+
           if (profile?.avatar) {
             console.log('✅ [MyProfile] Setting myProfile from direct resolve:', profile.avatar);
             setMyProfile(profile);
             return;
           }
         }
-        
+
         console.log('⚠️ [MyProfile] No avatar found for current user');
       } catch (error) {
         console.error('❌ [MyProfile] Error loading profile:', error);
       }
     };
-    
+
     loadMyProfile();
   }, [currentUser?.walletAddress, currentUser?.username, currentUser?.avatar, isCallModalOpen, API_URL]);
 
   // Load other party's profile for direct calls
   useEffect(() => {
     if (isGroupCall || !activeCall || !isCallModalOpen) return;
-    
+
     const isCaller = activeCall.callerId?.toLowerCase() === currentUser?.walletAddress?.toLowerCase();
     const otherAddress = isCaller ? activeCall.recipientId : activeCall.callerId;
-    
+
     if (!otherAddress) return;
-    
+
     const loadOtherProfile = async () => {
       try {
         const response = await fetch(`${API_URL}/api/profile/${otherAddress.toLowerCase()}`);
@@ -155,7 +156,7 @@ export default function CallModal() {
         console.error('Error loading other party profile:', error);
       }
     };
-    
+
     loadOtherProfile();
   }, [activeCall, isGroupCall, isCallModalOpen, currentUser?.walletAddress]);
 
@@ -165,7 +166,7 @@ export default function CallModal() {
 
     const loadProfiles = async () => {
       const newStreams = new Map<string, ParticipantStream>();
-      
+
       // Also load current user's profile at the same time
       if (currentUser?.walletAddress && !currentUser?.avatar && !myProfile?.avatar) {
         try {
@@ -186,10 +187,10 @@ export default function CallModal() {
           console.error('Error loading my profile in participants:', error);
         }
       }
-      
+
       for (const address of activeCall.participants) {
         if (address.toLowerCase() === currentUser?.walletAddress.toLowerCase()) continue;
-        
+
         let profile: BlockStarProfile | null = null;
         try {
           const response = await fetch(`${API_URL}/api/profile/${address.toLowerCase()}`);
@@ -210,7 +211,7 @@ export default function CallModal() {
           isConnected: false,
         });
       }
-      
+
       setParticipantStreams(newStreams);
     };
 
@@ -225,15 +226,15 @@ export default function CallModal() {
     setHasRemoteStream(false);
     setRemoteAudioPlaying(false);
     setIsSpeakerOn(false);
-    
+
     const isMobile = isMobileDevice();
-    
+
     // Initialize call audio routing (earpiece mode for mobile)
     if (isMobile) {
       console.log('📞 Mobile device detected - initializing call audio routing...');
       console.log('📞 Capacitor native:', Capacitor.isNativePlatform());
       console.log('📞 Platform:', Capacitor.getPlatform());
-      
+
       initCallAudio().then(() => {
         console.log('✅ Call audio initialized - using earpiece');
         toast.success('📱 Using earpiece', { duration: 2000 });
@@ -241,7 +242,7 @@ export default function CallModal() {
         console.error('❌ Failed to initialize call audio:', err);
       });
     }
-    
+
     // Get the existing local stream and display it
     const localStream = webRTCService.getLocalStream();
     if (localStream && localVideoRef.current && activeCall.type === 'video') {
@@ -260,9 +261,9 @@ export default function CallModal() {
   // Watch for call status changes from store
   useEffect(() => {
     if (!activeCall) return;
-    
+
     const isCaller = activeCall.callerId?.toLowerCase() === currentUser?.walletAddress?.toLowerCase();
-    
+
     if (activeCall.status === 'active') {
       setCallStatus('active');
     } else if (isCaller) {
@@ -291,7 +292,7 @@ export default function CallModal() {
   // Duration timer
   useEffect(() => {
     let interval: NodeJS.Timeout;
-    
+
     if (callStatus === 'active') {
       interval = setInterval(() => {
         setCallDuration((prev) => prev + 1);
@@ -315,21 +316,21 @@ export default function CallModal() {
       console.log('CallModal: Peer ID:', peerId);
       console.log('CallModal: Active:', stream.active);
       console.log('========================================');
-      
+
       const audioTracks = stream.getAudioTracks();
       const videoTracks = stream.getVideoTracks();
-      
+
       console.log('Audio tracks:', audioTracks.length);
       console.log('Video tracks:', videoTracks.length);
-      
+
       setHasRemoteStream(true);
-      
+
       if (isGroupCall && peerId) {
         // Group call - handle per-participant streams
         // Extract participant address from peerId (format: callId-address)
         const parts = peerId.split('-');
         const participantAddress = parts[parts.length - 1]?.toLowerCase();
-        
+
         if (participantAddress) {
           setParticipantStreams(prev => {
             const newMap = new Map(prev);
@@ -371,13 +372,13 @@ export default function CallModal() {
           remoteVideoRef.current.srcObject = stream;
           remoteVideoRef.current.play().catch(e => console.warn('Video play failed:', e));
         }
-        
+
         if (remoteAudioRef.current) {
           console.log('Setting audio element srcObject...');
           remoteAudioRef.current.srcObject = stream;
           remoteAudioRef.current.volume = 1.0;
           remoteAudioRef.current.muted = false;
-          
+
           remoteAudioRef.current.play()
             .then(() => {
               console.log('✅ Audio element playing!');
@@ -388,7 +389,7 @@ export default function CallModal() {
               toast('Click "Play Audio" to hear the caller', { icon: '🔊', duration: 5000 });
             });
         }
-        
+
         setCallStatus('active');
         if (activeCall && callId === activeCall.id) {
           setActiveCall({ ...activeCall, status: 'active' });
@@ -415,7 +416,7 @@ export default function CallModal() {
     const unsubLeft = webSocketService.on('group:call:participant:left', (data: any) => {
       console.log('Participant left group call:', data);
       toast(`${truncateAddress(data.participantAddress)} left the call`, { icon: '👋' });
-      
+
       setParticipantStreams(prev => {
         const newMap = new Map(prev);
         const existing = newMap.get(data.participantAddress.toLowerCase());
@@ -461,9 +462,20 @@ export default function CallModal() {
     setIsVideoEnabled(enabled);
   };
 
+  // When call starts:
+  useEffect(() => {
+    if (activeCall) {
+      audioRoutingService.initializeForCall(); // CRITICAL!
+    }
+    return () => {
+      audioRoutingService.resetAfterCall();
+    };
+  }, [activeCall]);
+
   const handleToggleSpeaker = async () => {
     try {
       const speakerOn = await toggleSpeaker();
+      const isSpeaker = await audioRoutingService.toggle();
       setIsSpeakerOn(speakerOn);
       toast.success(speakerOn ? '🔊 Speaker on' : '📱 Using earpiece', { duration: 2000 });
     } catch (error) {
@@ -497,28 +509,28 @@ export default function CallModal() {
   };
 
   const handleBoostAudio = () => {
-    const stream = isGroupCall 
+    const stream = isGroupCall
       ? Array.from(participantStreams.values()).find(p => p.stream)?.stream
       : (remoteAudioRef.current?.srcObject as MediaStream);
-    
+
     if (stream) {
       try {
         if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
           audioContextRef.current = new AudioContext();
         }
-        
+
         const audioContext = audioContextRef.current;
-        
+
         if (audioContext.state === 'suspended') {
           audioContext.resume();
         }
-        
+
         const source = audioContext.createMediaStreamSource(stream);
         const gainNode = audioContext.createGain();
         gainNode.gain.value = 3.0;
         source.connect(gainNode);
         gainNode.connect(audioContext.destination);
-        
+
         toast.success('Audio boosted 3x!');
       } catch (e: any) {
         toast.error('Failed: ' + e.message);
@@ -543,7 +555,7 @@ export default function CallModal() {
         webSocketService.endCall(activeCall.id);
       }
     }
-    
+
     // Cleanup audio context
     if (audioContextRef.current) {
       audioContextRef.current.close();
@@ -555,7 +567,7 @@ export default function CallModal() {
       audio.srcObject = null;
     });
     groupAudioRefs.current.clear();
-    
+
     webRTCService.cleanup();
     setActiveCall(null);
     setCallModalOpen(false);
@@ -576,9 +588,9 @@ export default function CallModal() {
 
   const isVideoCall = activeCall.type === 'video';
   const isCaller = activeCall?.callerId?.toLowerCase() === currentUser?.walletAddress?.toLowerCase();
-  
+
   // For direct calls
-  const otherParty = !isGroupCall 
+  const otherParty = !isGroupCall
     ? (isCaller ? (activeCall?.recipientId || 'Unknown') : (activeCall?.callerId || 'Unknown'))
     : null;
 
@@ -597,7 +609,7 @@ export default function CallModal() {
           style={{ display: 'none' }}
         />
       )}
-      
+
       <div className="w-full h-full relative">
         {/* Remote Video/Avatar Area */}
         <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-dark-300 to-midnight">
@@ -620,12 +632,11 @@ export default function CallModal() {
               </div>
 
               {/* Participants grid - includes YOU */}
-              <div className={`grid gap-4 max-w-5xl mx-auto ${
-                (totalParticipants + 1) <= 2 ? 'grid-cols-2' :
-                (totalParticipants + 1) <= 4 ? 'grid-cols-2' :
-                (totalParticipants + 1) <= 6 ? 'grid-cols-3' :
-                'grid-cols-4'
-              }`}>
+              <div className={`grid gap-4 max-w-5xl mx-auto ${(totalParticipants + 1) <= 2 ? 'grid-cols-2' :
+                  (totalParticipants + 1) <= 4 ? 'grid-cols-2' :
+                    (totalParticipants + 1) <= 6 ? 'grid-cols-3' :
+                      'grid-cols-4'
+                }`}>
                 {/* Current user's tile (You) */}
                 <div
                   className="relative aspect-video bg-dark-200 rounded-2xl overflow-hidden border-2 border-primary-500"
@@ -662,9 +673,9 @@ export default function CallModal() {
                         </div>
                       )}
                       <p className="text-white font-medium">
-                        {currentUser?.username 
+                        {currentUser?.username
                           ? `@${currentUser.username}`
-                          : myProfile?.username 
+                          : myProfile?.username
                             ? `@${myProfile.username}`
                             : truncateAddress(currentUser?.walletAddress || '')
                         }
@@ -672,25 +683,24 @@ export default function CallModal() {
                       <p className="text-sm text-primary-400 mt-1">You</p>
                     </div>
                   )}
-                  
+
                   {/* "You" label for video mode */}
                   {isVideoCall && (
                     <div className="absolute bottom-2 left-2 text-xs text-white bg-primary-500/80 px-2 py-1 rounded">
                       You
                     </div>
                   )}
-                  
+
                   {/* Always connected indicator for self */}
                   <div className="absolute top-3 right-3 w-3 h-3 rounded-full bg-success-500 shadow-glow-green" />
                 </div>
-                
+
                 {/* Other participants */}
                 {Array.from(participantStreams.values()).map((participant) => (
                   <div
                     key={participant.address}
-                    className={`relative aspect-video bg-dark-200 rounded-2xl overflow-hidden border-2 ${
-                      participant.isConnected ? 'border-success-500' : 'border-midnight'
-                    }`}
+                    className={`relative aspect-video bg-dark-200 rounded-2xl overflow-hidden border-2 ${participant.isConnected ? 'border-success-500' : 'border-midnight'
+                      }`}
                   >
                     {isVideoCall && participant.stream ? (
                       <video
@@ -719,7 +729,7 @@ export default function CallModal() {
                           </div>
                         )}
                         <p className="text-white font-medium">
-                          {participant.profile?.username 
+                          {participant.profile?.username
                             ? `@${participant.profile.username}`
                             : truncateAddress(participant.address)
                           }
@@ -731,9 +741,8 @@ export default function CallModal() {
                     )}
 
                     {/* Connection status indicator */}
-                    <div className={`absolute top-3 right-3 w-3 h-3 rounded-full ${
-                      participant.isConnected ? 'bg-success-500 shadow-glow-green' : 'bg-warning-500 animate-pulse'
-                    }`} />
+                    <div className={`absolute top-3 right-3 w-3 h-3 rounded-full ${participant.isConnected ? 'bg-success-500 shadow-glow-green' : 'bg-warning-500 animate-pulse'
+                      }`} />
                   </div>
                 ))}
               </div>
@@ -749,7 +758,7 @@ export default function CallModal() {
                   className="w-full h-full object-cover"
                 />
               ) : null}
-              
+
               {(!isVideoCall || callStatus !== 'active') && (
                 <div className="flex flex-col items-center">
                   {/* Both avatars side by side */}
@@ -770,21 +779,20 @@ export default function CallModal() {
                         </div>
                       )}
                       <p className="text-white font-medium text-sm text-center">
-                        {myProfile?.username 
+                        {myProfile?.username
                           ? `@${myProfile.username}`
-                          : currentUser?.username 
+                          : currentUser?.username
                             ? `@${currentUser.username}`
                             : truncateAddress(currentUser?.walletAddress || '')
                         }
                       </p>
                       <p className="text-primary-400 text-xs">You</p>
                     </div>
-                    
+
                     {/* Call status indicator between avatars */}
                     <div className="flex flex-col items-center justify-center pt-6">
-                      <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
-                        callStatus === 'active' ? 'bg-success-500/20' : 'bg-primary-500/20'
-                      }`}>
+                      <div className={`w-12 h-12 rounded-full flex items-center justify-center ${callStatus === 'active' ? 'bg-success-500/20' : 'bg-primary-500/20'
+                        }`}>
                         {callStatus === 'active' ? (
                           <span className="text-2xl">🔊</span>
                         ) : callStatus === 'ringing' ? (
@@ -794,7 +802,7 @@ export default function CallModal() {
                         )}
                       </div>
                     </div>
-                    
+
                     {/* Other party avatar */}
                     <div className="flex flex-col items-center w-28">
                       {otherPartyProfile?.avatar ? (
@@ -811,7 +819,7 @@ export default function CallModal() {
                         </div>
                       )}
                       <p className="text-white font-medium text-sm text-center">
-                        {otherPartyProfile?.username 
+                        {otherPartyProfile?.username
                           ? `@${otherPartyProfile.username}`
                           : truncateAddress(otherParty as string || '')
                         }
@@ -820,7 +828,7 @@ export default function CallModal() {
                       <p className="text-transparent text-xs">.</p>
                     </div>
                   </div>
-                  
+
                   {/* Call status text */}
                   <p className="text-secondary text-lg">
                     {callStatus === 'connecting' && 'Connecting...'}
@@ -856,7 +864,7 @@ export default function CallModal() {
             <div className="font-bold mb-2 text-primary-400">
               🔊 {isGroupCall ? 'Group Call' : 'Audio Status'}
             </div>
-            
+
             <div className="space-y-2 text-xs">
               <div className="flex items-center justify-between">
                 <span>Your mic:</span>
@@ -864,7 +872,7 @@ export default function CallModal() {
                   {isAudioEnabled ? '✅ On' : '❌ Off'}
                 </span>
               </div>
-              
+
               {isGroupCall ? (
                 <div className="flex items-center justify-between">
                   <span>Connected:</span>
@@ -880,7 +888,7 @@ export default function CallModal() {
                       {hasRemoteStream ? '✅ Connected' : '⏳ Waiting...'}
                     </span>
                   </div>
-                  
+
                   <div className="flex items-center justify-between">
                     <span>Audio playing:</span>
                     <span className={remoteAudioPlaying ? 'text-success-500' : 'text-danger-500'}>
@@ -890,7 +898,7 @@ export default function CallModal() {
                 </>
               )}
             </div>
-            
+
             {/* Action buttons */}
             <div className="mt-3 space-y-2">
               {!remoteAudioPlaying && (hasRemoteStream || connectedCount > 0) && (
@@ -901,7 +909,7 @@ export default function CallModal() {
                   ▶️ Play Audio
                 </button>
               )}
-              
+
               {(hasRemoteStream || connectedCount > 0) && (
                 <button
                   onClick={handleBoostAudio}
@@ -920,11 +928,10 @@ export default function CallModal() {
             {/* Mute Button */}
             <button
               onClick={handleToggleAudio}
-              className={`p-4 rounded-full transition-all duration-200 ${
-                isAudioEnabled 
-                  ? 'bg-dark-200 hover:bg-dark-100' 
+              className={`p-4 rounded-full transition-all duration-200 ${isAudioEnabled
+                  ? 'bg-dark-200 hover:bg-dark-100'
                   : 'bg-danger-500 hover:bg-danger-600'
-              }`}
+                }`}
               title={isAudioEnabled ? 'Mute' : 'Unmute'}
             >
               {isAudioEnabled ? (
@@ -938,11 +945,10 @@ export default function CallModal() {
             {isMobileDevice() && (
               <button
                 onClick={handleToggleSpeaker}
-                className={`p-4 rounded-full transition-all duration-200 ${
-                  isSpeakerOn 
-                    ? 'bg-primary-500 hover:bg-primary-600' 
+                className={`p-4 rounded-full transition-all duration-200 ${isSpeakerOn
+                    ? 'bg-primary-500 hover:bg-primary-600'
                     : 'bg-dark-200 hover:bg-dark-100'
-                }`}
+                  }`}
                 title={isSpeakerOn ? 'Use earpiece' : 'Use speaker'}
               >
                 {isSpeakerOn ? (
@@ -966,11 +972,10 @@ export default function CallModal() {
             {isVideoCall && (
               <button
                 onClick={handleToggleVideo}
-                className={`p-4 rounded-full transition-all duration-200 ${
-                  isVideoEnabled 
-                    ? 'bg-dark-200 hover:bg-dark-100' 
+                className={`p-4 rounded-full transition-all duration-200 ${isVideoEnabled
+                    ? 'bg-dark-200 hover:bg-dark-100'
                     : 'bg-danger-500 hover:bg-danger-600'
-                }`}
+                  }`}
                 title={isVideoEnabled ? 'Turn off camera' : 'Turn on camera'}
               >
                 {isVideoEnabled ? (
