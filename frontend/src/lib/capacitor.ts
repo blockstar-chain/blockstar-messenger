@@ -323,7 +323,6 @@ let appCallbacks: AppLifecycleCallbacks = {};
  */
 export async function initAppLifecycle(callbacks?: AppLifecycleCallbacks): Promise<void> {
   if (!isNative) return;
-  
   appCallbacks = callbacks || {};
 
   try {

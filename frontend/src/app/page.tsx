@@ -6,16 +6,19 @@ import AuthPage from '@/components/AuthPage';
 import MainLayout from '@/components/MainLayout';
 import PWAInstallPrompt from '@/components/PWAInstallPrompt';
 import { initNativePlugins } from '@/lib/capacitor';
+import { useAppKitAccount } from '@reown/appkit/react';
 
 export default function HomePage() {
+  const { address } = useAppKitAccount();
   const { isAuthenticated } = useAppStore();
 
 
   useEffect(() => {
+    console.log(isAuthenticated)
     if(isAuthenticated){
-      initNativePlugins()
+      initNativePlugins(address)
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated , address]);
 
   // Register service worker for PWA
   useEffect(() => {
