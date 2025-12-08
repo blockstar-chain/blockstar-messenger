@@ -266,15 +266,15 @@ export default function MeshSettingsComponent({ isOpen, onClose }: MeshSettingsP
               </div>
 
               {/* WiFi Direct Toggle */}
-              <div className="flex items-center justify-between opacity-50">
+              <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <Wifi className="w-5 h-5 text-green-400" />
                   <div>
                     <p className="text-sm text-white">WiFi Direct</p>
-                    <p className="text-xs text-gray-400">Range: ~200 meters (Coming soon)</p>
+                    <p className="text-xs text-gray-400">Range: ~200 meters</p>
                   </div>
                 </div>
-                <button onClick={handleToggleWifiDirect} disabled>
+                <button onClick={handleToggleWifiDirect}>
                   {settings.wifiDirectEnabled ? (
                     <ToggleRight className="w-10 h-10 text-green-400" />
                   ) : (
