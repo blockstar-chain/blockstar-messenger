@@ -1611,13 +1611,13 @@ class MeshNetworkService {
     let connectedCount = 0;
     let discoveredCount = 0;
 
-    this.peers.forEach((peer) => {
-      if (peer.connectionState === 'connected') {
-        connectedCount++;
-      } else if (peer.connectionState === 'discovered') {
-        discoveredCount++;
-      }
-    });
+    // this.peers.forEach((peer) => {
+    //   if (peer.connectionState === 'connected') {
+    //     connectedCount++;
+    //   } else if (peer.connectionState === 'discovered') {
+    //     discoveredCount++;
+    //   }
+    // });
     return {
       enabled: this.settings.enabled,
       isOnline: this.isServerOnline,
