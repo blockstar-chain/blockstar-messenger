@@ -11,57 +11,61 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1) Checkout repo
+      # 1) Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2) Setup Node
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18
-
-      # 3) Install dependencies in frontend
-      - name: Install npm dependencies
-        run: |
-          cd frontend
-          npm install
-
-      # 4) Setup Java 17 (must be BEFORE Android sync & Gradle)
+      # 2) Setup Java (MUST BE FIRST — forces Gradle to use Java 17)
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
-      # 5) Install Android SDK (must be BEFORE npx cap sync)
+      - name: Verify Java Version
+        run: java -version
+
+      # 3) Setup Node.js
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      # 4) Install frontend dependencies
+      - name: Install npm dependencies
+        run: |
+          cd frontend
+          npm install
+
+      # 5) Install Android SDK (before cap sync)
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      # 6) Build Next.js + sync Capacitor (android)
+      # 6) Build Next.js and sync Capacitor Android
       - name: Build frontend & sync Capacitor
         run: |
           cd frontend
           npm run build
-          npx cap sync android   # Now uses correct Java + SDK
+          npx cap sync android
 
-      # 7) Restore keystore into android/app/
+      # 7) Restore keystore for signing
       - name: Decode keystore into android/app
         run: |
           mkdir -p frontend/android/app
           echo "$KEYSTORE_FILE" | base64 --decode > frontend/android/app/blockstar-cypher.keystore
-          echo "Keystore restored:"
+          echo "Keystore file placed:"
           ls -al frontend/android/app
         env:
           KEYSTORE_FILE: ${{ secrets.KEYSTORE_FILE }}
 
-      # 8) Build signed release APK
+      # 8) Build signed APK using Gradle
       - name: Build signed release APK
         run: |
           cd frontend/android
+          chmod +x ./gradlew
           ./gradlew assembleRelease --stacktrace --warning-mode all
 
-      # 9) Upload APK artifact
+      # 9) Upload final APK artifact
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
