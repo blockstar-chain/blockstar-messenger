@@ -17,6 +17,15 @@ import {
   updatePushCallbacks,
   isNative as isPushNative
 } from '@/lib/pushNotifications';
+import { useAuthSession } from '@/hooks/useAutoLogin';
+import { 
+  setUnreadMessageCount, 
+  requestNotificationPermission,
+  showIncomingCallNotification,
+  initializeLocalNotifications 
+} from '@/lib/notificationService';
+import { handleCallMissed } from '@/lib/missedCallService';
+import { Capacitor } from '@capacitor/core';
 
 export default function MainLayout() {
   const {
@@ -30,7 +39,13 @@ export default function MainLayout() {
     activeConversationId,
     setActiveConversation,
     conversations,
+    incomingCall,
   } = useAppStore();
+
+  // ========================================
+  // AUTO-LOGIN: This MUST run first!
+  // ========================================
+  const { isChecking: isCheckingAuth, isRestored } = useAuthSession();
 
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -53,6 +68,32 @@ export default function MainLayout() {
 
   // Calculate total unread count
   const totalUnread = conversations.reduce((sum, conv) => sum + (conv.unreadCount || 0), 0);
+
+  // ========================================
+  // UPDATE APP BADGE when unread count changes
+  // ========================================
+  useEffect(() => {
+    setUnreadMessageCount(totalUnread);
+  }, [totalUnread]);
+
+  // ========================================
+  // INITIALIZE NOTIFICATIONS on app start
+  // ========================================
+  useEffect(() => {
+    const initNotifications = async () => {
+      // Request browser notification permission
+      await requestNotificationPermission();
+      
+      // Initialize local notifications for native
+      if (Capacitor.isNativePlatform()) {
+        await initializeLocalNotifications();
+      }
+    };
+    
+    if (currentUser?.walletAddress) {
+      initNotifications();
+    }
+  }, [currentUser?.walletAddress]);
 
   // Handle mobile tab changes
   const handleMobileTabChange = (tab: MobileTab) => {
@@ -156,10 +197,18 @@ export default function MainLayout() {
 
     console.log('🔧 Setting up call handlers for:', currentUser.walletAddress);
 
+    // Track if we have an unanswered incoming call (for missed call detection)
+    let currentIncomingCallId: string | null = null;
+    let currentIncomingCallData: any = null;
+
     const unsubscribeIncoming = webSocketService.on('call:incoming', (data: any) => {
       console.log('📞 INCOMING CALL received:', data.callId);
 
       if (data.offer && data.callerId && data.callerId.toLowerCase() !== currentUser.walletAddress.toLowerCase()) {
+        // Store for missed call tracking
+        currentIncomingCallId = data.callId;
+        currentIncomingCallData = data;
+
         toast('📞 Incoming call...', { icon: '📞', duration: 5000 });
 
         setIncomingCall({
@@ -172,6 +221,14 @@ export default function MainLayout() {
         });
 
         sessionStorage.setItem('incomingCallOffer', JSON.stringify(data.offer));
+
+        // Show browser notification (for desktop)
+        showIncomingCallNotification(
+          data.callerName || data.callerId?.substring(0, 10) + '...',
+          data.callerId,
+          data.callId,
+          data.callType || 'audio'
+        );
       }
     });
 
@@ -221,6 +278,20 @@ export default function MainLayout() {
     });
 
     const handleCallEnded = webSocketService.on('call:ended', (data: any) => {
+      // Check if this was an unanswered incoming call (missed call)
+      if (currentIncomingCallId === data.callId && currentIncomingCallData) {
+        console.log('📵 Call ended without answer - recording as missed call');
+        handleCallMissed(
+          currentIncomingCallData.callerId,
+          currentIncomingCallData.callerName || currentIncomingCallData.callerId?.substring(0, 10) + '...',
+          currentIncomingCallData.callType || 'audio'
+        );
+      }
+
+      // Clear tracking
+      currentIncomingCallId = null;
+      currentIncomingCallData = null;
+
       toast.error('Call ended');
       webRTCService.cleanup();
       setActiveCall(null);
@@ -231,44 +302,42 @@ export default function MainLayout() {
     const handleUnavailable = webSocketService.on('call:unavailable', (data: any) => {
       const { activeCall: currentCall } = useAppStore.getState();
       if (currentCall) {
-        toast('User appears offline, trying to reach them...', {
-          icon: '📞',
-          duration: 3000,
-          id: 'call-status'
-        });
+        toast.error('User is unavailable');
+        webRTCService.cleanup();
+        setActiveCall(null);
+        setCallModalOpen(false);
       }
     });
 
     const handleCallStatus = webSocketService.on('call:status', (data: any) => {
-      if (data.status === 'ringing-offline') {
-        toast('User is offline - they may receive a notification', {
-          icon: '📱',
-          duration: 4000,
-          id: 'call-status'
-        });
-      }
+      console.log('📞 Call status update:', data);
     });
 
     // Group call handlers
-    const unsubscribeGroupCallIncoming = webSocketService.on('group:call:incoming', async (data: any) => {
-      const { callId, callType, offer, callerAddress, groupName, participants, peerId } = data;
+    const unsubscribeGroupCallIncoming = webSocketService.on('group:call:incoming', (data: any) => {
+      const { callId, groupId, initiatorId, callType, offer, groupName } = data;
 
-      if (offer) {
-        sessionStorage.setItem('incomingCallOffer', JSON.stringify(offer));
+      if (initiatorId.toLowerCase() === currentUser.walletAddress.toLowerCase()) {
+        return;
       }
 
       setIncomingCall({
         id: callId,
-        callerId: callerAddress,
-        recipientId: currentUser?.walletAddress || '',
-        type: callType,
+        callerId: initiatorId,
+        recipientId: groupId,
+        type: callType || 'audio',
         status: 'ringing',
         startTime: Date.now(),
-        isGroupCall: true,
-        participants,
-        groupName: groupName || 'Group Call',
-        peerId,
-      } as any);
+        isGroup: true,
+        groupId: groupId,
+      });
+
+      sessionStorage.setItem('incomingCallOffer', JSON.stringify(offer));
+      sessionStorage.setItem('incomingGroupCallData', JSON.stringify({
+        groupId,
+        groupName,
+        initiatorId,
+      }));
 
       toast(`📞 Incoming ${callType} call from ${groupName || 'Group'}!`, { duration: 10000 });
     });
@@ -347,10 +416,7 @@ export default function MainLayout() {
     }
   }, [isAuthenticated, currentUser]);
 
-  if (!isAuthenticated || !currentUser) {
-    return null;
-  }
-
+  // Push notifications setup
   useEffect(() => {
     const initPush = async () => {
       // Only initialize if we have a wallet and on native platform
@@ -378,7 +444,6 @@ export default function MainLayout() {
             });
 
             // Store caller info for display
-            // You might need to adjust this based on your state management
             sessionStorage.setItem('incomingCallInfo', JSON.stringify({
               callerName: callData.callerName,
               callerAvatar: callData.callerAvatar,
@@ -400,9 +465,6 @@ export default function MainLayout() {
             toast(`${messageData.senderName}: ${messageData.messagePreview}`, {
               duration: 5000,
             });
-
-            // Optionally navigate to conversation
-            // router.push(`/chat/${messageData.conversationId}`);
           },
 
           // Handle missed call notification (optional)
@@ -436,9 +498,32 @@ export default function MainLayout() {
     };
 
     initPush();
+  }, [currentUser?.walletAddress, setIncomingCall]);
 
-    // Cleanup on unmount (but not on logout - that's handled separately)
-  }, [currentUser?.walletAddress]);
+  // ========================================
+  // LOADING SCREEN - while checking auth
+  // ========================================
+  if (isCheckingAuth) {
+    return (
+      <div className="flex items-center justify-center h-[100dvh] bg-midnight">
+        <div className="text-center">
+          <div className="w-16 h-16 mx-auto mb-4">
+            <div className="animate-pulse bg-cyan-500 rounded-full w-16 h-16 flex items-center justify-center">
+              <span className="text-white text-2xl font-bold">B</span>
+            </div>
+          </div>
+          <p className="text-gray-400">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ========================================
+  // NOT AUTHENTICATED - parent handles login
+  // ========================================
+  if (!isAuthenticated || !currentUser) {
+    return null;
+  }
 
   return (
     <div className="flex h-[100dvh] bg-midnight overflow-hidden">

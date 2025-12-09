@@ -21,6 +21,7 @@
     "@capacitor/push-notifications": "^5.1.2",
     "@capacitor/splash-screen": "^5.0.7",
     "@capacitor/status-bar": "^5.0.7",
+    "@capawesome/capacitor-badge": "^5.0.0",
     "@noble/curves": "^1.9.7",
     "@reown/appkit": "^1.7.1",
     "@reown/appkit-adapter-wagmi": "^1.7.1",

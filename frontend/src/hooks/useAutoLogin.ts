@@ -1,10 +1,10 @@
 // frontend/src/hooks/useAutoLogin.ts
-// Automatically restores user session on app startup
+// Auto-login that properly handles incoming call notifications
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useAppStore } from '@/store';
 import { webSocketService } from '@/lib/websocket';
-import { getStoredSession, hasStoredSession, clearUserSession } from '@/lib/persistentAuth';
+import { getStoredSession, hasStoredSession, saveUserSession, clearUserSession } from '@/lib/persistentAuth';
 import { resolveProfile } from '@/lib/profileResolver';
 import { Capacitor } from '@capacitor/core';
 
@@ -14,6 +14,10 @@ interface AutoLoginState {
   error: string | null;
 }
 
+/**
+ * Auto-login hook that restores user session on app startup
+ * Must complete BEFORE checking for incoming calls
+ */
 export function useAutoLogin() {
   const { currentUser, setCurrentUser } = useAppStore();
   const [state, setState] = useState<AutoLoginState>({
@@ -21,10 +25,17 @@ export function useAutoLogin() {
     isRestored: false,
     error: null,
   });
+  const hasAttempted = useRef(false);
 
   useEffect(() => {
+    // Only attempt once
+    if (hasAttempted.current) return;
+    hasAttempted.current = true;
+
     const attemptAutoLogin = async () => {
-      console.log('🔐 Checking for stored session...');
+      console.log('🔐 ========================================');
+      console.log('🔐 AUTO-LOGIN: Checking for stored session...');
+      console.log('🔐 ========================================');
       
       try {
         // Skip if user is already logged in
@@ -37,7 +48,7 @@ export function useAutoLogin() {
         // Check for stored session
         const hasSession = await hasStoredSession();
         if (!hasSession) {
-          console.log('📭 No stored session found');
+          console.log('📭 No stored session found - user needs to login');
           setState({ isChecking: false, isRestored: false, error: null });
           return;
         }
@@ -52,7 +63,7 @@ export function useAutoLogin() {
 
         console.log('🔄 Restoring session for:', storedSession.walletAddress);
 
-        // Try to get updated profile info
+        // Try to get updated profile info (but don't block on it)
         let username = storedSession.username;
         let avatar = storedSession.avatar;
         
@@ -78,7 +89,10 @@ export function useAutoLogin() {
         console.log('🔌 Connecting to WebSocket...');
         webSocketService.connect(storedSession.walletAddress);
 
-        console.log('✅ Session restored successfully!');
+        console.log('✅ ========================================');
+        console.log('✅ AUTO-LOGIN: Session restored successfully!');
+        console.log('✅ ========================================');
+        
         setState({ isChecking: false, isRestored: true, error: null });
 
       } catch (error: any) {
@@ -96,8 +110,8 @@ export function useAutoLogin() {
 }
 
 /**
- * Hook to handle session persistence after wallet connection
- * Use this in your wallet connection callback
+ * Hook to save session whenever user data changes
+ * Use this alongside useAutoLogin
  */
 export function useSessionPersistence() {
   const { currentUser } = useAppStore();
@@ -105,7 +119,6 @@ export function useSessionPersistence() {
   useEffect(() => {
     const saveSession = async () => {
       if (currentUser?.walletAddress) {
-        const { saveUserSession } = await import('@/lib/persistentAuth');
         await saveUserSession({
           walletAddress: currentUser.walletAddress,
           username: currentUser.username,
@@ -116,5 +129,14 @@ export function useSessionPersistence() {
     };
 
     saveSession();
-  }, [currentUser?.walletAddress, currentUser?.username, currentUser?.avatar]);
+  }, [currentUser?.walletAddress, currentUser?.username, currentUser?.avatar, currentUser?.publicKey]);
+}
+
+/**
+ * Combined hook for auto-login with session persistence
+ */
+export function useAuthSession() {
+  const autoLoginState = useAutoLogin();
+  useSessionPersistence();
+  return autoLoginState;
 }
