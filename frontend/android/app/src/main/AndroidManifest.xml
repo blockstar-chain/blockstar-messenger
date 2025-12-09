@@ -1,33 +1,52 @@
-<!-- android/app/src/main/AndroidManifest.xml -->
-<!-- Add these to your existing AndroidManifest.xml -->
-
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- PERMISSIONS - Add these if not already present -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     
-    <!-- Basic permissions -->
+   <!-- Internet (required) -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    
-    <!-- Notifications -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Push Notifications / Firebase -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    
-    <!-- Wake device for calls -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
-    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
-    
-    <!-- Foreground service for calls -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Foreground Service (for incoming call alerts) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    
-    <!-- Camera and microphone for calls -->
-    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
+    <!-- Audio/Video Calls -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- Mesh Networking - Bluetooth Low Energy -->
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+
+    <!-- Location (required for BLE scanning on Android 10+) -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- Feature declarations (optional but recommended) -->
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <!-- WiFi Direct (for mesh networking) -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" 
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
+    <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
 
     <application
         android:allowBackup="true"
@@ -35,43 +54,42 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/AppTheme"
-        android:usesCleartextTraffic="true">
+        android:theme="@style/AppTheme">
 
-        <!-- Main Activity -->
         <activity
             android:name=".MainActivity"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
-            android:exported="true"
+            android:label="@string/title_activity_main"
+            android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
+            android:exported="true"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
-            android:theme="@style/AppTheme.NoActionBarLaunch">
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode">
 
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Handle incoming call intent -->
+            <!-- Handle incoming call from notification -->
             <intent-filter>
                 <action android:name="INCOMING_CALL" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
-            
-            <!-- Handle answer call intent -->
+
+            <!-- Handle answer call action -->
             <intent-filter>
                 <action android:name="ANSWER_CALL" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
-            
-            <!-- Handle decline call intent -->
+
+            <!-- Handle decline call action -->
             <intent-filter>
                 <action android:name="DECLINE_CALL" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
-            
-            <!-- Handle open conversation intent -->
+
+            <!-- Handle open conversation from message notification -->
             <intent-filter>
                 <action android:name="OPEN_CONVERSATION" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -79,7 +97,18 @@
 
         </activity>
 
-        <!-- Firebase Messaging Service -->
+        <!-- File Provider -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!-- Firebase messaging handler -->
         <service
             android:name=".CallFirebaseMessagingService"
             android:exported="false">
@@ -88,7 +117,7 @@
             </intent-filter>
         </service>
 
-        <!-- Incoming Call Service (Foreground Service) -->
+        <!-- Incoming Call Foreground Service -->
         <service
             android:name=".IncomingCallService"
             android:enabled="true"
@@ -116,11 +145,6 @@
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="messages" />
-
-        <!-- Firebase default notification icon -->
-        <meta-data
-            android:name="com.google.firebase.messaging.default_notification_icon"
-            android:resource="@mipmap/ic_launcher" />
 
     </application>
 
