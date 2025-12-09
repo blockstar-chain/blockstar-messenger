@@ -5,16 +5,14 @@ import android.os.Bundle;
 import android.util.Log;
 
 import com.getcapacitor.BridgeActivity;
-
-import org.json.JSONException;
-import org.json.JSONObject;
+import com.getcapacitor.JSObject;
 
 public class MainActivity extends BridgeActivity {
     private static final String TAG = "MainActivity";
     
     // Store pending call data to pass to JavaScript after bridge is ready
-    private static JSONObject pendingCallData = null;
-    private static JSONObject pendingMessageData = null;
+    private static JSObject pendingCallData = null;
+    private static JSObject pendingMessageData = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -52,6 +50,10 @@ public class MainActivity extends BridgeActivity {
         else if ("OPEN_CONVERSATION".equals(action)) {
             handleMessageIntent(intent);
         }
+        // Handle callback from missed call
+        else if ("CALLBACK".equals(action)) {
+            handleCallbackIntent(intent);
+        }
         // Check for call extras even without specific action
         else if (intent.hasExtra("callId") && intent.hasExtra("fromNotification")) {
             handleCallIntent(intent);
@@ -68,6 +70,7 @@ public class MainActivity extends BridgeActivity {
         String callerName = intent.getStringExtra("caller");
         String callType = intent.getStringExtra("callType");
         String callAction = intent.getStringExtra("action"); // "answer" or "decline"
+        String offer = intent.getStringExtra("offer");
 
         Log.d(TAG, "═══════════════════════════════════════");
         Log.d(TAG, "📞 CALL INTENT RECEIVED");
@@ -77,25 +80,23 @@ public class MainActivity extends BridgeActivity {
         Log.d(TAG, "  Action: " + callAction);
         Log.d(TAG, "═══════════════════════════════════════");
 
-        try {
-            JSONObject callData = new JSONObject();
-            callData.put("type", "incoming_call");
-            callData.put("callId", callId);
-            callData.put("callerId", callerId);
-            callData.put("callerName", callerName != null ? callerName : "Unknown");
-            callData.put("callType", callType != null ? callType : "audio");
-            callData.put("action", callAction); // null, "answer", or "decline"
-            callData.put("fromNotification", true);
-
-            // Store for when JavaScript is ready
-            pendingCallData = callData;
-
-            // Try to send to JavaScript immediately if bridge is ready
-            sendToJavaScript("incomingCallFromNotification", callData);
-
-        } catch (JSONException e) {
-            Log.e(TAG, "Error creating call data JSON", e);
+        JSObject callData = new JSObject();
+        callData.put("type", "incoming_call");
+        callData.put("callId", callId != null ? callId : "");
+        callData.put("callerId", callerId != null ? callerId : "");
+        callData.put("callerName", callerName != null ? callerName : "Unknown");
+        callData.put("callType", callType != null ? callType : "audio");
+        callData.put("action", callAction); // null, "answer", or "decline"
+        callData.put("fromNotification", true);
+        if (offer != null) {
+            callData.put("offer", offer);
         }
+
+        // Store for when JavaScript is ready
+        pendingCallData = callData;
+
+        // Try to send to JavaScript immediately if bridge is ready
+        sendToJavaScript("incomingCallFromNotification", callData);
     }
 
     private void handleMessageIntent(Intent intent) {
@@ -106,24 +107,38 @@ public class MainActivity extends BridgeActivity {
         Log.d(TAG, "  Conversation: " + conversationId);
         Log.d(TAG, "═══════════════════════════════════════");
 
-        try {
-            JSONObject messageData = new JSONObject();
-            messageData.put("type", "open_conversation");
-            messageData.put("conversationId", conversationId);
-            messageData.put("fromNotification", true);
+        JSObject messageData = new JSObject();
+        messageData.put("type", "open_conversation");
+        messageData.put("conversationId", conversationId != null ? conversationId : "");
+        messageData.put("fromNotification", true);
 
-            // Store for when JavaScript is ready
-            pendingMessageData = messageData;
+        // Store for when JavaScript is ready
+        pendingMessageData = messageData;
 
-            // Try to send to JavaScript immediately if bridge is ready
-            sendToJavaScript("openConversationFromNotification", messageData);
-
-        } catch (JSONException e) {
-            Log.e(TAG, "Error creating message data JSON", e);
-        }
+        // Try to send to JavaScript immediately if bridge is ready
+        sendToJavaScript("openConversationFromNotification", messageData);
     }
 
-    private void sendToJavaScript(String eventName, JSONObject data) {
+    private void handleCallbackIntent(Intent intent) {
+        String callerId = intent.getStringExtra("callerId");
+        String callType = intent.getStringExtra("callType");
+
+        Log.d(TAG, "═══════════════════════════════════════");
+        Log.d(TAG, "📞 CALLBACK INTENT RECEIVED");
+        Log.d(TAG, "  Caller ID: " + callerId);
+        Log.d(TAG, "  Call Type: " + callType);
+        Log.d(TAG, "═══════════════════════════════════════");
+
+        JSObject callbackData = new JSObject();
+        callbackData.put("type", "callback");
+        callbackData.put("callerId", callerId != null ? callerId : "");
+        callbackData.put("callType", callType != null ? callType : "audio");
+        callbackData.put("fromNotification", true);
+
+        sendToJavaScript("callbackFromNotification", callbackData);
+    }
+
+    private void sendToJavaScript(String eventName, JSObject data) {
         try {
             if (bridge != null && bridge.getWebView() != null) {
                 String js = String.format(
@@ -145,23 +160,46 @@ public class MainActivity extends BridgeActivity {
     }
 
     /**
-     * Called from JavaScript to check for pending notification data
-     * This should be called when the app starts up
+     * Check if there is pending call data from a notification
+     * Used by IncomingCallPlugin
      */
-    public static JSONObject getPendingCallData() {
-        JSONObject data = pendingCallData;
-        pendingCallData = null; // Clear after reading
-        return data;
+    public static boolean hasPendingCall() {
+        return pendingCallData != null;
     }
 
-    public static JSONObject getPendingMessageData() {
-        JSONObject data = pendingMessageData;
-        pendingMessageData = null; // Clear after reading
-        return data;
+    /**
+     * Get pending call data - returns JSObject for Capacitor plugin compatibility
+     * Used by IncomingCallPlugin
+     */
+    public static JSObject getPendingCallData() {
+        return pendingCallData;
+    }
+
+    /**
+     * Clear pending call data after it has been processed
+     * Used by IncomingCallPlugin
+     */
+    public static void clearPendingCall() {
+        pendingCallData = null;
+        Log.d(TAG, "✅ Cleared pending call data");
+    }
+
+    /**
+     * Get pending message data
+     */
+    public static JSObject getPendingMessageData() {
+        return pendingMessageData;
+    }
+
+    /**
+     * Clear pending message data
+     */
+    public static void clearPendingMessage() {
+        pendingMessageData = null;
     }
 
     @Override
-    protected void onResume() {
+    public void onResume() {
         super.onResume();
         Log.d(TAG, "📱 MainActivity onResume");
 

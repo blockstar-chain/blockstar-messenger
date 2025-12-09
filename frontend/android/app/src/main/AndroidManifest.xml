@@ -131,6 +131,12 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- Missed Call Notification Service -->
+        <service
+            android:name=".MissedCallNotificationService"
+            android:enabled="true"
+            android:exported="false" />
+
         <!-- Notification Action Receiver -->
         <receiver
             android:name=".NotificationActionReceiver"
