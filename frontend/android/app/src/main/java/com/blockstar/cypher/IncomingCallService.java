@@ -1,7 +1,12 @@
 package com.blockstar.cypher;
 
-import android.app.*;
-import android.content.*;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.app.Service;
+import android.content.Context;
+import android.content.Intent;
 import android.media.AudioAttributes;
 import android.media.AudioManager;
 import android.media.Ringtone;
@@ -14,147 +19,273 @@ import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
 import android.util.Log;
+
 import androidx.core.app.NotificationCompat;
 
 public class IncomingCallService extends Service {
-
     private static final String TAG = "IncomingCallService";
+    private static final String CHANNEL_ID = "calls";
+    private static final String CHANNEL_NAME = "Incoming Calls";
     private static final int NOTIFICATION_ID = 101;
-    
+
     private Ringtone ringtone;
     private Vibrator vibrator;
     private PowerManager.WakeLock wakeLock;
 
+    // Store call data for actions
+    private String currentCallId;
+    private String currentCallerId;
+    private String currentCallerName;
+    private String currentCallType;
+
     @Override
     public void onCreate() {
         super.onCreate();
-        Log.d(TAG, "Service created");
+        Log.d(TAG, "═══════════════════════════════════════");
+        Log.d(TAG, "📞 IncomingCallService CREATED");
+        Log.d(TAG, "═══════════════════════════════════════");
+        createNotificationChannel();
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        Log.d(TAG, "═══════════════════════════════════════");
-        Log.d(TAG, "📞 INCOMING CALL SERVICE STARTED");
-        
         if (intent == null) {
-            Log.e(TAG, "Intent is null, stopping service");
+            Log.w(TAG, "Null intent received");
             stopSelf();
             return START_NOT_STICKY;
         }
 
-        // Handle decline action
-        if ("DECLINE_CALL".equals(intent.getAction())) {
-            Log.d(TAG, "📞 Call declined via notification");
+        String action = intent.getAction();
+        Log.d(TAG, "📞 onStartCommand - Action: " + action);
+
+        // Handle Answer action
+        if ("ANSWER_CALL".equals(action)) {
+            Log.d(TAG, "✅ ANSWER action received");
+            handleAnswerCall();
+            return START_NOT_STICKY;
+        }
+
+        // Handle Decline action
+        if ("DECLINE_CALL".equals(action)) {
+            Log.d(TAG, "❌ DECLINE action received");
+            handleDeclineCall();
+            return START_NOT_STICKY;
+        }
+
+        // Handle Stop service
+        if ("STOP_SERVICE".equals(action)) {
+            Log.d(TAG, "🛑 STOP_SERVICE action received");
             stopRingtoneAndVibration();
             stopForeground(true);
             stopSelf();
             return START_NOT_STICKY;
         }
 
-        // Handle stop action (called when call is answered or ended)
-        if ("STOP_SERVICE".equals(intent.getAction())) {
-            Log.d(TAG, "📞 Stopping service");
-            stopRingtoneAndVibration();
-            stopForeground(true);
-            stopSelf();
-            return START_NOT_STICKY;
+        // Handle incoming call - show notification
+        if ("SHOW_INCOMING_CALL".equals(action) || action == null) {
+            currentCallId = intent.getStringExtra("callId");
+            currentCallerId = intent.getStringExtra("callerId");
+            currentCallerName = intent.getStringExtra("caller");
+            currentCallType = intent.getStringExtra("callType");
+
+            if (currentCallerName == null || currentCallerName.isEmpty()) {
+                currentCallerName = "Unknown Caller";
+            }
+            if (currentCallType == null) {
+                currentCallType = "audio";
+            }
+
+            Log.d(TAG, "═══════════════════════════════════════");
+            Log.d(TAG, "📞 SHOWING INCOMING CALL NOTIFICATION");
+            Log.d(TAG, "  Call ID: " + currentCallId);
+            Log.d(TAG, "  Caller ID: " + currentCallerId);
+            Log.d(TAG, "  Caller Name: " + currentCallerName);
+            Log.d(TAG, "  Call Type: " + currentCallType);
+            Log.d(TAG, "═══════════════════════════════════════");
+
+            // Acquire wake lock to turn on screen
+            acquireWakeLock();
+
+            // Build and show notification
+            Notification notification = buildCallNotification();
+            startForeground(NOTIFICATION_ID, notification);
+
+            // Start ringtone and vibration
+            playRingtone();
+            startVibration();
+
+            Log.d(TAG, "✅ Notification shown, ringtone playing");
         }
 
-        String caller = intent.getStringExtra("caller");
-        String callId = intent.getStringExtra("callId");
-        String callerId = intent.getStringExtra("callerId");
-        String callType = intent.getStringExtra("callType");
-        
-        Log.d(TAG, "Caller: " + caller);
-        Log.d(TAG, "Call ID: " + callId);
-        Log.d(TAG, "Caller ID: " + callerId);
-        Log.d(TAG, "Call Type: " + callType);
+        return START_STICKY;
+    }
 
-        // Acquire wake lock to wake up the device
-        acquireWakeLock();
+    private void createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            
+            // Delete existing channel to update settings
+            manager.deleteNotificationChannel(CHANNEL_ID);
 
-        // Create the full screen intent
+            NotificationChannel channel = new NotificationChannel(
+                CHANNEL_ID,
+                CHANNEL_NAME,
+                NotificationManager.IMPORTANCE_HIGH
+            );
+
+            channel.setDescription("Incoming call notifications");
+            channel.enableLights(true);
+            channel.enableVibration(true);
+            channel.setVibrationPattern(new long[]{0, 1000, 500, 1000});
+            channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+            channel.setBypassDnd(true);
+            
+            // Set sound to none - we handle it ourselves
+            channel.setSound(null, null);
+
+            manager.createNotificationChannel(channel);
+            Log.d(TAG, "✅ Notification channel created: " + CHANNEL_ID);
+        }
+    }
+
+    private Notification buildCallNotification() {
+        // Intent to open app when notification is tapped
         Intent fullScreenIntent = new Intent(this, MainActivity.class);
-        fullScreenIntent.putExtra("callId", callId);
-        fullScreenIntent.putExtra("caller", caller);
-        fullScreenIntent.putExtra("callerId", callerId);
-        fullScreenIntent.putExtra("callType", callType != null ? callType : "audio");
-        fullScreenIntent.putExtra("incomingCall", true);
+        fullScreenIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        fullScreenIntent.putExtra("callId", currentCallId);
+        fullScreenIntent.putExtra("callerId", currentCallerId);
+        fullScreenIntent.putExtra("caller", currentCallerName);
+        fullScreenIntent.putExtra("callType", currentCallType);
+        fullScreenIntent.putExtra("fromNotification", true);
         fullScreenIntent.setAction("INCOMING_CALL");
-        fullScreenIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | 
-                                  Intent.FLAG_ACTIVITY_CLEAR_TOP |
-                                  Intent.FLAG_ACTIVITY_SINGLE_TOP);
 
         PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(
-            this, 
-            0, 
+            this,
+            0,
             fullScreenIntent,
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
-        // Create answer action
-        Intent answerIntent = new Intent(this, MainActivity.class);
+        // Answer action intent
+        Intent answerIntent = new Intent(this, IncomingCallService.class);
         answerIntent.setAction("ANSWER_CALL");
-        answerIntent.putExtra("callId", callId);
-        answerIntent.putExtra("callerId", callerId);
-        answerIntent.putExtra("caller", caller);
-        answerIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        
-        PendingIntent answerPendingIntent = PendingIntent.getActivity(
-            this, 1, answerIntent,
+        answerIntent.putExtra("callId", currentCallId);
+        answerIntent.putExtra("callerId", currentCallerId);
+        answerIntent.putExtra("caller", currentCallerName);
+        answerIntent.putExtra("callType", currentCallType);
+
+        PendingIntent answerPendingIntent = PendingIntent.getService(
+            this,
+            1,
+            answerIntent,
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
-        // Create decline action
+        // Decline action intent
         Intent declineIntent = new Intent(this, IncomingCallService.class);
         declineIntent.setAction("DECLINE_CALL");
-        declineIntent.putExtra("callId", callId);
-        
+        declineIntent.putExtra("callId", currentCallId);
+        declineIntent.putExtra("callerId", currentCallerId);
+
         PendingIntent declinePendingIntent = PendingIntent.getService(
-            this, 2, declineIntent,
+            this,
+            2,
+            declineIntent,
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
-        // Build notification with actions
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, "calls")
-            .setSmallIcon(android.R.drawable.sym_call_incoming)
-            .setContentTitle("Incoming Call")
-            .setContentText((caller != null ? caller : "Unknown") + " is calling...")
+        // Build the notification
+        String callTypeEmoji = "video".equals(currentCallType) ? "📹" : "📞";
+        String title = callTypeEmoji + " Incoming " + currentCallType + " call";
+        String text = currentCallerName + " is calling...";
+
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_menu_call)
+            .setContentTitle(title)
+            .setContentText(text)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setFullScreenIntent(fullScreenPendingIntent, true)
-            .setContentIntent(fullScreenPendingIntent)
             .setOngoing(true)
             .setAutoCancel(false)
-            .addAction(android.R.drawable.sym_call_incoming, "Answer", answerPendingIntent)
-            .addAction(android.R.drawable.sym_call_missed, "Decline", declinePendingIntent);
+            .setFullScreenIntent(fullScreenPendingIntent, true)
+            .setContentIntent(fullScreenPendingIntent)
+            // Answer button (green)
+            .addAction(
+                android.R.drawable.ic_menu_call,
+                "✓ Answer",
+                answerPendingIntent
+            )
+            // Decline button (red)
+            .addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                "✗ Decline",
+                declinePendingIntent
+            );
 
-        // Set vibration pattern
-        builder.setVibrate(new long[]{0, 1000, 500, 1000, 500, 1000});
+        // Use call style for Android 12+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
+        }
 
-        Notification notification = builder.build();
-        notification.flags |= Notification.FLAG_INSISTENT; // Keep ringing
+        return builder.build();
+    }
 
-        // Start as foreground service
-        startForeground(NOTIFICATION_ID, notification);
-        Log.d(TAG, "✅ Foreground notification shown");
-
-        // Start ringtone
-        playRingtone();
-        
-        // Start vibration
-        startVibration();
-
+    private void handleAnswerCall() {
+        Log.d(TAG, "═══════════════════════════════════════");
+        Log.d(TAG, "✅ ANSWERING CALL: " + currentCallId);
         Log.d(TAG, "═══════════════════════════════════════");
 
-        return START_NOT_STICKY;
+        // Stop ringtone and vibration
+        stopRingtoneAndVibration();
+
+        // Open app with answer action
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        intent.putExtra("callId", currentCallId);
+        intent.putExtra("callerId", currentCallerId);
+        intent.putExtra("caller", currentCallerName);
+        intent.putExtra("callType", currentCallType);
+        intent.putExtra("action", "answer");
+        intent.setAction("ANSWER_CALL");
+        startActivity(intent);
+
+        // Stop the service
+        stopForeground(true);
+        stopSelf();
+    }
+
+    private void handleDeclineCall() {
+        Log.d(TAG, "═══════════════════════════════════════");
+        Log.d(TAG, "❌ DECLINING CALL: " + currentCallId);
+        Log.d(TAG, "═══════════════════════════════════════");
+
+        // Stop ringtone and vibration
+        stopRingtoneAndVibration();
+
+        // Send decline to app
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        intent.putExtra("callId", currentCallId);
+        intent.putExtra("callerId", currentCallerId);
+        intent.putExtra("action", "decline");
+        intent.setAction("DECLINE_CALL");
+        startActivity(intent);
+
+        // Stop the service
+        stopForeground(true);
+        stopSelf();
     }
 
     private void acquireWakeLock() {
         try {
             PowerManager powerManager = (PowerManager) getSystemService(Context.POWER_SERVICE);
             if (powerManager != null) {
+                // Release any existing wake lock
+                if (wakeLock != null && wakeLock.isHeld()) {
+                    wakeLock.release();
+                }
+
                 wakeLock = powerManager.newWakeLock(
                     PowerManager.FULL_WAKE_LOCK |
                     PowerManager.ACQUIRE_CAUSES_WAKEUP |
@@ -162,47 +293,49 @@ public class IncomingCallService extends Service {
                     "BlockStarCypher:IncomingCallWakeLock"
                 );
                 wakeLock.acquire(60000); // 60 seconds max
-                Log.d(TAG, "✅ Wake lock acquired");
+                Log.d(TAG, "✅ Wake lock acquired - screen should turn on");
             }
         } catch (Exception e) {
-            Log.e(TAG, "Failed to acquire wake lock: " + e.getMessage());
+            Log.e(TAG, "❌ Failed to acquire wake lock: " + e.getMessage());
         }
     }
 
     private void playRingtone() {
         try {
+            // Check if phone is not in silent mode
+            AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            int ringerMode = audioManager.getRingerMode();
+            int volume = audioManager.getStreamVolume(AudioManager.STREAM_RING);
+
+            Log.d(TAG, "📢 Ringer mode: " + ringerMode + ", Volume: " + volume);
+
+            if (ringerMode == AudioManager.RINGER_MODE_SILENT) {
+                Log.w(TAG, "⚠️ Phone is in silent mode - no ringtone will play");
+                return;
+            }
+
             Uri ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
             if (ringtoneUri == null) {
                 ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
             }
-            
+
             ringtone = RingtoneManager.getRingtone(this, ringtoneUri);
-            
             if (ringtone != null) {
-                // Set audio attributes for ringtone
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     ringtone.setLooping(true);
                 }
                 
-                AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-                if (audioManager != null) {
-                    // Ensure volume is up
-                    int currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_RING);
-                    int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING);
-                    Log.d(TAG, "Ring volume: " + currentVolume + "/" + maxVolume);
-                    
-                    if (currentVolume == 0) {
-                        Log.w(TAG, "⚠️ Ring volume is 0!");
-                    }
-                }
+                AudioAttributes audioAttributes = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build();
+                ringtone.setAudioAttributes(audioAttributes);
                 
                 ringtone.play();
-                Log.d(TAG, "🔔 Ringtone started");
-            } else {
-                Log.e(TAG, "Failed to get ringtone");
+                Log.d(TAG, "🔔 Ringtone playing");
             }
         } catch (Exception e) {
-            Log.e(TAG, "Error playing ringtone: " + e.getMessage());
+            Log.e(TAG, "❌ Error playing ringtone: " + e.getMessage());
         }
     }
 
@@ -210,71 +343,70 @@ public class IncomingCallService extends Service {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 VibratorManager vibratorManager = (VibratorManager) getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
-                if (vibratorManager != null) {
-                    vibrator = vibratorManager.getDefaultVibrator();
-                }
+                vibrator = vibratorManager.getDefaultVibrator();
             } else {
                 vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
             }
 
             if (vibrator != null && vibrator.hasVibrator()) {
-                long[] pattern = {0, 1000, 500, 1000, 500, 1000};
+                // Vibration pattern: wait 0ms, vibrate 1000ms, wait 500ms, vibrate 1000ms, etc.
+                long[] pattern = {0, 1000, 500, 1000, 500, 1000, 500};
                 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    vibrator.vibrate(VibrationEffect.createWaveform(pattern, 0)); // 0 = repeat from start
+                    vibrator.vibrate(VibrationEffect.createWaveform(pattern, 0)); // 0 = repeat from index 0
                 } else {
                     vibrator.vibrate(pattern, 0);
                 }
                 Log.d(TAG, "📳 Vibration started");
             }
         } catch (Exception e) {
-            Log.e(TAG, "Error starting vibration: " + e.getMessage());
+            Log.e(TAG, "❌ Error starting vibration: " + e.getMessage());
         }
     }
 
     private void stopRingtoneAndVibration() {
-        Log.d(TAG, "Stopping ringtone and vibration");
+        Log.d(TAG, "🔇 Stopping ringtone and vibration");
         
-        if (ringtone != null) {
-            try {
+        try {
+            if (ringtone != null) {
                 ringtone.stop();
-                Log.d(TAG, "🔇 Ringtone stopped");
-            } catch (Exception e) {
-                Log.e(TAG, "Error stopping ringtone: " + e.getMessage());
+                ringtone = null;
+                Log.d(TAG, "  ✓ Ringtone stopped");
             }
-            ringtone = null;
+        } catch (Exception e) {
+            Log.e(TAG, "  ✗ Error stopping ringtone: " + e.getMessage());
         }
 
-        if (vibrator != null) {
-            try {
+        try {
+            if (vibrator != null) {
                 vibrator.cancel();
-                Log.d(TAG, "📴 Vibration stopped");
-            } catch (Exception e) {
-                Log.e(TAG, "Error stopping vibration: " + e.getMessage());
+                vibrator = null;
+                Log.d(TAG, "  ✓ Vibration stopped");
             }
-            vibrator = null;
+        } catch (Exception e) {
+            Log.e(TAG, "  ✗ Error stopping vibration: " + e.getMessage());
         }
 
-        if (wakeLock != null && wakeLock.isHeld()) {
-            try {
+        try {
+            if (wakeLock != null && wakeLock.isHeld()) {
                 wakeLock.release();
-                Log.d(TAG, "🔓 Wake lock released");
-            } catch (Exception e) {
-                Log.e(TAG, "Error releasing wake lock: " + e.getMessage());
+                wakeLock = null;
+                Log.d(TAG, "  ✓ Wake lock released");
             }
-            wakeLock = null;
+        } catch (Exception e) {
+            Log.e(TAG, "  ✗ Error releasing wake lock: " + e.getMessage());
         }
     }
 
     @Override
     public void onDestroy() {
-        Log.d(TAG, "Service destroyed");
+        Log.d(TAG, "📞 IncomingCallService DESTROYED");
         stopRingtoneAndVibration();
         super.onDestroy();
     }
 
     @Override
-    public IBinder onBind(Intent intent) { 
-        return null; 
+    public IBinder onBind(Intent intent) {
+        return null;
     }
 }

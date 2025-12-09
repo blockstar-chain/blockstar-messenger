@@ -25,6 +25,7 @@ import {
   initializeLocalNotifications 
 } from '@/lib/notificationService';
 import { handleCallMissed } from '@/lib/missedCallService';
+import { useIncomingCallFromNotification, useMessageFromNotification } from '@/hooks/useIncomingCallFromNotification';
 import { Capacitor } from '@capacitor/core';
 
 export default function MainLayout() {
@@ -46,6 +47,35 @@ export default function MainLayout() {
   // AUTO-LOGIN: This MUST run first!
   // ========================================
   const { isChecking: isCheckingAuth, isRestored } = useAuthSession();
+
+  // ========================================
+  // HANDLE CALLS/MESSAGES FROM NOTIFICATIONS
+  // Only enable AFTER auth check is complete
+  // ========================================
+  const { notifyAnswered, notifyDeclined } = useIncomingCallFromNotification({
+    enabled: !isCheckingAuth && !!currentUser?.walletAddress,
+    onIncomingCall: (data) => {
+      console.log('📞 Incoming call from notification:', data);
+      toast(`📞 Incoming ${data.callType} call from ${data.callerName}`, { duration: 5000 });
+    },
+    onAnswerCall: (data) => {
+      console.log('📞 Auto-answering call from notification');
+      // The modal will check sessionStorage for autoAnswer flag
+    },
+    onDeclineCall: (data) => {
+      console.log('📞 Call declined from notification');
+      toast('Call declined', { duration: 2000 });
+    },
+  });
+
+  // Handle message notifications opening conversations
+  useMessageFromNotification({
+    enabled: !isCheckingAuth && !!currentUser?.walletAddress,
+    onOpenConversation: (conversationId) => {
+      console.log('💬 Opening conversation from notification:', conversationId);
+      setIsInChat(true);
+    },
+  });
 
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);

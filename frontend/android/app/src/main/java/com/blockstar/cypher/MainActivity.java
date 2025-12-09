@@ -1,280 +1,176 @@
-// android/app/src/main/java/com/blockstar/cypher/MainActivity.java
 package com.blockstar.cypher;
 
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.Notification;
-import android.content.Context;
 import android.content.Intent;
-import android.media.AudioAttributes;
-import android.media.RingtoneManager;
-import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
+
 import com.getcapacitor.BridgeActivity;
-import com.getcapacitor.JSObject;
-import com.blockstar.cypher.CallFirebaseMessagingService;
-import com.blockstar.cypher.wifidirect.WifiDirectPlugin;
+
+import org.json.JSONException;
+import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
-
-    private static final String TAG = "BlockStarCypher";
-
-    // Channel IDs (must match backend FCM channelId values)
-    public static final String CHANNEL_CALLS = "calls";
-    public static final String CHANNEL_INCOMING_CALLS = "incoming_calls"; // For foreground service
-    public static final String CHANNEL_MESSAGES = "messages";
-    public static final String CHANNEL_GENERAL = "general";
-
-    // Store pending call data to be retrieved by JS
-    private static JSObject pendingCallData = null;
-    private static boolean hasPendingCall = false;
+    private static final String TAG = "MainActivity";
+    
+    // Store pending call data to pass to JavaScript after bridge is ready
+    private static JSONObject pendingCallData = null;
+    private static JSONObject pendingMessageData = null;
 
     @Override
-    public void onCreate(Bundle savedInstanceState) {
-        registerPlugin(WifiDirectPlugin.class);  // Add this line
+    protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
-        Log.d(TAG, "════════════════════════════════════════════════════════════");
-        Log.d(TAG, "🚀 BlockStar Cypher MainActivity onCreate");
-        Log.d(TAG, "════════════════════════════════════════════════════════════");
-
-        // Create notification channels FIRST before anything else
-        createNotificationChannels();
         
-        // Register custom plugins
-        registerPlugin(AudioRoutingPlugin.class);
-        registerPlugin(IncomingCallPlugin.class);
-        
-        // Check if opened from incoming call notification
-        handleIncomingCallIntent(getIntent());
+        Log.d(TAG, "═══════════════════════════════════════");
+        Log.d(TAG, "📱 MainActivity onCreate");
+        Log.d(TAG, "═══════════════════════════════════════");
+
+        // Handle the intent that started the activity
+        handleIntent(getIntent());
     }
 
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        Log.d(TAG, "📞 onNewIntent received");
-        handleIncomingCallIntent(intent);
+        Log.d(TAG, "📱 MainActivity onNewIntent");
+        handleIntent(intent);
     }
 
-    /**
-     * Handle intent from incoming call notification
-     * Stores the call data so JS can retrieve it
-     */
-    private void handleIncomingCallIntent(Intent intent) {
+    private void handleIntent(Intent intent) {
         if (intent == null) {
-            Log.d(TAG, "📞 No intent to process");
+            Log.d(TAG, "No intent to handle");
             return;
         }
 
-        boolean fromNotification = intent.getBooleanExtra("fromNotification", false);
+        String action = intent.getAction();
+        Log.d(TAG, "Handling intent with action: " + action);
+
+        // Handle incoming call notification tap
+        if ("INCOMING_CALL".equals(action) || "ANSWER_CALL".equals(action) || "DECLINE_CALL".equals(action)) {
+            handleCallIntent(intent);
+        }
+        // Handle message notification tap
+        else if ("OPEN_CONVERSATION".equals(action)) {
+            handleMessageIntent(intent);
+        }
+        // Check for call extras even without specific action
+        else if (intent.hasExtra("callId") && intent.hasExtra("fromNotification")) {
+            handleCallIntent(intent);
+        }
+        // Check for conversation extras
+        else if (intent.hasExtra("conversationId") && intent.hasExtra("fromNotification")) {
+            handleMessageIntent(intent);
+        }
+    }
+
+    private void handleCallIntent(Intent intent) {
         String callId = intent.getStringExtra("callId");
+        String callerId = intent.getStringExtra("callerId");
+        String callerName = intent.getStringExtra("caller");
+        String callType = intent.getStringExtra("callType");
+        String callAction = intent.getStringExtra("action"); // "answer" or "decline"
 
-        Log.d(TAG, "📞 Processing intent - fromNotification: " + fromNotification + ", callId: " + callId);
+        Log.d(TAG, "═══════════════════════════════════════");
+        Log.d(TAG, "📞 CALL INTENT RECEIVED");
+        Log.d(TAG, "  Call ID: " + callId);
+        Log.d(TAG, "  Caller: " + callerName);
+        Log.d(TAG, "  Type: " + callType);
+        Log.d(TAG, "  Action: " + callAction);
+        Log.d(TAG, "═══════════════════════════════════════");
 
-        if (fromNotification && callId != null) {
-            String caller = intent.getStringExtra("caller");
-            String callerId = intent.getStringExtra("callerId");
-            String callType = intent.getStringExtra("callType");
-
-            Log.d(TAG, "════════════════════════════════════════════════════════════");
-            Log.d(TAG, "📞 INCOMING CALL FROM NOTIFICATION");
-            Log.d(TAG, "📞 Call ID: " + callId);
-            Log.d(TAG, "📞 Caller: " + caller);
-            Log.d(TAG, "📞 Caller ID: " + callerId);
-            Log.d(TAG, "📞 Call Type: " + callType);
-            Log.d(TAG, "════════════════════════════════════════════════════════════");
-
-            // Store call data for JS to retrieve
-            pendingCallData = new JSObject();
-            pendingCallData.put("callId", callId);
-            pendingCallData.put("caller", caller != null ? caller : "Unknown");
-            pendingCallData.put("callerId", callerId != null ? callerId : "");
-            pendingCallData.put("callType", callType != null ? callType : "audio");
-            pendingCallData.put("fromNotification", true);
-            pendingCallData.put("timestamp", System.currentTimeMillis());
-            hasPendingCall = true;
-
-            Log.d(TAG, "📞 ✅ Call data stored, waiting for JS to retrieve");
-
-            // Stop the incoming call service (notification was tapped)
-            stopIncomingCallService();
-
-            // Clear the intent extras to prevent re-processing
-            intent.removeExtra("fromNotification");
-            intent.removeExtra("callId");
-        }
-    }
-
-    /**
-     * Stop the IncomingCallService when call is answered/handled
-     */
-    private void stopIncomingCallService() {
         try {
-            Intent serviceIntent = new Intent(this, IncomingCallService.class);
-            serviceIntent.setAction("CALL_ANSWERED");
-            stopService(serviceIntent);
-            Log.d(TAG, "📞 ✅ IncomingCallService stopped");
+            JSONObject callData = new JSONObject();
+            callData.put("type", "incoming_call");
+            callData.put("callId", callId);
+            callData.put("callerId", callerId);
+            callData.put("callerName", callerName != null ? callerName : "Unknown");
+            callData.put("callType", callType != null ? callType : "audio");
+            callData.put("action", callAction); // null, "answer", or "decline"
+            callData.put("fromNotification", true);
+
+            // Store for when JavaScript is ready
+            pendingCallData = callData;
+
+            // Try to send to JavaScript immediately if bridge is ready
+            sendToJavaScript("incomingCallFromNotification", callData);
+
+        } catch (JSONException e) {
+            Log.e(TAG, "Error creating call data JSON", e);
+        }
+    }
+
+    private void handleMessageIntent(Intent intent) {
+        String conversationId = intent.getStringExtra("conversationId");
+
+        Log.d(TAG, "═══════════════════════════════════════");
+        Log.d(TAG, "💬 MESSAGE INTENT RECEIVED");
+        Log.d(TAG, "  Conversation: " + conversationId);
+        Log.d(TAG, "═══════════════════════════════════════");
+
+        try {
+            JSONObject messageData = new JSONObject();
+            messageData.put("type", "open_conversation");
+            messageData.put("conversationId", conversationId);
+            messageData.put("fromNotification", true);
+
+            // Store for when JavaScript is ready
+            pendingMessageData = messageData;
+
+            // Try to send to JavaScript immediately if bridge is ready
+            sendToJavaScript("openConversationFromNotification", messageData);
+
+        } catch (JSONException e) {
+            Log.e(TAG, "Error creating message data JSON", e);
+        }
+    }
+
+    private void sendToJavaScript(String eventName, JSONObject data) {
+        try {
+            if (bridge != null && bridge.getWebView() != null) {
+                String js = String.format(
+                    "window.dispatchEvent(new CustomEvent('%s', { detail: %s }));",
+                    eventName,
+                    data.toString()
+                );
+                
+                runOnUiThread(() -> {
+                    bridge.getWebView().evaluateJavascript(js, null);
+                    Log.d(TAG, "✅ Sent event to JavaScript: " + eventName);
+                });
+            } else {
+                Log.d(TAG, "⏳ Bridge not ready, data stored for later");
+            }
         } catch (Exception e) {
-            Log.e(TAG, "📞 Error stopping service: " + e.getMessage());
+            Log.e(TAG, "Error sending to JavaScript", e);
         }
     }
 
     /**
-     * Called by IncomingCallPlugin to get pending call data
+     * Called from JavaScript to check for pending notification data
+     * This should be called when the app starts up
      */
-    public static JSObject getPendingCallData() {
-        if (hasPendingCall && pendingCallData != null) {
-            Log.d(TAG, "📞 Returning pending call data to JS");
-            JSObject data = pendingCallData;
-            // Clear after retrieval
-            pendingCallData = null;
-            hasPendingCall = false;
-            return data;
-        }
-        return null;
+    public static JSONObject getPendingCallData() {
+        JSONObject data = pendingCallData;
+        pendingCallData = null; // Clear after reading
+        return data;
     }
 
-    /**
-     * Check if there's a pending call
-     */
-    public static boolean hasPendingCall() {
-        return hasPendingCall;
+    public static JSONObject getPendingMessageData() {
+        JSONObject data = pendingMessageData;
+        pendingMessageData = null; // Clear after reading
+        return data;
     }
 
-    /**
-     * Clear pending call (called when call is handled)
-     */
-    public static void clearPendingCall() {
-        pendingCallData = null;
-        hasPendingCall = false;
-        Log.d(TAG, "📞 Pending call cleared");
-    }
+    @Override
+    protected void onResume() {
+        super.onResume();
+        Log.d(TAG, "📱 MainActivity onResume");
 
-    /**
-     * Create notification channels for Android 8.0+ (Oreo)
-     * IMPORTANT: These channels MUST be created before any notifications are sent
-     */
-    private void createNotificationChannels() {
-
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            Log.d(TAG, "Notification channels not needed for API < 26");
-            return;
+        // Re-send pending data when app comes to foreground
+        if (pendingCallData != null) {
+            sendToJavaScript("incomingCallFromNotification", pendingCallData);
         }
-
-        Log.d(TAG, "Creating notification channels...");
-
-        NotificationManager manager =
-                (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-
-        if (manager == null) {
-            Log.e(TAG, "❌ NotificationManager is null!");
-            return;
+        if (pendingMessageData != null) {
+            sendToJavaScript("openConversationFromNotification", pendingMessageData);
         }
-
-        // ===========================================================
-        // CALLS CHANNEL - High priority (FCM push notifications)
-        // This channel is used by Firebase Cloud Messaging
-        // ===========================================================
-        NotificationChannel callChannel = new NotificationChannel(
-                CHANNEL_CALLS,
-                "Incoming Calls",
-                NotificationManager.IMPORTANCE_HIGH  // IMPORTANCE_HIGH = wake device + heads-up
-        );
-
-        callChannel.setDescription("Notifications for incoming voice and video calls");
-        callChannel.enableVibration(true);
-        callChannel.setVibrationPattern(new long[]{0, 500, 200, 500, 200, 500, 200, 500});
-        callChannel.enableLights(true);
-        callChannel.setLightColor(android.graphics.Color.BLUE);
-        callChannel.setBypassDnd(true); // Allow ringing even in Do Not Disturb
-        callChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
-        callChannel.setShowBadge(true);
-
-        // Set ringtone sound for calls
-        AudioAttributes callSoundAttrs = new AudioAttributes.Builder()
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                .build();
-
-        callChannel.setSound(
-                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
-                callSoundAttrs
-        );
-
-        manager.createNotificationChannel(callChannel);
-        Log.d(TAG, "✅ Created '" + CHANNEL_CALLS + "' channel (IMPORTANCE_HIGH)");
-
-        // ===========================================================
-        // INCOMING CALLS CHANNEL - For Foreground Service
-        // Used by IncomingCallService for full-screen intent
-        // ===========================================================
-        NotificationChannel incomingCallChannel = new NotificationChannel(
-                CHANNEL_INCOMING_CALLS,
-                "Incoming Call Alerts",
-                NotificationManager.IMPORTANCE_HIGH
-        );
-
-        incomingCallChannel.setDescription("Full-screen alerts for incoming calls");
-        incomingCallChannel.enableVibration(true);
-        incomingCallChannel.setVibrationPattern(new long[]{0, 500, 200, 500, 200, 500, 200, 500});
-        incomingCallChannel.enableLights(true);
-        incomingCallChannel.setLightColor(android.graphics.Color.BLUE);
-        incomingCallChannel.setBypassDnd(true);
-        incomingCallChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
-        
-        incomingCallChannel.setSound(
-                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
-                callSoundAttrs
-        );
-
-        manager.createNotificationChannel(incomingCallChannel);
-        Log.d(TAG, "✅ Created '" + CHANNEL_INCOMING_CALLS + "' channel (IMPORTANCE_HIGH)");
-
-        // ===========================================================
-        // MESSAGES CHANNEL - High priority for chat messages
-        // ===========================================================
-        NotificationChannel messagesChannel = new NotificationChannel(
-                CHANNEL_MESSAGES,
-                "Messages",
-                NotificationManager.IMPORTANCE_HIGH
-        );
-
-        messagesChannel.setDescription("Notifications for new messages");
-        messagesChannel.enableVibration(true);
-        messagesChannel.setVibrationPattern(new long[]{0, 250, 100, 250});
-        messagesChannel.enableLights(true);
-        messagesChannel.setLightColor(android.graphics.Color.GREEN);
-        messagesChannel.setLockscreenVisibility(Notification.VISIBILITY_PRIVATE);
-        messagesChannel.setShowBadge(true);
-
-        messagesChannel.setSound(
-                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
-                new AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-                        .build()
-        );
-
-        manager.createNotificationChannel(messagesChannel);
-        Log.d(TAG, "✅ Created '" + CHANNEL_MESSAGES + "' channel (IMPORTANCE_HIGH)");
-
-        // ===========================================================
-        // GENERAL CHANNEL - Default notifications
-        // ===========================================================
-        NotificationChannel generalChannel = new NotificationChannel(
-                CHANNEL_GENERAL,
-                "General",
-                NotificationManager.IMPORTANCE_DEFAULT
-        );
-
-        generalChannel.setDescription("General notifications");
-        generalChannel.enableVibration(true);
-
-        manager.createNotificationChannel(generalChannel);
-        Log.d(TAG, "✅ Created '" + CHANNEL_GENERAL + "' channel (IMPORTANCE_DEFAULT)");
-
-        Log.d(TAG, "════════════════════════════════════════════════════════════");
-        Log.d(TAG, "✅ All notification channels created successfully!");
-        Log.d(TAG, "════════════════════════════════════════════════════════════");
     }
 }

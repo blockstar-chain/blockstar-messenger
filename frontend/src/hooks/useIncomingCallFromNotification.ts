@@ -1,195 +1,192 @@
 // frontend/src/hooks/useIncomingCallFromNotification.ts
-// React hook to handle incoming calls when app is opened from notification
+// Handles incoming calls that arrive via push notification when app is closed
 
-import { useEffect, useCallback, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { registerPlugin } from '@capacitor/core';
-
-// ============================================
-// TYPES
-// ============================================
+import { useAppStore } from '@/store';
+import { webSocketService } from '@/lib/websocket';
 
 export interface PendingCallData {
-  callId: string | null;
-  caller: string;
+  type: 'incoming_call';
+  callId: string;
   callerId: string;
+  callerName: string;
   callType: 'audio' | 'video';
+  action?: 'answer' | 'decline' | null;
   fromNotification: boolean;
-  timestamp: number;
 }
 
-interface IncomingCallPluginInterface {
-  hasPendingCall(): Promise<{ hasPendingCall: boolean }>;
-  getPendingCall(): Promise<PendingCallData>;
-  clearPendingCall(): Promise<void>;
-  notifyCallAnswered(options: { callId: string }): Promise<void>;
-  notifyCallDeclined(options: { callId: string }): Promise<void>;
-}
-
-// Register the plugin (only on native)
-const IncomingCallPlugin = Capacitor.isNativePlatform() 
-  ? registerPlugin<IncomingCallPluginInterface>('IncomingCall')
-  : null;
-
-// ============================================
-// HOOK OPTIONS
-// ============================================
-
-interface UseIncomingCallOptions {
-  /**
-   * Called when an incoming call is detected
-   */
-  onIncomingCall: (data: PendingCallData) => void;
-  
-  /**
-   * Whether the hook is active (e.g., only when user is logged in)
-   */
+interface UseIncomingCallFromNotificationOptions {
+  onIncomingCall?: (data: PendingCallData) => void;
+  onAnswerCall?: (data: PendingCallData) => void;
+  onDeclineCall?: (data: PendingCallData) => void;
   enabled?: boolean;
 }
 
-// ============================================
-// HOOK IMPLEMENTATION
-// ============================================
+export function useIncomingCallFromNotification(options: UseIncomingCallFromNotificationOptions = {}) {
+  const { onIncomingCall, onAnswerCall, onDeclineCall, enabled = true } = options;
+  const { setIncomingCall, currentUser } = useAppStore();
+  const processedCallIds = useRef<Set<string>>(new Set());
 
-/**
- * Hook to handle incoming calls from push notifications
- * 
- * When user taps an incoming call notification, the app opens and
- * this hook detects the pending call and triggers onIncomingCall
- * 
- * Usage:
- * ```tsx
- * const { notifyAnswered, notifyDeclined } = useIncomingCallFromNotification({
- *   onIncomingCall: (data) => {
- *     setIncomingCallData(data);
- *     setShowIncomingCallModal(true);
- *   },
- *   enabled: !!currentUser
- * });
- * ```
- */
-export function useIncomingCallFromNotification({ 
-  onIncomingCall, 
-  enabled = true 
-}: UseIncomingCallOptions) {
-  const hasCheckedRef = useRef(false);
-  const lastCallIdRef = useRef<string | null>(null);
+  // Notify that a call was answered (to stop ringtone on other devices, etc.)
+  const notifyAnswered = useCallback(async (callId: string) => {
+    console.log('📞 Notifying server: call answered', callId);
+    // The actual WebRTC answer happens in the component
+    // This just signals the server
+  }, []);
 
-  // Stable callback ref to avoid re-running effects
-  const onIncomingCallRef = useRef(onIncomingCall);
-  onIncomingCallRef.current = onIncomingCall;
-
-  // Check for pending call
-  const checkForPendingCall = useCallback(async () => {
-    if (!Capacitor.isNativePlatform() || !enabled || !IncomingCallPlugin) {
-      return;
-    }
-
-    try {
-      const data = await IncomingCallPlugin.getPendingCall();
-      
-      if (data && data.callId && data.callId !== lastCallIdRef.current) {
-        console.log('📞 Incoming call from notification:', data);
-        lastCallIdRef.current = data.callId;
-        onIncomingCallRef.current(data);
-      }
-    } catch (error) {
-      console.error('Error checking for pending call:', error);
-    }
-  }, [enabled]);
+  // Notify that a call was declined
+  const notifyDeclined = useCallback(async (callId: string) => {
+    console.log('📞 Notifying server: call declined', callId);
+    webSocketService.emit('call:decline', { callId });
+  }, []);
 
   useEffect(() => {
-    if (!enabled || !Capacitor.isNativePlatform()) {
+    if (!enabled || !currentUser?.walletAddress) {
+      console.log('📞 useIncomingCallFromNotification: Not enabled or no user');
       return;
     }
 
-    // Check immediately on mount (app launch)
-    if (!hasCheckedRef.current) {
-      hasCheckedRef.current = true;
-      // Small delay to ensure app is fully loaded
-      setTimeout(() => {
-        checkForPendingCall();
-      }, 300);
+    console.log('📞 useIncomingCallFromNotification: Setting up listeners');
+
+    // Handler for native events
+    const handleNativeCallEvent = (event: CustomEvent<PendingCallData>) => {
+      const data = event.detail;
+      
+      console.log('═══════════════════════════════════════');
+      console.log('📞 INCOMING CALL FROM NOTIFICATION');
+      console.log('  Call ID:', data.callId);
+      console.log('  Caller:', data.callerName);
+      console.log('  Type:', data.callType);
+      console.log('  Action:', data.action);
+      console.log('═══════════════════════════════════════');
+
+      // Prevent duplicate processing
+      if (processedCallIds.current.has(data.callId)) {
+        console.log('📞 Call already processed, skipping');
+        return;
+      }
+      processedCallIds.current.add(data.callId);
+
+      // Clean up old call IDs (keep last 10)
+      if (processedCallIds.current.size > 10) {
+        const ids = Array.from(processedCallIds.current);
+        ids.slice(0, ids.length - 10).forEach(id => processedCallIds.current.delete(id));
+      }
+
+      // Handle based on action
+      if (data.action === 'answer') {
+        console.log('📞 User tapped ANSWER from notification');
+        
+        // Set incoming call state so the modal shows
+        setIncomingCall({
+          id: data.callId,
+          callerId: data.callerId,
+          recipientId: currentUser.walletAddress,
+          type: data.callType,
+          status: 'ringing',
+          startTime: Date.now(),
+        });
+
+        // Store caller info
+        sessionStorage.setItem('incomingCallInfo', JSON.stringify({
+          callerName: data.callerName,
+          callType: data.callType,
+          autoAnswer: true, // Signal to auto-answer
+        }));
+
+        onAnswerCall?.(data);
+
+      } else if (data.action === 'decline') {
+        console.log('📞 User tapped DECLINE from notification');
+        notifyDeclined(data.callId);
+        onDeclineCall?.(data);
+
+      } else {
+        // Just opened from notification tap (not answer/decline button)
+        console.log('📞 User tapped notification (showing call modal)');
+        
+        setIncomingCall({
+          id: data.callId,
+          callerId: data.callerId,
+          recipientId: currentUser.walletAddress,
+          type: data.callType,
+          status: 'ringing',
+          startTime: Date.now(),
+        });
+
+        sessionStorage.setItem('incomingCallInfo', JSON.stringify({
+          callerName: data.callerName,
+          callType: data.callType,
+          autoAnswer: false,
+        }));
+
+        onIncomingCall?.(data);
+      }
+    };
+
+    // Listen for native events
+    window.addEventListener('incomingCallFromNotification', handleNativeCallEvent as EventListener);
+
+    // On native platforms, check for pending call data on startup
+    if (Capacitor.isNativePlatform()) {
+      checkForPendingCallData();
     }
 
-    // Check when app resumes from background
-    let appStateListener: any = null;
-    
-    const setupAppStateListener = async () => {
-      try {
-        const { App } = await import('@capacitor/app');
-        appStateListener = await App.addListener('appStateChange', async ({ isActive }) => {
-          if (isActive) {
-            console.log('📱 App resumed, checking for pending call');
-            // Small delay for intent to be processed
-            setTimeout(() => {
-              checkForPendingCall();
-            }, 200);
-          }
-        });
-      } catch (error) {
-        console.warn('Could not set up app state listener:', error);
-      }
-    };
-
-    setupAppStateListener();
-
     return () => {
-      if (appStateListener) {
-        appStateListener.remove();
-      }
+      window.removeEventListener('incomingCallFromNotification', handleNativeCallEvent as EventListener);
     };
-  }, [enabled, checkForPendingCall]);
+  }, [enabled, currentUser?.walletAddress, setIncomingCall, onIncomingCall, onAnswerCall, onDeclineCall, notifyDeclined]);
 
-  // Return helper functions
-  return {
-    /**
-     * Call when user answers the call
-     */
-    notifyAnswered: async (callId: string) => {
-      if (IncomingCallPlugin) {
-        try {
-          await IncomingCallPlugin.notifyCallAnswered({ callId });
-        } catch (error) {
-          console.error('Error notifying call answered:', error);
-        }
-      }
-      lastCallIdRef.current = null;
-    },
-
-    /**
-     * Call when user declines the call
-     */
-    notifyDeclined: async (callId: string) => {
-      if (IncomingCallPlugin) {
-        try {
-          await IncomingCallPlugin.notifyCallDeclined({ callId });
-        } catch (error) {
-          console.error('Error notifying call declined:', error);
-        }
-      }
-      lastCallIdRef.current = null;
-    },
-
-    /**
-     * Clear pending call state
-     */
-    clearPending: async () => {
-      if (IncomingCallPlugin) {
-        try {
-          await IncomingCallPlugin.clearPendingCall();
-        } catch (error) {
-          console.error('Error clearing pending call:', error);
-        }
-      }
-      lastCallIdRef.current = null;
-    },
-
-    /**
-     * Manually trigger a check for pending calls
-     */
-    checkNow: checkForPendingCall
-  };
+  return { notifyAnswered, notifyDeclined };
 }
 
-export default useIncomingCallFromNotification;
+/**
+ * Check for pending call data from native (when app was launched from notification)
+ */
+async function checkForPendingCallData() {
+  try {
+    // This is called via Capacitor bridge
+    const { Plugins } = await import('@capacitor/core');
+    
+    // Try to get pending data from native
+    // This requires a custom plugin or using the App plugin's getLaunchUrl
+    const appPlugin = (Plugins as any).App;
+    if (appPlugin?.getLaunchUrl) {
+      const launchUrl = await appPlugin.getLaunchUrl();
+      console.log('📞 Launch URL:', launchUrl);
+    }
+  } catch (error) {
+    console.log('📞 No pending call data from native');
+  }
+}
+
+/**
+ * Hook for handling message notifications
+ */
+export function useMessageFromNotification(options: { 
+  onOpenConversation?: (conversationId: string) => void;
+  enabled?: boolean;
+} = {}) {
+  const { onOpenConversation, enabled = true } = options;
+  const { setActiveConversation } = useAppStore();
+
+  useEffect(() => {
+    if (!enabled) return;
+
+    const handleMessageEvent = (event: CustomEvent<{ conversationId: string }>) => {
+      const { conversationId } = event.detail;
+      
+      console.log('💬 Opening conversation from notification:', conversationId);
+      
+      setActiveConversation(conversationId);
+      onOpenConversation?.(conversationId);
+    };
+
+    window.addEventListener('openConversationFromNotification', handleMessageEvent as EventListener);
+
+    return () => {
+      window.removeEventListener('openConversationFromNotification', handleMessageEvent as EventListener);
+    };
+  }, [enabled, setActiveConversation, onOpenConversation]);
+}
