@@ -11,6 +11,7 @@ import Image from 'next/image';
 import ConnectButton from './ConnectButton';
 import { useAppKitAccount } from '@reown/appkit/react';
 import { useSignMessage } from 'wagmi';
+import { saveUserSession } from '@/lib/persistentAuth';
 
 
 export default function AuthPage() {
@@ -26,14 +27,14 @@ export default function AuthPage() {
     try {
       setCurrentStep('connect');
       const contractconnect = await blockchainService.connectWallet();
-      if(!contractconnect){
+      if (!contractconnect) {
         return false;
       }
 
       setCurrentStep('verify');
       // Verify NFT ownership
       const nftMetadata = await blockchainService.verifyNFTOwnership(address);
-      
+
       if (!nftMetadata) {
         toast.error('No @name NFT found. Please purchase an @name NFT to continue.');
         setIsConnecting(false);
@@ -46,7 +47,7 @@ export default function AuthPage() {
 
       // Initialize encryption with wallet-derived keys
       const signMessageFn = async (message: string) => {
-        return await signMessageAsync({message});
+        return await signMessageAsync({ message });
       };
 
       await encryptionService.initialize(address, signMessageFn);
@@ -69,6 +70,13 @@ export default function AuthPage() {
         console.error('Could not resolve profile avatar:', error);
       }
 
+      await saveUserSession({
+        walletAddress: address,
+        username: nftMetadata.name,
+        avatar: avatar,
+        publicKey: publicKey,
+      });
+
       // Set user in store with avatar
       setCurrentUser({
         walletAddress: address,
@@ -90,8 +98,8 @@ export default function AuthPage() {
   };
 
   useEffect(() => {
-    if(address){
-        handleConnectWallet();
+    if (address) {
+      handleConnectWallet();
     }
   }, [address])
 
@@ -203,9 +211,9 @@ export default function AuthPage() {
             </div>
           </div>
 
-  
+
           <ConnectButton isConnecting={isConnecting} className="w-full bg-gradient-to-r from-primary-500 to-cyan-500 hover:from-primary-600 hover:to-cyan-600 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 shadow-glow hover:shadow-glow-lg" />
-            
+
           {/* Info */}
           <div className="mt-6 p-4 bg-dark-200 border border-midnight rounded-xl">
             <p className="text-sm text-secondary text-center">

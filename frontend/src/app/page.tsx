@@ -5,10 +5,12 @@ import { useAppStore } from '@/store';
 import AuthPage from '@/components/AuthPage';
 import MainLayout from '@/components/MainLayout';
 import PWAInstallPrompt from '@/components/PWAInstallPrompt';
+import { useAutoLogin, useSessionPersistence } from '@/hooks/useAutoLogin';
 
 
 export default function HomePage() {
-  const { isAuthenticated } = useAppStore();
+  const { isAuthenticated, currentUser } = useAppStore();
+  const { isChecking } = useAutoLogin();
 
   // Register service worker for PWA
   useEffect(() => {
@@ -24,9 +26,20 @@ export default function HomePage() {
     }
   }, []);
 
+  useSessionPersistence();
+
   return (
     <>
-      {isAuthenticated ? <MainLayout /> : <AuthPage />}
+      {isAuthenticated ? <MainLayout /> :
+        <>
+          {isChecking &&(
+              <div className="flex items-center justify-center h-screen bg-gray-900">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500" />
+              </div>
+            )}
+          <AuthPage />
+        </>
+      }
       <PWAInstallPrompt />
     </>
   );

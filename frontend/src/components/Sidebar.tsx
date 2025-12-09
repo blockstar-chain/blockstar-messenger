@@ -25,6 +25,7 @@ import NotificationSettingsPanel from './NotificationSettings';
 import RingtoneSettingsPanel from './RingtoneSettings';
 import { useDisconnect } from '@reown/appkit/react';
 import { unregisterPushNotifications } from '@/lib/pushNotifications';
+import { clearUserSession } from '@/lib/persistentAuth';
 import IncomingCallModal from './IncomingCallModal';
 import { useIncomingCallFromNotification, PendingCallData } from '@/hooks/useIncomingCallFromNotification';
 import { Capacitor } from '@capacitor/core';
@@ -1382,11 +1383,35 @@ export default function Sidebar({
   };
 
   const handleLogout = async () => {
-    await unregisterPushNotifications();
-    await disconnect();
-    blockchainService.disconnect();
-    useAppStore.getState().reset();
-    window.location.reload();
+    console.log('🚪 Logging out...');
+    
+    try {
+      // 1. Unregister push notifications
+      await unregisterPushNotifications();
+      
+      // 2. Disconnect wallet
+      await disconnect();
+      blockchainService.disconnect();
+      
+      // 3. Disconnect WebSocket
+      webSocketService.disconnect();
+      
+      // 4. Clear persistent session - IMPORTANT for staying logged out!
+      await clearUserSession();
+      
+      // 5. Reset app store
+      useAppStore.getState().reset();
+      
+      console.log('✅ Logged out successfully');
+      
+      // 6. Reload to clear any remaining state
+      window.location.reload();
+    } catch (error) {
+      console.error('❌ Logout error:', error);
+      // Still try to clear session and reload even on error
+      await clearUserSession();
+      window.location.reload();
+    }
   };
 
   const handleRefresh = async () => {
