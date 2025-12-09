@@ -195,10 +195,45 @@ export default function Sidebar({
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [selectedProfileAddress, setSelectedProfileAddress] = useState<string | null>(null);
 
+  // Ref to hold ringtone audio so it can be stopped from anywhere
+  const ringtoneRef = React.useRef<HTMLAudioElement | null>(null);
+
+  const stopRingtone = () => {
+    if (ringtoneRef.current) {
+      ringtoneRef.current.pause();
+      ringtoneRef.current.currentTime = 0;
+      ringtoneRef.current = null;
+      console.log('🔇 Ringtone stopped');
+    }
+  };
+
+  const playRingtone = () => {
+    try {
+      // Stop any existing ringtone first
+      stopRingtone();
+      
+      ringtoneRef.current = new Audio('/sounds/incoming.mp3');
+      ringtoneRef.current.loop = true;
+      ringtoneRef.current.volume = 1.0;
+      
+      // Try to play - handle autoplay restrictions
+      const playPromise = ringtoneRef.current.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            console.log('🔔 Ringtone playing');
+          })
+          .catch(e => {
+            console.warn('🔇 Could not autoplay ringtone (browser restriction):', e);
+          });
+      }
+    } catch (e) {
+      console.warn('🔇 Could not create ringtone audio:', e);
+    }
+  };
+
   useEffect(() => {
     if (!currentUser?.walletAddress) return;
-
-    let ringtoneAudio: HTMLAudioElement | null = null;
 
     // Initialize mesh call service
     meshCallService.initialize();
@@ -246,16 +281,9 @@ export default function Sidebar({
       });
       setShowIncomingCall(true);
 
-      // Play ringtone on web (mobile handles via native notification)
-      if (!Capacitor.isNativePlatform()) {
-        try {
-          ringtoneAudio = new Audio('/sounds/incoming.mp3');
-          ringtoneAudio.loop = true;
-          ringtoneAudio.play().catch(e => console.warn('Could not play ringtone:', e));
-        } catch (e) {
-          console.warn('Could not play ringtone:', e);
-        }
-      }
+      // Play ringtone on ALL platforms (web and mobile when app is open)
+      // Native notification handles sound when app is closed/background
+      playRingtone();
     };
 
     const handleCallCancelled = (data: { callId: string }) => {
@@ -264,12 +292,7 @@ export default function Sidebar({
         setShowIncomingCall(false);
         setIncomingCallData(null);
         sessionStorage.removeItem('incomingCallOffer');
-        
-        // Stop ringtone
-        if (ringtoneAudio) {
-          ringtoneAudio.pause();
-          ringtoneAudio = null;
-        }
+        stopRingtone();
       }
     };
 
@@ -288,12 +311,7 @@ export default function Sidebar({
       unsubscribeEnded();
       unsubscribeMeshIncoming();
       unsubscribeMeshEnded();
-      
-      // Stop ringtone on cleanup
-      if (ringtoneAudio) {
-        ringtoneAudio.pause();
-        ringtoneAudio = null;
-      }
+      stopRingtone();
     };
   }, [currentUser?.walletAddress, incomingCallData?.callId]);
 
@@ -312,6 +330,9 @@ export default function Sidebar({
     console.log('========================================');
 
     try {
+      // 0. Stop the ringtone immediately
+      stopRingtone();
+
       // 1. Notify native layer (stops ringtone on mobile)
       if (Capacitor.isNativePlatform()) {
         await notifyAnswered(incomingCallData.callId);
@@ -412,6 +433,7 @@ export default function Sidebar({
       toast.error('Failed to answer: ' + error.message);
       
       // Clean up on error
+      stopRingtone();
       webRTCService.cleanup();
       setShowIncomingCall(false);
       setIncomingCallData(null);
@@ -425,6 +447,9 @@ export default function Sidebar({
     if (!incomingCallData) return;
 
     console.log('📞 Declining call:', incomingCallData.callId);
+
+    // Stop ringtone immediately
+    stopRingtone();
 
     try {
       // Notify native layer (stops ringtone on mobile)
