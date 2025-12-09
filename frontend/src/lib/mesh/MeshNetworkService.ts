@@ -29,10 +29,22 @@ export interface MeshMessage {
   to: string;
   content: string;
   timestamp: number;
-  type: 'text' | 'file' | 'voice' | 'routing' | 'ack' | 'discovery' | 'ping';
+  type: 'text' | 'file' | 'voice' | 'routing' | 'ack' | 'discovery' | 'ping' | 'call-signal';
   hops: string[];
   ttl: number;
   encrypted: boolean;
+  callSignal?: MeshCallSignal; // For call-signal type messages
+}
+
+// Call signaling over mesh
+export interface MeshCallSignal {
+  signalType: 'offer' | 'answer' | 'ice-candidate' | 'call-end' | 'call-decline';
+  callId: string;
+  callType?: 'audio' | 'video';
+  callerName?: string;
+  callerAvatar?: string;
+  sdp?: any; // RTCSessionDescription
+  candidate?: any; // RTCIceCandidate
 }
 
 export interface MeshNetworkStatus {
@@ -76,6 +88,7 @@ type MessageHandler = (message: MeshMessage, peer: MeshPeer) => void;
 type PeerHandler = (peer: MeshPeer, event: 'discovered' | 'connected' | 'disconnected') => void;
 type StatusHandler = (status: MeshNetworkStatus) => void;
 type PermissionHandler = (type: 'bluetooth' | 'location', granted: boolean) => void;
+type CallSignalHandler = (signal: MeshCallSignal, fromAddress: string) => void;
 
 // ============================================
 // CONSTANTS
@@ -150,6 +163,7 @@ class MeshNetworkService {
   private peerHandlers = new Set<PeerHandler>();
   private statusHandlers = new Set<StatusHandler>();
   private permissionHandlers = new Set<PermissionHandler>();
+  private callSignalHandlers = new Set<CallSignalHandler>();
   
   // BLE state
   private bleInitialized = false;
@@ -996,7 +1010,16 @@ class MeshNetworkService {
 
       // Check if message is for us
       if (message.to.toLowerCase() === this.myWalletAddress) {
-        // Deliver message
+        // Handle call signal messages specially
+        if (message.type === 'call-signal' && message.callSignal) {
+          console.log('📞 [Mesh] Received call signal:', message.callSignal.signalType);
+          this.callSignalHandlers.forEach(handler => handler(message.callSignal!, message.from));
+          // Send ACK for call signals too
+          this.sendAck(message.id, fromPeer);
+          return;
+        }
+
+        // Deliver regular message
         this.messageHandlers.forEach(handler => handler(message, peer!));
         
         // Send ACK
@@ -1336,6 +1359,172 @@ class MeshNetworkService {
   onPermissionChange(handler: PermissionHandler): () => void {
     this.permissionHandlers.add(handler);
     return () => this.permissionHandlers.delete(handler);
+  }
+
+  // Subscribe to call signals received over mesh
+  onCallSignal(handler: CallSignalHandler): () => void {
+    this.callSignalHandlers.add(handler);
+    return () => this.callSignalHandlers.delete(handler);
+  }
+
+  // ============================================
+  // CALL SIGNALING OVER MESH
+  // ============================================
+
+  /**
+   * Send a call offer over mesh network
+   */
+  async sendCallOffer(
+    to: string,
+    callId: string,
+    offer: any,
+    callType: 'audio' | 'video',
+    callerName?: string,
+    callerAvatar?: string
+  ): Promise<{ sent: boolean; queued: boolean; error?: string }> {
+    console.log('📞 [Mesh] Sending call offer to:', to);
+    
+    const callSignal: MeshCallSignal = {
+      signalType: 'offer',
+      callId,
+      callType,
+      callerName,
+      callerAvatar,
+      sdp: offer,
+    };
+
+    return this.sendCallSignal(to, callSignal);
+  }
+
+  /**
+   * Send a call answer over mesh network
+   */
+  async sendCallAnswer(
+    to: string,
+    callId: string,
+    answer: any
+  ): Promise<{ sent: boolean; queued: boolean; error?: string }> {
+    console.log('📞 [Mesh] Sending call answer to:', to);
+    
+    const callSignal: MeshCallSignal = {
+      signalType: 'answer',
+      callId,
+      sdp: answer,
+    };
+
+    return this.sendCallSignal(to, callSignal);
+  }
+
+  /**
+   * Send ICE candidate over mesh network
+   */
+  async sendIceCandidate(
+    to: string,
+    callId: string,
+    candidate: any
+  ): Promise<{ sent: boolean; queued: boolean; error?: string }> {
+    console.log('📞 [Mesh] Sending ICE candidate to:', to);
+    
+    const callSignal: MeshCallSignal = {
+      signalType: 'ice-candidate',
+      callId,
+      candidate,
+    };
+
+    return this.sendCallSignal(to, callSignal);
+  }
+
+  /**
+   * Send call end signal over mesh network
+   */
+  async sendCallEnd(
+    to: string,
+    callId: string
+  ): Promise<{ sent: boolean; queued: boolean; error?: string }> {
+    console.log('📞 [Mesh] Sending call end to:', to);
+    
+    const callSignal: MeshCallSignal = {
+      signalType: 'call-end',
+      callId,
+    };
+
+    return this.sendCallSignal(to, callSignal);
+  }
+
+  /**
+   * Internal method to send call signal
+   */
+  private async sendCallSignal(
+    to: string,
+    callSignal: MeshCallSignal
+  ): Promise<{ sent: boolean; queued: boolean; error?: string }> {
+    const message: MeshMessage = {
+      id: `${this.myWalletAddress}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      from: this.myWalletAddress,
+      to: to.toLowerCase(),
+      content: '', // Call signals use callSignal field
+      timestamp: Date.now(),
+      type: 'call-signal',
+      hops: [this.myWalletAddress],
+      ttl: this.settings.maxHops,
+      encrypted: false,
+      callSignal,
+    };
+
+    // Try direct send
+    const channel = this.dataChannels.get(to.toLowerCase());
+    if (channel?.readyState === 'open') {
+      try {
+        channel.send(JSON.stringify(message));
+        console.log('📞 [Mesh] Call signal sent directly');
+        return { sent: true, queued: false };
+      } catch (e) {
+        console.error('📞 [Mesh] Failed to send direct call signal:', e);
+      }
+    }
+
+    // Try routing
+    const route = this.routingTable.get(to.toLowerCase());
+    if (route && route.length > 0) {
+      const nextHop = route[0];
+      const nextChannel = this.dataChannels.get(nextHop);
+      if (nextChannel?.readyState === 'open') {
+        try {
+          nextChannel.send(JSON.stringify(message));
+          console.log('📞 [Mesh] Call signal sent via route');
+          return { sent: true, queued: false };
+        } catch (e) {
+          console.error('📞 [Mesh] Failed to send routed call signal:', e);
+        }
+      }
+    }
+
+    // Call signals should not be queued (they're time-sensitive)
+    console.warn('📞 [Mesh] No route for call signal');
+    return { sent: false, queued: false, error: 'No route to peer for call' };
+  }
+
+  /**
+   * Check if we can reach a peer via mesh for calls
+   */
+  canReachPeerForCall(walletAddress: string): boolean {
+    const normalized = walletAddress.toLowerCase();
+    
+    // Direct connection?
+    const channel = this.dataChannels.get(normalized);
+    if (channel?.readyState === 'open') {
+      return true;
+    }
+    
+    // Routable?
+    const route = this.routingTable.get(normalized);
+    if (route && route.length > 0) {
+      const nextHop = route[0];
+      const nextChannel = this.dataChannels.get(nextHop);
+      return nextChannel?.readyState === 'open';
+    }
+    
+    return false;
   }
 
   private notifyPeerChange(peer: MeshPeer, event: 'discovered' | 'connected' | 'disconnected'): void {

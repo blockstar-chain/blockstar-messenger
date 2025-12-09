@@ -2,13 +2,15 @@ import React, { useEffect, useState } from 'react';
 import { useAppStore } from '@/store';
 import { db, dbHelpers } from '@/lib/database';
 import { Conversation } from '@/types';
-import { Search, Plus, Settings, LogOut, X, MessageSquarePlus, Lock, ExternalLink, Globe, Mail, Twitter, MessageSquare, Trash2, Users, ExternalLinkIcon, BookUser, Radio, RefreshCw, Bell } from 'lucide-react';
+import { Search, Plus, Settings, LogOut, X, MessageSquarePlus, Lock, ExternalLink, Globe, Mail, Twitter, MessageSquare, Trash2, Users, ExternalLinkIcon, BookUser, Radio, RefreshCw, Bell, Volume2 } from 'lucide-react';
 import { truncateAddress, formatTimestamp, getInitials, getAvatarColor, generateConversationId } from '@/utils/helpers';
 import { blockchainService } from '@/lib/blockchain';
 import { resolveProfile, resolveProfilesByWallets, getProfileByWallet, type BlockStarProfile } from '@/lib/profileResolver';
 import { groupChatService } from '@/lib/group-chat-service';
 import { webSocketService } from '@/lib/websocket';
+import { webRTCService } from '@/lib/webrtc';
 import { encryptionService } from '@/lib/encryption';
+import { meshCallService } from '@/lib/mesh/MeshCallService';
 import toast from 'react-hot-toast';
 import { useSettingReslover } from '@/hooks/useSetting';
 import { resolveAccountDisplay } from '@/utils/constant';
@@ -115,7 +117,7 @@ export default function Sidebar({
   onMeshModalChange,
   isMobile = false,
 }: SidebarProps) {
-  const { currentUser, conversations, setActiveConversation, activeConversationId, setConversations, addConversation } = useAppStore();
+  const { currentUser, conversations, setActiveConversation, activeConversationId, setConversations, addConversation, setActiveCall, setCallModalOpen } = useAppStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [filteredConversations, setFilteredConversations] = useState<Conversation[]>([]);
 
@@ -156,6 +158,8 @@ export default function Sidebar({
     callerName: string;
     callerAvatar?: string;
     callType: 'audio' | 'video';
+    offer?: any;
+    viaMesh?: boolean;
   } | null>(null);
 
   const { notifyAnswered, notifyDeclined } = useIncomingCallFromNotification({
@@ -194,16 +198,32 @@ export default function Sidebar({
   useEffect(() => {
     if (!currentUser?.walletAddress) return;
 
+    let ringtoneAudio: HTMLAudioElement | null = null;
+
+    // Initialize mesh call service
+    meshCallService.initialize();
+
     const handleIncomingCall = async (data: {
       callId: string;
       callerId: string;
       callerName?: string;
+      callerAvatar?: string;
       callType?: 'audio' | 'video';
+      offer?: any;
+      viaMesh?: boolean;
     }) => {
-      console.log('📞 Incoming call via socket:', data);
+      console.log('📞 Incoming call:', data.viaMesh ? 'via MESH' : 'via SERVER', data);
+
+      // IMPORTANT: Store the offer immediately
+      if (data.offer) {
+        sessionStorage.setItem('incomingCallOffer', JSON.stringify(data.offer));
+        console.log('📞 Stored incoming call offer');
+      } else {
+        console.warn('⚠️ No offer in incoming call data!');
+      }
 
       // Try to resolve caller profile for avatar
-      let callerAvatar: string | undefined;
+      let callerAvatar = data.callerAvatar;
       let displayName = data.callerName;
 
       if (!displayName) {
@@ -211,7 +231,7 @@ export default function Sidebar({
         const cachedProfile = getProfileByWallet(data.callerId);
         if (cachedProfile) {
           displayName = cachedProfile.domain;
-          callerAvatar = cachedProfile.avatar;
+          callerAvatar = callerAvatar || cachedProfile.avatar;
         }
       }
 
@@ -221,16 +241,17 @@ export default function Sidebar({
         callerName: displayName || truncateAddress(data.callerId),
         callerAvatar,
         callType: data.callType || 'audio',
+        offer: data.offer,
+        viaMesh: data.viaMesh,
       });
       setShowIncomingCall(true);
 
       // Play ringtone on web (mobile handles via native notification)
       if (!Capacitor.isNativePlatform()) {
         try {
-          // You can add web ringtone here
-          // const audio = new Audio('/sounds/ringtone.mp3');
-          // audio.loop = true;
-          // audio.play();
+          ringtoneAudio = new Audio('/sounds/incoming.mp3');
+          ringtoneAudio.loop = true;
+          ringtoneAudio.play().catch(e => console.warn('Could not play ringtone:', e));
         } catch (e) {
           console.warn('Could not play ringtone:', e);
         }
@@ -242,48 +263,161 @@ export default function Sidebar({
       if (incomingCallData?.callId === data.callId) {
         setShowIncomingCall(false);
         setIncomingCallData(null);
+        sessionStorage.removeItem('incomingCallOffer');
+        
+        // Stop ringtone
+        if (ringtoneAudio) {
+          ringtoneAudio.pause();
+          ringtoneAudio = null;
+        }
       }
     };
 
-    // Subscribe to socket events
+    // Subscribe to socket events (server calls)
     const unsubscribeIncoming = webSocketService.on('call:incoming', handleIncomingCall);
     const unsubscribeCancelled = webSocketService.on('call:cancelled', handleCallCancelled);
+    const unsubscribeEnded = webSocketService.on('call:ended', handleCallCancelled);
+
+    // Subscribe to mesh calls
+    const unsubscribeMeshIncoming = meshCallService.onIncomingCall(handleIncomingCall);
+    const unsubscribeMeshEnded = meshCallService.onCallEnded(handleCallCancelled);
 
     return () => {
       unsubscribeIncoming();
       unsubscribeCancelled();
+      unsubscribeEnded();
+      unsubscribeMeshIncoming();
+      unsubscribeMeshEnded();
+      
+      // Stop ringtone on cleanup
+      if (ringtoneAudio) {
+        ringtoneAudio.pause();
+        ringtoneAudio = null;
+      }
     };
   }, [currentUser?.walletAddress, incomingCallData?.callId]);
 
   // Handle answering a call
   const handleAnswerCall = async () => {
-    if (!incomingCallData) return;
+    if (!incomingCallData || !currentUser) return;
 
-    console.log('📞 Answering call:', incomingCallData.callId);
+    const viaMesh = incomingCallData.viaMesh || false;
 
-    // Notify native layer (stops ringtone on mobile)
-    if (Capacitor.isNativePlatform()) {
-      await notifyAnswered(incomingCallData.callId);
+    console.log('========================================');
+    console.log('📞 ANSWERING CALL');
+    console.log('📞 Call ID:', incomingCallData.callId);
+    console.log('📞 Caller:', incomingCallData.callerId);
+    console.log('📞 Type:', incomingCallData.callType);
+    console.log('📞 Via Mesh:', viaMesh);
+    console.log('========================================');
+
+    try {
+      // 1. Notify native layer (stops ringtone on mobile)
+      if (Capacitor.isNativePlatform()) {
+        await notifyAnswered(incomingCallData.callId);
+      }
+
+      // 2. Get the offer - first try from state, then sessionStorage
+      let offer = incomingCallData.offer;
+      if (!offer) {
+        const storedOffer = sessionStorage.getItem('incomingCallOffer');
+        if (storedOffer) {
+          offer = JSON.parse(storedOffer);
+        }
+      }
+      
+      if (!offer) {
+        throw new Error('No call offer found - call may have expired');
+      }
+      console.log('📞 Have offer:', { type: offer.type, hasSdp: !!offer.sdp });
+
+      // 3. Initialize local media stream
+      const isVideoCall = incomingCallData.callType === 'video';
+      console.log('📞 Initializing local stream, audioOnly:', !isVideoCall);
+      await webRTCService.initializeLocalStream(!isVideoCall);
+      console.log('📞 Local stream ready');
+
+      // 4. Create the answering peer connection
+      console.log('📞 Creating answering peer...');
+      webRTCService.answerCall(
+        incomingCallData.callId,
+        !isVideoCall,
+        // onSignal callback
+        (signal) => {
+          console.log('📤 Signal from answerer:', signal.type || 'candidate');
+          
+          if (signal.type === 'answer') {
+            // Send the SDP answer back to the caller
+            console.log('📤 Sending SDP ANSWER to caller', viaMesh ? '(via mesh)' : '(via server)');
+            if (viaMesh) {
+              meshCallService.answerCall(
+                incomingCallData.callId,
+                signal,
+                incomingCallData.callerId,
+                true
+              );
+            } else {
+              webSocketService.answerCall(incomingCallData.callId, signal);
+            }
+          } else if (signal.candidate) {
+            // Send ICE candidates to caller
+            console.log('📤 Sending ICE candidate to caller', viaMesh ? '(via mesh)' : '(via server)');
+            if (viaMesh) {
+              meshCallService.sendIceCandidate(
+                incomingCallData.callerId,
+                signal,
+                incomingCallData.callId,
+                true
+              );
+            } else {
+              webSocketService.sendIceCandidate(
+                incomingCallData.callerId,
+                signal,
+                incomingCallData.callId
+              );
+            }
+          }
+        }
+      );
+
+      // 5. Process the offer to generate the answer
+      console.log('📞 Processing incoming offer...');
+      webRTCService.processSignal(incomingCallData.callId, offer);
+
+      // 6. Set up the active call state
+      console.log('📞 Setting active call state...');
+      setActiveCall({
+        id: incomingCallData.callId,
+        recipientId: incomingCallData.callerId,
+        callerId: currentUser.walletAddress,
+        type: incomingCallData.callType,
+        status: 'active',
+        startTime: Date.now(),
+      });
+
+      // 7. Open the call modal
+      setCallModalOpen(true);
+
+      // 8. Close incoming call modal and clean up
+      setShowIncomingCall(false);
+      setIncomingCallData(null);
+      sessionStorage.removeItem('incomingCallOffer');
+      sessionStorage.removeItem('incomingCallInfo');
+
+      console.log('✅ Call answered successfully!');
+      toast.success(`Connected to ${incomingCallData.callerName}${viaMesh ? ' (mesh)' : ''}`);
+
+    } catch (error: any) {
+      console.error('❌ Error answering call:', error);
+      toast.error('Failed to answer: ' + error.message);
+      
+      // Clean up on error
+      webRTCService.cleanup();
+      setShowIncomingCall(false);
+      setIncomingCallData(null);
+      sessionStorage.removeItem('incomingCallOffer');
+      sessionStorage.removeItem('incomingCallInfo');
     }
-
-    // Close the modal
-    setShowIncomingCall(false);
-
-    // Tell the server we're answering
-    webSocketService.emit('call:answer', {
-      callId: incomingCallData.callId,
-      callerId: incomingCallData.callerId,
-    });
-
-    // TODO: Navigate to call screen or open call UI
-    // Example: You might have a call modal or navigate to a call page
-    // setActiveCall(incomingCallData);
-    // router.push(`/call/${incomingCallData.callId}`);
-
-    toast.success(`Connecting to ${incomingCallData.callerName}...`);
-
-    // Clear the call data
-    setIncomingCallData(null);
   };
 
   // Handle declining a call
@@ -292,24 +426,27 @@ export default function Sidebar({
 
     console.log('📞 Declining call:', incomingCallData.callId);
 
-    // Notify native layer (stops ringtone on mobile)
-    if (Capacitor.isNativePlatform()) {
-      await notifyDeclined(incomingCallData.callId);
+    try {
+      // Notify native layer (stops ringtone on mobile)
+      if (Capacitor.isNativePlatform()) {
+        await notifyDeclined(incomingCallData.callId);
+      }
+
+      // Close the modal
+      setShowIncomingCall(false);
+
+      // Tell the server we're declining (end the call)
+      webSocketService.endCall(incomingCallData.callId);
+
+      toast('Call declined', { icon: '📵' });
+    } catch (e) {
+      console.warn('Error declining call:', e);
+    } finally {
+      // Clear the call data
+      setIncomingCallData(null);
+      sessionStorage.removeItem('incomingCallOffer');
+      sessionStorage.removeItem('incomingCallInfo');
     }
-
-    // Close the modal
-    setShowIncomingCall(false);
-
-    // Tell the server we're declining
-    webSocketService.emit('call:decline', {
-      callId: incomingCallData.callId,
-      callerId: incomingCallData.callerId,
-    });
-
-    toast('Call declined', { icon: '📞' });
-
-    // Clear the call data
-    setIncomingCallData(null);
   };
 
   // Load contacts when showing new chat modal
@@ -2144,6 +2281,14 @@ export default function Sidebar({
               </div>
 
               {/* Sounds & Ringtones Section */}
+              <div>
+                <h4 className="font-semibold text-white mb-3 flex items-center gap-2">
+                  <Volume2 size={18} className="text-blue-500" />
+                  Sounds & Ringtones
+                </h4>
+                <RingtoneSettingsPanel />
+              </div>
+
               <div>
                 <h4 className="font-semibold text-white mb-3 flex items-center gap-2">
                   <Radio size={18} className="text-purple-500" />
