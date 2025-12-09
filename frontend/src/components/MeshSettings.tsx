@@ -182,8 +182,19 @@ export default function MeshSettingsComponent({ isOpen, onClose }: MeshSettingsP
 
               <div className="flex items-center justify-between text-sm">
                 <span className="text-gray-400">Server Status</span>
-                <span className={status.isOnline ? 'text-green-400' : 'text-red-400'}>
-                  {status.isOnline ? '● Online' : '● Offline (Mesh Mode)'}
+                <span className={
+                  status.isOnline && settings.enabled 
+                    ? 'text-yellow-400'  // Hybrid mode
+                    : status.isOnline 
+                      ? 'text-green-400'   // Online only
+                      : 'text-red-400'     // Offline
+                }>
+                  {status.isOnline && settings.enabled
+                    ? '● Hybrid Mode'
+                    : status.isOnline 
+                      ? '● Online' 
+                      : '● Offline (Mesh Mode)'
+                  }
                 </span>
               </div>
 

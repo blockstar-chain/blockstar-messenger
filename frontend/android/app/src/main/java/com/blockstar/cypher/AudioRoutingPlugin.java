@@ -2,7 +2,6 @@
 package com.blockstar.cypher;
 
 import android.content.Context;
-import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
 import android.os.Build;
 import android.util.Log;
@@ -68,29 +67,11 @@ public class AudioRoutingPlugin extends Plugin {
                 audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
                 audioManager.setSpeakerphoneOn(true);
                 
-                // Double-check it took effect
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    // Android 12+ has stricter audio focus
-                    audioManager.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL, 
-                        AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
-                }
-                
                 Log.d(TAG, "🔊 Speaker ON - Mode: IN_COMMUNICATION");
             } else {
                 // Switch to earpiece
                 audioManager.setSpeakerphoneOn(false);
                 audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
-                
-                // Force earpiece by also disabling bluetooth if needed
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    // On Android 12+, we might need to explicitly request earpiece
-                    try {
-                        audioManager.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL,
-                            AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
-                    } catch (Exception e) {
-                        Log.w(TAG, "Could not request audio focus: " + e.getMessage());
-                    }
-                }
                 
                 Log.d(TAG, "🔊 Speaker OFF (Earpiece) - Mode: IN_COMMUNICATION");
             }
@@ -242,41 +223,35 @@ public class AudioRoutingPlugin extends Plugin {
      */
     @PluginMethod
     public void toggleSpeaker(PluginCall call) {
-        isSpeakerOn = !isSpeakerOn;
-        
-        // Reuse setAudioRoute logic
-        JSObject params = new JSObject();
-        params.put("speaker", isSpeakerOn);
-        call.setData(params);
-        
-        // Create a new call with the speaker parameter
-        PluginCall toggleCall = new PluginCall(getBridge().getApp().getMainExecutor(), "", "", call.getCallbackId()) {
-            @Override
-            public Boolean getBoolean(String name, Boolean defaultValue) {
-                if ("speaker".equals(name)) {
-                    return isSpeakerOn;
-                }
-                return defaultValue;
-            }
-        };
-        
-        // Just set it directly
-        if (audioManager != null) {
-            try {
-                audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
-                audioManager.setSpeakerphoneOn(isSpeakerOn);
-                
-                Log.d(TAG, "🔊 Toggled speaker: " + isSpeakerOn);
-                
-                JSObject result = new JSObject();
-                result.put("success", true);
-                result.put("speaker", isSpeakerOn);
-                call.resolve(result);
-            } catch (Exception e) {
-                call.reject("Failed to toggle speaker: " + e.getMessage());
-            }
-        } else {
+        if (audioManager == null) {
             call.reject("AudioManager not available");
+            return;
+        }
+
+        try {
+            // Toggle the state
+            isSpeakerOn = !isSpeakerOn;
+            
+            Log.d(TAG, "🔊 Toggling speaker to: " + isSpeakerOn);
+            
+            // Ensure we're in communication mode
+            audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
+            
+            // Set speaker state
+            audioManager.setSpeakerphoneOn(isSpeakerOn);
+            
+            // Verify
+            boolean actualState = audioManager.isSpeakerphoneOn();
+            Log.d(TAG, "🔊 Toggle result - requested: " + isSpeakerOn + ", actual: " + actualState);
+            
+            JSObject result = new JSObject();
+            result.put("success", true);
+            result.put("speaker", actualState);
+            call.resolve(result);
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Error toggling speaker: " + e.getMessage());
+            call.reject("Failed to toggle speaker: " + e.getMessage());
         }
     }
 
