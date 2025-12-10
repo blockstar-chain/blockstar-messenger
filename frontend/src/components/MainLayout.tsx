@@ -13,9 +13,6 @@ import IncomingCallModal from './IncomingCallModal';
 import MobileBottomNav, { MobileTab } from './MobileBottomNav';
 import {
   initializePushNotifications,
-  unregisterPushNotifications,
-  updatePushCallbacks,
-  isNative as isPushNative
 } from '@/lib/pushNotifications';
 import { useAuthSession } from '@/hooks/useAutoLogin';
 import { 
@@ -450,7 +447,7 @@ export default function MainLayout() {
   useEffect(() => {
     const initPush = async () => {
       // Only initialize if we have a wallet and on native platform
-      if (!currentUser?.walletAddress || !isPushNative) {
+      if (!Capacitor.isNativePlatform() || !currentUser) {
         return;
       }
 

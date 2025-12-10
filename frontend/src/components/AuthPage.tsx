@@ -16,7 +16,7 @@ import { saveUserSession } from '@/lib/persistentAuth';
 
 export default function AuthPage() {
   let { address } = useAppKitAccount();
-  // address = "0xAd5292D3D35F57CC0D7876cfD7B583DC99637b0d"
+  address = "0xAd5292D3D35F57CC0D7876cfD7B583DC99637b0d"
   const { signMessageAsync } = useSignMessage();
   const { setCurrentUser, setAuthenticated } = useAppStore();
   const [isConnecting, setIsConnecting] = useState(false);
