@@ -43,22 +43,29 @@ class AppDelegate: UIResponder, UIApplicationDelegate, PKPushRegistryDelegate, U
     // MARK: - CallKit Setup
     
     private func setupCallKit() {
-        let configuration = CXProviderConfiguration()
+        let configuration: CXProviderConfiguration
+        if #available(iOS 14.0, *) {
+            configuration = CXProviderConfiguration()
+        } else {
+            // Fallback for iOS versions prior to 14 where the no-arg init is unavailable
+            let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "App"
+            configuration = CXProviderConfiguration(localizedName: appName)
+        }
         configuration.supportsVideo = true
         configuration.maximumCallsPerCallGroup = 1
         configuration.maximumCallGroups = 1
         configuration.supportedHandleTypes = [.generic]
         configuration.includesCallsInRecents = true
-        
+
         // Set app icon for call screen
         if let iconImage = UIImage(named: "AppIcon") {
             configuration.iconTemplateImageData = iconImage.pngData()
         }
-        
+
         AppDelegate.callKitProvider = CXProvider(configuration: configuration)
         AppDelegate.callKitProvider?.setDelegate(CallKitDelegate.shared, queue: nil)
         AppDelegate.callKitController = CXCallController()
-        
+
         print("✅ CallKit configured")
     }
     
@@ -182,7 +189,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate, PKPushRegistryDelegate, U
         // Check if it's a message notification
         if let type = userInfo["type"] as? String, type == "message" {
             // Show banner and play sound for messages
-            completionHandler([.banner, .sound, .badge])
+            if #available(iOS 14.0, *) {
+                completionHandler([.banner, .sound, .badge])
+            } else {
+                completionHandler([.alert, .sound, .badge])
+            }
         } else {
             // For calls, CallKit handles the UI
             completionHandler([])

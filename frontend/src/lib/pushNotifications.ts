@@ -3,11 +3,11 @@
 // Handles token verification, re-registration, and retry logic
 
 import { Capacitor } from '@capacitor/core';
-import { 
-  PushNotifications, 
-  Token, 
-  PushNotificationSchema, 
-  ActionPerformed 
+import {
+  PushNotifications,
+  Token,
+  PushNotificationSchema,
+  ActionPerformed
 } from '@capacitor/push-notifications';
 import { LocalNotifications } from '@capacitor/local-notifications';
 
@@ -122,16 +122,16 @@ function removeStorageItem(key: string): void {
 export async function checkTokenExists(walletAddress: string): Promise<TokenStatus> {
   try {
     const response = await fetch(`${API_URL}/api/push-token/check/${walletAddress.toLowerCase()}`);
-    
+
     if (!response.ok) {
       console.error('❌ Failed to check token status:', response.status);
       return { hasToken: false, tokenCount: 0, platforms: [] };
     }
-    
+
     const data = await response.json();
-    
+
     console.log('📱 Token check result:', data);
-    
+
     return {
       hasToken: data.hasToken || false,
       tokenCount: data.tokenCount || 0,
@@ -212,7 +212,7 @@ function resetPermissionDeniedCount(): void {
 function shouldRetryPermission(): boolean {
   const deniedCount = getPermissionDeniedCount();
   const lastRequest = getStorageItem(STORAGE_KEYS.LAST_PERMISSION_REQUEST);
-  
+
   if (deniedCount >= PERMISSION_RETRY_DELAYS.length) {
     // Max retries reached, check if 24 hours have passed
     if (lastRequest) {
@@ -221,12 +221,12 @@ function shouldRetryPermission(): boolean {
     }
     return false;
   }
-  
+
   if (!lastRequest) return true;
-  
+
   const elapsed = Date.now() - parseInt(lastRequest, 10);
   const requiredDelay = PERMISSION_RETRY_DELAYS[deniedCount] || PERMISSION_RETRY_DELAYS[PERMISSION_RETRY_DELAYS.length - 1];
-  
+
   return elapsed >= requiredDelay;
 }
 
@@ -236,14 +236,14 @@ function shouldRetryPermission(): boolean {
 function getTimeUntilNextRetry(): number {
   const deniedCount = getPermissionDeniedCount();
   const lastRequest = getStorageItem(STORAGE_KEYS.LAST_PERMISSION_REQUEST);
-  
+
   if (!lastRequest) return 0;
-  
+
   const elapsed = Date.now() - parseInt(lastRequest, 10);
-  const requiredDelay = deniedCount < PERMISSION_RETRY_DELAYS.length 
+  const requiredDelay = deniedCount < PERMISSION_RETRY_DELAYS.length
     ? PERMISSION_RETRY_DELAYS[deniedCount]
     : 24 * 60 * 60 * 1000; // 24 hours after max retries
-  
+
   return Math.max(0, requiredDelay - elapsed);
 }
 
@@ -254,12 +254,12 @@ function schedulePermissionRetry(walletAddress: string): void {
   if (permissionRetryTimer) {
     clearTimeout(permissionRetryTimer);
   }
-  
+
   const timeUntilRetry = getTimeUntilNextRetry();
-  
+
   if (timeUntilRetry > 0) {
     console.log(`📱 Scheduling permission retry in ${Math.round(timeUntilRetry / 1000)}s`);
-    
+
     permissionRetryTimer = setTimeout(() => {
       console.log('📱 Retrying push notification permission...');
       requestPushPermission(walletAddress);
@@ -275,38 +275,38 @@ async function requestPushPermission(walletAddress: string): Promise<boolean> {
     console.log('📱 Permission request already in progress');
     return false;
   }
-  
+
   isRequestingPermission = true;
-  
+
   try {
     let permStatus = await PushNotifications.checkPermissions();
     console.log('📱 Current permission status:', permStatus.receive);
-    
+
     if (permStatus.receive === 'granted') {
       resetPermissionDeniedCount();
       isRequestingPermission = false;
       return true;
     }
-    
+
     if (permStatus.receive === 'denied') {
       // Permission was previously denied
       if (!shouldRetryPermission()) {
         console.log('📱 Permission denied, waiting before retry...');
         schedulePermissionRetry(walletAddress);
         isRequestingPermission = false;
-        
+
         if (callbacks.onPermissionDenied) {
           callbacks.onPermissionDenied();
         }
-        
+
         return false;
       }
     }
-    
+
     // Request permission
     console.log('📱 Requesting push notification permission...');
     permStatus = await PushNotifications.requestPermissions();
-    
+
     if (permStatus.receive === 'granted') {
       console.log('✅ Push notification permission GRANTED');
       resetPermissionDeniedCount();
@@ -316,13 +316,13 @@ async function requestPushPermission(walletAddress: string): Promise<boolean> {
       console.log('❌ Push notification permission DENIED');
       const deniedCount = incrementPermissionDeniedCount();
       console.log(`📱 Permission denied ${deniedCount} time(s)`);
-      
+
       schedulePermissionRetry(walletAddress);
-      
+
       if (callbacks.onPermissionDenied) {
         callbacks.onPermissionDenied();
       }
-      
+
       isRequestingPermission = false;
       return false;
     }
@@ -332,6 +332,7 @@ async function requestPushPermission(walletAddress: string): Promise<boolean> {
     return false;
   }
 }
+
 
 // ============================================
 // INITIALIZATION
@@ -350,64 +351,78 @@ export async function initializePushNotifications(
   walletAddress: string,
   notificationCallbacks?: PushNotificationCallbacks
 ): Promise<boolean> {
-  // Only works on native platforms
   if (!isNative) {
-    console.log('📱 Push notifications not available on web platform');
+    console.log('Push notifications not available on web');
     return false;
   }
 
-  console.log('📱 ════════════════════════════════════════════════');
-  console.log('📱 INITIALIZING PUSH NOTIFICATIONS');
-  console.log('📱 Platform:', platform);
-  console.log('📱 Wallet:', walletAddress);
-  console.log('📱 ════════════════════════════════════════════════');
-
   callbacks = notificationCallbacks || {};
-  currentWalletAddress = walletAddress;
 
   try {
-    // Step 1: Check if token exists in backend
-    const tokenStatus = await checkTokenExists(walletAddress);
-    console.log('📱 Backend token status:', tokenStatus);
-    
-    const needsRegistration = !tokenStatus.hasToken || 
-      !tokenStatus.platforms.includes(platform);
-    
-    if (needsRegistration) {
-      console.log('📱 Token not found in backend - need to register');
-    } else {
-      console.log('📱 Token exists in backend for this platform');
+    // Request permission
+    let permStatus = await PushNotifications.checkPermissions();
+
+    if (permStatus.receive === 'prompt') {
+      permStatus = await PushNotifications.requestPermissions();
     }
 
-    // Step 2: Request permission
-    const hasPermission = await requestPushPermission(walletAddress);
-    
-    if (!hasPermission) {
-      console.log('📱 No permission - will retry later');
-      // Continue anyway - we might have existing registration
-      if (!needsRegistration) {
-        isInitialized = true;
-        return true;
-      }
+    if (permStatus.receive !== 'granted') {
+      console.log('Push notification permission not granted');
       return false;
     }
 
-    // Step 3: Set up listeners
-    await setupPushListeners(walletAddress, needsRegistration);
-
-    // Step 4: Register for push notifications
-    // This will trigger the 'registration' event
+    // Register for push notifications
     await PushNotifications.register();
 
-    // Step 5: Set up local notifications for Android channels
-    await setupLocalNotifications();
+    // Listen for registration
+    PushNotifications.addListener('registration', async (token: Token) => {
+      console.log('📱 Push token received:', token.value.substring(0, 20) + '...');
 
-    isInitialized = true;
-    console.log('✅ Push notifications initialized successfully');
+      // Send token to backend
+      try {
+        await fetch(`${API_URL}/api/push-token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            token: token.value,
+            walletAddress: walletAddress,
+            platform: platform,
+          }),
+        });
+        console.log('📱 Push token registered with server');
+      } catch (error) {
+        console.error('Failed to register push token:', error);
+      }
+
+      // if (pushCallbacks.onRegistration) {
+      //   pushCallbacks.onRegistration(token.value);
+      // }
+    });
+
+    // Listen for registration errors
+    PushNotifications.addListener('registrationError', (error: any) => {
+      console.error('❌ Push registration error:', error);
+
+      // Clear stored token since registration failed
+      removeStorageItem(STORAGE_KEYS.TOKEN_REGISTERED);
+    });
+
+    // Listen for push notifications received
+    PushNotifications.addListener('pushNotificationReceived', (notification: PushNotificationSchema) => {
+      console.log('📱 ════════════════════════════════════════════════');
+      console.log('📱 PUSH NOTIFICATION RECEIVED (Foreground)');
+      console.log('📱 Title:', notification.title);
+      console.log('📱 Body:', notification.body);
+      console.log('📱 Data:', JSON.stringify(notification.data, null, 2));
+      console.log('📱 ════════════════════════════════════════════════');
+
+      handleNotificationData(notification.data, false);
+    });
+
+
     return true;
-
   } catch (error) {
-    console.error('❌ Error initializing push notifications:', error);
+    console.error('Error initializing push notifications:', error);
     return false;
   }
 }
@@ -418,20 +433,20 @@ export async function initializePushNotifications(
  */
 export async function verifyPushRegistration(walletAddress: string): Promise<boolean> {
   if (!isNative) return false;
-  
+
   console.log('📱 Verifying push registration...');
-  
+
   try {
     // Check if token exists in backend
     const tokenStatus = await checkTokenExists(walletAddress);
-    
+
     if (!tokenStatus.hasToken || !tokenStatus.platforms.includes(platform)) {
       console.log('📱 Token missing from backend - re-registering...');
-      
+
       // Re-initialize to get new token
       return await initializePushNotifications(walletAddress, callbacks);
     }
-    
+
     console.log('✅ Push registration verified');
     return true;
   } catch (error) {
@@ -462,16 +477,16 @@ async function setupPushListeners(
     console.log('📱 PUSH TOKEN RECEIVED');
     console.log('📱 Token:', token.value.substring(0, 40) + '...');
     console.log('📱 ════════════════════════════════════════════════');
-    
+
     currentPushToken = token.value;
-    
+
     // Save token locally
     setStorageItem(STORAGE_KEYS.PUSH_TOKEN, token.value);
 
     // Register with backend
     try {
       let success: boolean;
-      
+
       if (forceRegister) {
         // Force register - clears old tokens
         success = await forceRegisterToken(token.value, walletAddress);
@@ -488,7 +503,7 @@ async function setupPushListeners(
         });
 
         success = response.ok;
-        
+
         if (success) {
           console.log('✅ Push token registered with server');
           setStorageItem(STORAGE_KEYS.TOKEN_REGISTERED, 'true');
@@ -497,7 +512,7 @@ async function setupPushListeners(
           console.error('❌ Failed to register token:', error);
         }
       }
-      
+
       if (success && callbacks.onTokenRegistered) {
         callbacks.onTokenRegistered(token.value);
       }
@@ -511,7 +526,7 @@ async function setupPushListeners(
   // ─────────────────────────────────────────
   PushNotifications.addListener('registrationError', (error: any) => {
     console.error('❌ Push registration error:', error);
-    
+
     // Clear stored token since registration failed
     removeStorageItem(STORAGE_KEYS.TOKEN_REGISTERED);
   });
@@ -823,10 +838,10 @@ export async function retryPermissionRequest(): Promise<boolean> {
     console.error('❌ No wallet address set');
     return false;
   }
-  
+
   // Reset denied count to allow immediate retry
   resetPermissionDeniedCount();
-  
+
   return requestPushPermission(currentWalletAddress);
 }
 
