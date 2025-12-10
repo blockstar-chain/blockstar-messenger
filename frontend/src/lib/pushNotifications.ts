@@ -350,6 +350,7 @@ async function requestPushPermission(walletAddress: string): Promise<boolean> {
 
 async function debug(message: any, extra?: any) {
   try {
+    console.log('hererererere in debug')
     const payload = {
       message: String(message),
       extra: extra ?? null,
@@ -362,7 +363,8 @@ async function debug(message: any, extra?: any) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-  } catch (e) {
+  } catch (e :any) {
+    console.log('debug e => ' , e.message)
     // Avoid infinite recursion if debug endpoint is unreachable
   }
 }
@@ -372,6 +374,7 @@ export async function initializePushNotifications(
 ): Promise<boolean> {
   debug("Initializing push notifications for wallet: " + walletAddress);
   debug("API_URL used: " + API_URL);
+
   if (!isNative) {
     debug("Push notifications not available on web");
     console.log('Push notifications not available on web');
@@ -381,29 +384,35 @@ export async function initializePushNotifications(
   callbacks = notificationCallbacks || {};
 
   try {
-    // Request permission
+    // Request permission and WAIT for user response
     let permStatus = await PushNotifications.checkPermissions();
-
+    
+    debug('Initial permission status: ' + permStatus.receive);
+    
     if (permStatus.receive === 'prompt') {
+      debug('Requesting permissions...');
+      // This will show the permission dialog and WAIT for user response
       permStatus = await PushNotifications.requestPermissions();
+      debug('Permission response received: ' + permStatus.receive);
     }
 
+    // Now check the FINAL permission status after user responded
     if (permStatus.receive !== 'granted') {
       console.log('Push notification permission not granted');
-      debug('Push notification permission not granted');
+      debug('Push notification permission not granted. Status: ' + permStatus.receive);
       return false;
     }
 
-    debug('all check passed');
-        // Listen for registration
+    debug('✅ Permission granted! Setting up listeners...');
+
+    // NOW set up listeners (after permission is granted)
     PushNotifications.addListener('registration', async (token: Token) => {
       console.log('📱 Push token received:', token.value.substring(0, 20) + '...');
-      debug('📱 Push token received:', token.value.substring(0, 20) + '...');
-      
+      debug('📱 Push token received: ' + token.value.substring(0, 20) + '...');
 
       // Send token to backend
       try {
-        await fetch(`${API_URL}/api/push-token`, {
+        const response = await fetch(`${API_URL}/api/push-token`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -412,25 +421,28 @@ export async function initializePushNotifications(
             platform: platform,
           }),
         });
-        console.log('📱 Push token registered with server');
+
+        if (response.ok) {
+          console.log('📱 Push token registered with server');
+          debug('✅ Push token registered with server');
+        } else {
+          console.error('Failed to register token, status:', response.status);
+          debug('❌ Failed to register token, status: ' + response.status);
+        }
       } catch (error) {
         console.error('Failed to register push token:', error);
+        debug('❌ Failed to register push token: ' + (error as Error).message);
       }
-
-      // if (pushCallbacks.onRegistration) {
-      //   pushCallbacks.onRegistration(token.value);
-      // }
     });
 
     // Listen for registration errors
     PushNotifications.addListener('registrationError', (error: any) => {
       console.error('❌ Push registration error:', error);
-
-      // Clear stored token since registration failed
+      debug('❌ Push registration error: ' + JSON.stringify(error));
       removeStorageItem(STORAGE_KEYS.TOKEN_REGISTERED);
     });
 
-    // Listen for push notifications received
+    // Listen for push notifications received (foreground)
     PushNotifications.addListener('pushNotificationReceived', (notification: PushNotificationSchema) => {
       console.log('📱 ════════════════════════════════════════════════');
       console.log('📱 PUSH NOTIFICATION RECEIVED (Foreground)');
@@ -438,16 +450,30 @@ export async function initializePushNotifications(
       console.log('📱 Body:', notification.body);
       console.log('📱 Data:', JSON.stringify(notification.data, null, 2));
       console.log('📱 ════════════════════════════════════════════════');
-
+      
+      debug('📱 Foreground notification: ' + notification.title);
       handleNotificationData(notification.data, false);
     });
 
+    // Listen for notification actions (when user taps notification)
+    PushNotifications.addListener('pushNotificationActionPerformed', (notification: ActionPerformed) => {
+      console.log('📱 Push notification action performed:', notification.actionId);
+      debug('📱 Notification tapped: ' + notification.actionId);
+      handleNotificationData(notification.notification.data, true);
+    });
+
+    debug('📱 Registering for push notifications...');
+    
     // Register for push notifications
     await PushNotifications.register();
-
+    
+    debug('✅ Registration initiated successfully');
+    console.log('✅ Push notification setup complete');
+    
     return true;
-  } catch (error : any) {
-    debug("Failed to send token: " + error.message);
+
+  } catch (error: any) {
+    debug("❌ Failed to initialize push notifications: " + error.message);
     console.error('Error initializing push notifications:', error);
     return false;
   }

@@ -446,8 +446,10 @@ export default function MainLayout() {
   // Push notifications setup
   useEffect(() => {
     const initPush = async () => {
+      console.log("initPush ==========");
+      console.log("currentUser" , currentUser);
       // Only initialize if we have a wallet and on native platform
-      if (!Capacitor.isNativePlatform() || !currentUser) {
+      if (!currentUser) {
         return;
       }
 
