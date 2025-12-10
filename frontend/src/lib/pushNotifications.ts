@@ -363,11 +363,12 @@ async function debug(message: any, extra?: any) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-  } catch (e :any) {
-    console.log('debug e => ' , e.message)
+  } catch (e: any) {
+    console.log('debug e => ', e.message)
     // Avoid infinite recursion if debug endpoint is unreachable
   }
 }
+
 export async function initializePushNotifications(
   walletAddress: string,
   notificationCallbacks?: PushNotificationCallbacks
@@ -384,28 +385,12 @@ export async function initializePushNotifications(
   callbacks = notificationCallbacks || {};
 
   try {
-    // Request permission and WAIT for user response
+    // Check current permission status
     let permStatus = await PushNotifications.checkPermissions();
-    
     debug('Initial permission status: ' + permStatus.receive);
-    
-    if (permStatus.receive === 'prompt') {
-      debug('Requesting permissions...');
-      // This will show the permission dialog and WAIT for user response
-      permStatus = await PushNotifications.requestPermissions();
-      debug('Permission response received: ' + permStatus.receive);
-    }
 
-    // Now check the FINAL permission status after user responded
-    if (permStatus.receive !== 'granted') {
-      console.log('Push notification permission not granted');
-      debug('Push notification permission not granted. Status: ' + permStatus.receive);
-      return false;
-    }
-
-    debug('✅ Permission granted! Setting up listeners...');
-
-    // NOW set up listeners (after permission is granted)
+    // Set up listeners FIRST (before requesting permissions or registering)
+    // This ensures we catch the registration event
     PushNotifications.addListener('registration', async (token: Token) => {
       console.log('📱 Push token received:', token.value.substring(0, 20) + '...');
       debug('📱 Push token received: ' + token.value.substring(0, 20) + '...');
@@ -423,14 +408,14 @@ export async function initializePushNotifications(
         });
 
         if (response.ok) {
-          console.log('📱 Push token registered with server');
+          console.log('✅ Push token registered with server');
           debug('✅ Push token registered with server');
         } else {
-          console.error('Failed to register token, status:', response.status);
+          console.error('❌ Failed to register token, status:', response.status);
           debug('❌ Failed to register token, status: ' + response.status);
         }
       } catch (error) {
-        console.error('Failed to register push token:', error);
+        console.error('❌ Failed to register push token:', error);
         debug('❌ Failed to register push token: ' + (error as Error).message);
       }
     });
@@ -450,7 +435,7 @@ export async function initializePushNotifications(
       console.log('📱 Body:', notification.body);
       console.log('📱 Data:', JSON.stringify(notification.data, null, 2));
       console.log('📱 ════════════════════════════════════════════════');
-      
+
       debug('📱 Foreground notification: ' + notification.title);
       handleNotificationData(notification.data, false);
     });
@@ -462,19 +447,51 @@ export async function initializePushNotifications(
       handleNotificationData(notification.notification.data, true);
     });
 
-    debug('📱 Registering for push notifications...');
-    
+    debug('✅ Listeners set up');
+
+    // Request permissions if needed (this triggers the permission dialog)
+    if (permStatus.receive === 'prompt' || permStatus.receive === 'prompt-with-rationale') {
+      debug('📱 Requesting permissions from user...');
+      permStatus = await PushNotifications.requestPermissions();
+      debug('Permission request returned with status: ' + permStatus.receive);
+
+      // On Android, requestPermissions() may return 'prompt' immediately
+      // The actual permission is handled by the system and registration will fire if granted
+    }
+
+    // If already denied, return false
+    if (permStatus.receive === 'denied') {
+      console.log('❌ Push notification permission denied');
+      debug('❌ Push notification permission denied');
+      return false;
+    }
+
     // Register for push notifications
+    // If user grants permission, the 'registration' listener will fire
+    // If user denies, the 'registrationError' listener will fire
+    debug('📱 Calling PushNotifications.register()...');
     await PushNotifications.register();
-    
-    debug('✅ Registration initiated successfully');
-    console.log('✅ Push notification setup complete');
-    
+    debug('✅ PushNotifications.register() called - waiting for system response');
+
+    console.log('✅ Push notification setup initiated - awaiting user permission');
+
+    // Return true to indicate setup was initiated successfully
+    // The actual registration success/failure will be handled by the listeners
     return true;
 
   } catch (error: any) {
     debug("❌ Failed to initialize push notifications: " + error.message);
-    console.error('Error initializing push notifications:', error);
+    console.error('❌ Error initializing push notifications:', error);
+    return false;
+  }
+}
+
+// Optional: Add a helper function to check if notifications are actually registered
+export async function isPushNotificationRegistered(): Promise<boolean> {
+  try {
+    const permStatus = await PushNotifications.checkPermissions();
+    return permStatus.receive === 'granted';
+  } catch (error) {
     return false;
   }
 }
