@@ -15,7 +15,7 @@ const AUTH_KEYS = {
 };
 
 export interface StoredUserData {
-  walletAddress: string;
+  walletAddress: any;
   username?: string;
   avatar?: string;
   publicKey?: string;

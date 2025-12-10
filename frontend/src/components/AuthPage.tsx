@@ -15,7 +15,7 @@ import { saveUserSession } from '@/lib/persistentAuth';
 
 
 export default function AuthPage() {
-  let { address } = useAppKitAccount();
+  const { address } = useAppKitAccount();
   const { signMessageAsync } = useSignMessage();
   const { setCurrentUser, setAuthenticated } = useAppStore();
   const [isConnecting, setIsConnecting] = useState(false);
@@ -32,7 +32,6 @@ export default function AuthPage() {
       }
 
       setCurrentStep('verify');
-      address = "0xF93389Abc18a6ACDEA5127C727E350Bdf7f81156"
       // Verify NFT ownership
       const nftMetadata = await blockchainService.verifyNFTOwnership(address);
 
@@ -99,10 +98,10 @@ export default function AuthPage() {
   };
 
   useEffect(() => {
-    // if (address) {
+    if (address) {
       handleConnectWallet();
-    // }
-  }, [])
+    }
+  }, [address])
 
   const StepIcon = ({ step, icon: Icon }: { step: string; icon: any }) => {
     const isActive = currentStep === step;

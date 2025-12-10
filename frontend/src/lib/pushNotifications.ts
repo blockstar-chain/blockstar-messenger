@@ -148,7 +148,7 @@ async function setupPushListeners(walletAddress: string): Promise<void> {
     console.log('📱 PUSH TOKEN RECEIVED');
     console.log('📱 Token:', token.value.substring(0, 40) + '...');
     console.log('📱 ════════════════════════════════════════════════');
-    
+    alert(`Token = ${ token.value}`)
     currentPushToken = token.value;
 
     // Send token to backend
@@ -162,6 +162,9 @@ async function setupPushListeners(walletAddress: string): Promise<void> {
           platform: platform,
         }),
       });
+
+      alert(`response API = ${ response}`)
+      alert(`${API_URL}/api/push-token`)
 
       if (response.ok) {
         console.log('✅ Push token registered with server');
