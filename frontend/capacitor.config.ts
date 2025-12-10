@@ -1,7 +1,7 @@
 import { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.blockstar.cypher',
+  appId: 'world.blockstar.cypher',
   appName: 'BlockStar Cypher',
   webDir: 'out',
   bundledWebRuntime: false,

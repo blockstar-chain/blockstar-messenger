@@ -11,6 +11,8 @@ import db from './database/db';
 import profileResolver from './services/profileResolver';
 import pushService from './services/pushNotificationService';
 
+
+
 dotenv.config();
 
 const app = express();
@@ -25,6 +27,7 @@ const io = new Server(httpServer, {
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
+
 
 // Create uploads directory
 const uploadsDir = path.join(__dirname, '../uploads');
@@ -66,6 +69,46 @@ const upload = multer({
       cb(new Error('File type not allowed'));
     }
   },
+});
+
+
+app.get('/test-apns-config', async (req, res) => {
+
+
+  const checks = {
+    keyId: !!process.env.APNS_KEY_ID,
+    teamId: !!process.env.APNS_TEAM_ID,
+    bundleId: !!process.env.APNS_BUNDLE_ID,
+    keyPath: process.env.APNS_KEY_PATH || 'Not set',
+    keyFileExists: false,
+    keyFileReadable: false,
+  };
+
+  // Check if key file exists
+  if (process.env.APNS_KEY_PATH) {
+    const keyPath = path.resolve(process.env.APNS_KEY_PATH);
+    checks.keyFileExists = fs.existsSync(keyPath);
+
+    if (checks.keyFileExists) {
+      try {
+        fs.readFileSync(keyPath, 'utf8');
+        checks.keyFileReadable = true;
+      } catch (err) {
+        checks.keyFileReadable = false;
+      }
+    }
+  }
+
+  const allGood = Object.values(checks).every(v => v === true || typeof v === 'string');
+
+  res.json({
+    status: allGood ? '✅ APNs Configuration Valid' : '❌ Configuration Issues',
+    checks,
+    environment: process.env.NODE_ENV || 'development',
+    message: allGood
+      ? 'APNs is properly configured. Ready for real device testing.'
+      : 'Fix the issues above before testing with real devices.'
+  });
 });
 
 // Serve uploaded files with proper CORS and content-type headers
@@ -234,44 +277,6 @@ app.delete('/api/push-token', async (req, res) => {
   }
 });
 
-// Send push notification when message is sent or call is initiated
-async function sendPushNotification(
-  recipientWallet: string,
-  title: string,
-  body: string,
-  data: Record<string, any>
-): Promise<void> {
-  try {
-    const tokens = await db.getPushTokens(recipientWallet);
-
-    if (tokens.length === 0) {
-      console.log(`📱 No push tokens for ${recipientWallet.substring(0, 10)}...`);
-      return;
-    }
-
-    console.log(`📱 Sending push to ${tokens.length} device(s) for ${recipientWallet.substring(0, 10)}...`);
-
-    for (const { push_token, platform } of tokens) {
-      try {
-        // Convert data values to strings (FCM requirement)
-        const stringData: Record<string, string> = {};
-        for (const [key, value] of Object.entries(data)) {
-          stringData[key] = typeof value === 'string' ? value : JSON.stringify(value);
-        }
-
-        await pushService.sendFCMPush(push_token, {
-          title,
-          body,
-          data: stringData,
-        }, platform as 'ios' | 'android');
-      } catch (err) {
-        console.error(`Failed to send push to ${platform}:`, err);
-      }
-    }
-  } catch (error) {
-    console.error('Error sending push notification:', error);
-  }
-}
 
 // Send call-specific push notification (high priority)
 async function sendCallPushNotification(
@@ -2450,7 +2455,7 @@ async function startServer() {
     }
 
     // Initialize Firebase for push notifications
-    const firebaseInitialized = pushService.initializeFirebase();
+    const firebaseInitialized = pushService.initializePushServices();
 
     httpServer.listen(PORT, () => {
       console.log('');

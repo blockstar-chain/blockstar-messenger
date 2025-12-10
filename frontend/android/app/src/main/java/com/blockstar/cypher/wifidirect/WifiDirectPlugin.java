@@ -1,7 +1,7 @@
 // android/app/src/main/java/com/blockstar/cypher/wifidirect/WifiDirectPlugin.java
 // Capacitor plugin for WiFi Direct (P2P) connections
 
-package com.blockstar.cypher.wifidirect;
+package world.blockstar.cypher.wifidirect;
 
 import android.Manifest;
 import android.content.BroadcastReceiver;

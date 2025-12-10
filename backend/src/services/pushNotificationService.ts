@@ -1,10 +1,15 @@
 // backend/src/services/pushNotificationService.ts
-// Push notification service for iOS and Android using Firebase Cloud Messaging
-// FIXED: Now properly wakes Android devices for incoming calls
+// Push notification service for iOS (APNs + FCM) and Android (FCM)
+// iOS: Uses native APNs first, falls back to FCM
+// Android: Uses FCM with high-priority notifications to wake devices
 
 import admin from 'firebase-admin';
+import apn from 'apn';
 
-// Initialize Firebase Admin SDK
+// ═══════════════════════════════════════════════════════════════
+// FIREBASE CLOUD MESSAGING (FCM) INITIALIZATION
+// ═══════════════════════════════════════════════════════════════
+
 let firebaseInitialized = false;
 
 export function initializeFirebase(): boolean {
@@ -38,6 +43,62 @@ export function initializeFirebase(): boolean {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// APPLE PUSH NOTIFICATION SERVICE (APNs) INITIALIZATION
+// ═══════════════════════════════════════════════════════════════
+
+let apnProvider: apn.Provider | null = null;
+
+export function initializeAPNs(): boolean {
+  const keyId = process.env.APNS_KEY_ID;
+  const teamId = process.env.APNS_TEAM_ID;
+  const keyPath = process.env.APNS_KEY_PATH;
+  const bundleId = process.env.APNS_BUNDLE_ID;
+
+  if (!keyId || !teamId || !keyPath || !bundleId) {
+    console.warn('⚠️  APNs credentials not configured. iOS native push disabled.');
+    console.warn('   Set APNS_KEY_ID, APNS_TEAM_ID, APNS_KEY_PATH, and APNS_BUNDLE_ID');
+    return false;
+  }
+
+  try {
+    apnProvider = new apn.Provider({
+      token: {
+        key: keyPath,
+        keyId: keyId,
+        teamId: teamId,
+      },
+      production: process.env.NODE_ENV === 'production',
+    });
+
+    console.log('🍎 APNs Provider initialized');
+    return true;
+  } catch (error) {
+    console.error('❌ Failed to initialize APNs:', error);
+    return false;
+  }
+}
+
+/**
+ * Initialize all push notification services
+ * Call this on server startup
+ */
+export function initializePushServices(): boolean {
+  const fcmInit = initializeFirebase();
+  const apnsInit = initializeAPNs();
+  
+  if (!fcmInit && !apnsInit) {
+    console.error('❌ No push notification services initialized!');
+    return false;
+  }
+  
+  return true;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TYPE DEFINITIONS
+// ═══════════════════════════════════════════════════════════════
+
 export interface PushPayload {
   title: string;
   body: string;
@@ -53,9 +114,157 @@ export interface CallPushPayload {
   callType: 'audio' | 'video';
 }
 
+// ═══════════════════════════════════════════════════════════════
+// NATIVE APNs FUNCTIONS (iOS)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Send call notification using native APNs for iOS
+ * This provides better reliability and lower latency than FCM
+ */
+async function sendAPNsCallNotification(
+  token: string,
+  callPayload: CallPushPayload
+): Promise<boolean> {
+  if (!apnProvider) {
+    console.log('📱 [APNs] Provider not initialized');
+    return false;
+  }
+
+  const callerDisplay = callPayload.callerName || 
+    (callPayload.callerId?.substring(0, 10) + '...');
+
+  const notification = new apn.Notification({
+    alert: {
+      title: `Incoming ${callPayload.callType} call`,
+      body: `${callerDisplay} is calling...`,
+    },
+    sound: 'default', // Use 'ringtone.caf' if you have a custom ringtone
+    badge: 1,
+    category: 'INCOMING_CALL',
+    contentAvailable: true,
+    mutableContent: true,
+    topic: process.env.APNS_BUNDLE_ID!,
+    priority: 10, // Immediate delivery
+    expiry: Math.floor(Date.now() / 1000) + 30, // Expire in 30 seconds
+    payload: {
+      type: 'incoming_call',
+      callId: callPayload.callId,
+      callerId: callPayload.callerId,
+      callerName: callPayload.callerName || '',
+      callType: callPayload.callType,
+      timestamp: Date.now(),
+    },
+  });
+
+  try {
+    const result = await apnProvider.send(notification, token);
+    
+    if (result.failed.length > 0) {
+      const failure = result.failed[0];
+      console.error(`📱 [APNs] Failed to send:`, failure.response);
+      
+      // Check if token is invalid
+      if (failure.response?.reason === 'BadDeviceToken' || 
+          failure.response?.reason === 'Unregistered') {
+        console.log(`📱 [APNs] Invalid token, should be removed: ${token.substring(0, 20)}...`);
+      }
+      
+      return false;
+    }
+    
+    console.log(`📱 [APNs] Call notification sent successfully`);
+    return true;
+  } catch (error) {
+    console.error('📱 [APNs] Error sending notification:', error);
+    return false;
+  }
+}
+
+/**
+ * Send message notification using native APNs for iOS
+ */
+async function sendAPNsMessageNotification(
+  token: string,
+  senderName: string,
+  messagePreview: string,
+  conversationId: string
+): Promise<boolean> {
+  if (!apnProvider) {
+    console.log('📱 [APNs] Provider not initialized');
+    return false;
+  }
+
+  const notification = new apn.Notification({
+    alert: {
+      title: `Message from ${senderName}`,
+      body: messagePreview.substring(0, 100),
+    },
+    sound: 'default',
+    badge: 1,
+    category: 'MESSAGE',
+    contentAvailable: true,
+    topic: process.env.APNS_BUNDLE_ID!,
+    priority: 10,
+    payload: {
+      type: 'message',
+      conversationId,
+      senderName,
+    },
+  });
+
+  try {
+    const result = await apnProvider.send(notification, token);
+    
+    if (result.failed.length > 0) {
+      console.error(`📱 [APNs] Failed to send message notification:`, result.failed[0].response);
+      return false;
+    }
+    
+    console.log(`📱 [APNs] Message notification sent successfully`);
+    return true;
+  } catch (error) {
+    console.error('📱 [APNs] Error sending message notification:', error);
+    return false;
+  }
+}
+
+/**
+ * Cancel call notification using APNs (sends silent background notification)
+ */
+async function sendAPNsCallCancellation(
+  token: string,
+  callId: string
+): Promise<void> {
+  if (!apnProvider) return;
+
+  const notification = new apn.Notification({
+    contentAvailable: true,
+    topic: process.env.APNS_BUNDLE_ID!,
+    priority: 10,
+    pushType: 'background',
+    payload: {
+      type: 'call_cancelled',
+      callId,
+      timestamp: Date.now(),
+    },
+  });
+
+  try {
+    await apnProvider.send(notification, token);
+    console.log(`📱 [APNs] Call cancellation sent for ${callId}`);
+  } catch (error) {
+    // Ignore errors for cancellation
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// FIREBASE CLOUD MESSAGING (FCM) FUNCTIONS
+// ═══════════════════════════════════════════════════════════════
+
 /**
  * Send push notification via Firebase Cloud Messaging
- * Works for both Android and iOS
+ * Works for both Android and iOS (as fallback)
  */
 export async function sendFCMPush(
   token: string,
@@ -127,10 +336,11 @@ export async function sendFCMPush(
 }
 
 /**
- * Send call notification - HIGH PRIORITY with notification payload
- * THIS IS THE KEY FIX: Android needs a notification payload to wake the device
+ * Send call notification via FCM
+ * For Android: HIGH PRIORITY with notification payload to wake device
+ * For iOS: Used as fallback if APNs fails
  */
-export async function sendCallNotification(
+async function sendFCMCallNotification(
   token: string,
   platform: 'ios' | 'android',
   callPayload: CallPushPayload
@@ -140,87 +350,84 @@ export async function sendCallNotification(
     return false;
   }
 
-  console.log(`📞 [FCM] Sending ${callPayload.callType} call notification to ${platform}`);
-  console.log(`   Caller: ${callPayload.callerName || callPayload.callerId}`);
-  console.log(`   CallId: ${callPayload.callId}`);
+  const callerDisplay = callPayload.callerName || 
+    (callPayload.callerId?.substring(0, 10) + '...');
+  
+  const message: admin.messaging.Message = {
+    token,
+    // DATA payload - this is what the app receives
+    data: {
+      type: 'incoming_call',
+      callId: callPayload.callId,
+      callerId: callPayload.callerId,
+      callerName: callPayload.callerName || '',
+      caller: callPayload.callerName || callerDisplay, // For backward compatibility
+      callType: callPayload.callType,
+      timestamp: Date.now().toString(),
+    },
+  };
 
-  try {
-    const callerDisplay = callPayload.callerName || (callPayload.callerId?.substring(0, 10) + '...');
-    
-    const message: admin.messaging.Message = {
-      token,
-      // DATA payload - this is what the app receives
-      data: {
-        type: 'incoming_call',
-        callId: callPayload.callId,
-        callerId: callPayload.callerId,
-        callerName: callPayload.callerName || '',
-        caller: callPayload.callerName || callerDisplay, // For backward compatibility
-        callType: callPayload.callType,
-        timestamp: Date.now().toString(),
+  if (platform === 'android') {
+    // ════════════════════════════════════════════════════════════════
+    // CRITICAL FIX: Include notification payload to WAKE the device
+    // Without this, data-only messages won't wake a sleeping device!
+    // ════════════════════════════════════════════════════════════════
+    message.android = {
+      priority: 'high',
+      ttl: 30000, // 30 seconds
+      notification: {
+        channelId: 'calls', // Must match Android notification channel
+        title: `Incoming ${callPayload.callType} call`,
+        body: `${callerDisplay} is calling...`,
+        priority: 'max',
+        visibility: 'public',
+        sound: 'default',
+        // These help wake the device
+        defaultVibrateTimings: false,
+        vibrateTimingsMillis: [0, 500, 200, 500, 200, 500],
+        defaultLightSettings: false,
+        lightSettings: {
+          color: '#0000FF',
+          lightOnDurationMillis: 500,
+          lightOffDurationMillis: 500,
+        },
+        // Tag allows replacing/canceling this notification
+        tag: `call-${callPayload.callId}`,
       },
     };
+  }
 
-    if (platform === 'android') {
-      // ════════════════════════════════════════════════════════════════
-      // CRITICAL FIX: Include notification payload to WAKE the device
-      // Without this, data-only messages won't wake a sleeping device!
-      // ════════════════════════════════════════════════════════════════
-      message.android = {
-        priority: 'high',
-        ttl: 30000, // 30 seconds
-        notification: {
-          channelId: 'calls', // Must match Android notification channel
-          title: `Incoming ${callPayload.callType} call`,
-          body: `${callerDisplay} is calling...`,
-          priority: 'max',
-          visibility: 'public',
+  if (platform === 'ios') {
+    message.apns = {
+      headers: {
+        'apns-priority': '10', // Immediate delivery
+        'apns-push-type': 'alert',
+        'apns-expiration': String(Math.floor(Date.now() / 1000) + 30), // Expire in 30s
+      },
+      payload: {
+        aps: {
+          alert: {
+            title: `Incoming ${callPayload.callType} call`,
+            body: `${callerDisplay} is calling...`,
+          },
           sound: 'default',
-          // These help wake the device
-          defaultVibrateTimings: false,
-          vibrateTimingsMillis: [0, 500, 200, 500, 200, 500],
-          defaultLightSettings: false,
-          lightSettings: {
-            color: '#0000FF',
-            lightOnDurationMillis: 500,
-            lightOffDurationMillis: 500,
-          },
-          // Tag allows replacing/canceling this notification
-          tag: `call-${callPayload.callId}`,
+          badge: 1,
+          'content-available': 1,
+          'mutable-content': 1,
+          category: 'INCOMING_CALL',
         },
-      };
-    }
+        // Custom data for the app
+        callData: {
+          callId: callPayload.callId,
+          callerId: callPayload.callerId,
+          callerName: callPayload.callerName || '',
+          callType: callPayload.callType,
+        },
+      },
+    };
+  }
 
-    if (platform === 'ios') {
-      message.apns = {
-        headers: {
-          'apns-priority': '10', // Immediate delivery
-          'apns-push-type': 'alert',
-          'apns-expiration': String(Math.floor(Date.now() / 1000) + 30), // Expire in 30s
-        },
-        payload: {
-          aps: {
-            alert: {
-              title: `Incoming ${callPayload.callType} call`,
-              body: `${callerDisplay} is calling...`,
-            },
-            sound: 'default', // Use 'ringtone.caf' if you have custom sound
-            badge: 1,
-            'content-available': 1,
-            'mutable-content': 1,
-            category: 'INCOMING_CALL',
-          },
-          // Custom data for the app
-          callData: {
-            callId: callPayload.callId,
-            callerId: callPayload.callerId,
-            callerName: callPayload.callerName || '',
-            callType: callPayload.callType,
-          },
-        },
-      };
-    }
-
+  try {
     const response = await admin.messaging().send(message);
     console.log(`📞 [FCM] Call notification sent successfully: ${response}`);
     return true;
@@ -236,8 +443,46 @@ export async function sendCallNotification(
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// PUBLIC API - MAIN NOTIFICATION FUNCTIONS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Send call notification - MAIN ENTRY POINT
+ * iOS: Tries native APNs first, falls back to FCM
+ * Android: Uses FCM with high-priority notification
+ */
+export async function sendCallNotification(
+  token: string,
+  platform: 'ios' | 'android',
+  callPayload: CallPushPayload
+): Promise<boolean> {
+  console.log(`📞 Sending ${callPayload.callType} call notification to ${platform}`);
+  console.log(`   Caller: ${callPayload.callerName || callPayload.callerId}`);
+  console.log(`   CallId: ${callPayload.callId}`);
+
+  // ═══════════════════════════════════════════════════════════════
+  // iOS: Try native APNs first (better reliability)
+  // ═══════════════════════════════════════════════════════════════
+  if (platform === 'ios' && apnProvider) {
+    const success = await sendAPNsCallNotification(token, callPayload);
+    if (success) {
+      return true;
+    }
+    
+    console.log('📱 [APNs] Failed, falling back to FCM...');
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Android or iOS fallback: Use FCM
+  // ═══════════════════════════════════════════════════════════════
+  return sendFCMCallNotification(token, platform, callPayload);
+}
+
 /**
  * Send message notification
+ * iOS: Tries native APNs first, falls back to FCM
+ * Android: Uses FCM
  */
 export async function sendMessageNotification(
   token: string,
@@ -246,6 +491,20 @@ export async function sendMessageNotification(
   messagePreview: string,
   conversationId: string
 ): Promise<boolean> {
+  // Try APNs first for iOS
+  if (platform === 'ios' && apnProvider) {
+    const success = await sendAPNsMessageNotification(
+      token,
+      senderName,
+      messagePreview,
+      conversationId
+    );
+    if (success) return true;
+    
+    console.log('📱 [APNs] Failed, falling back to FCM for message...');
+  }
+
+  // Use FCM
   return sendFCMPush(token, {
     title: `Message from ${senderName}`,
     body: messagePreview.substring(0, 100),
@@ -265,12 +524,19 @@ export async function cancelCallNotification(
   tokens: Array<{ push_token: string; platform: 'ios' | 'android' }>,
   callId: string
 ): Promise<void> {
-  if (!firebaseInitialized) return;
-
-  console.log(`📞 [FCM] Cancelling call notification for ${callId}`);
+  console.log(`📞 Cancelling call notification for ${callId}`);
 
   for (const { push_token, platform } of tokens) {
     try {
+      // Try APNs first for iOS
+      if (platform === 'ios' && apnProvider) {
+        await sendAPNsCallCancellation(push_token, callId);
+        continue;
+      }
+
+      // Use FCM for Android or iOS fallback
+      if (!firebaseInitialized) continue;
+
       const message: admin.messaging.Message = {
         token: push_token,
         data: {
@@ -309,8 +575,14 @@ export async function cancelCallNotification(
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// EXPORTS
+// ═══════════════════════════════════════════════════════════════
+
 export default {
+  initializePushServices,
   initializeFirebase,
+  initializeAPNs,
   sendFCMPush,
   sendCallNotification,
   sendMessageNotification,

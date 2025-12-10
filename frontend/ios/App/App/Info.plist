@@ -2,19 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>audio</string>
-		<string>voip</string>
-	</array>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>BlockStar needs microphone access for voice and video calls</string>
-	<key>NSCameraUsageDescription</key>
-	<string>BlockStar needs camera access for video calls</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-        <string>BlockStar Cypher</string>
+	<string>BlockStar Cypher</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -54,5 +45,59 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	
+	<!-- ═══════════════════════════════════════ -->
+	<!-- BACKGROUND MODES -->
+	<!-- ═══════════════════════════════════════ -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>voip</string>
+		<string>audio</string>
+		<string>remote-notification</string>
+		<string>fetch</string>
+		<string>bluetooth-central</string>
+		<string>bluetooth-peripheral</string>
+	</array>
+	
+	<!-- ═══════════════════════════════════════ -->
+	<!-- BLUETOOTH PERMISSIONS -->
+	<!-- ═══════════════════════════════════════ -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>BlockStar Cypher uses Bluetooth to enable mesh networking for offline communication at events and in areas without internet.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>BlockStar Cypher uses Bluetooth to enable mesh networking for offline communication.</string>
+	
+	<!-- ═══════════════════════════════════════ -->
+	<!-- CAMERA AND MICROPHONE PERMISSIONS -->
+	<!-- ═══════════════════════════════════════ -->
+	<key>NSCameraUsageDescription</key>
+	<string>BlockStar Cypher needs camera access for video calls and scanning QR codes.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>BlockStar Cypher needs microphone access for audio and video calls.</string>
+	
+	<!-- ═══════════════════════════════════════ -->
+	<!-- LOCAL NETWORK PERMISSION -->
+	<!-- ═══════════════════════════════════════ -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>BlockStar Cypher uses local network access for mesh networking to communicate with nearby devices without internet.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_blockstar-mesh._tcp</string>
+		<string>_blockstar-mesh._udp</string>
+	</array>
+	
+	<!-- ═══════════════════════════════════════ -->
+	<!-- PHOTO LIBRARY -->
+	<!-- ═══════════════════════════════════════ -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>BlockStar Cypher needs access to your photos to send images in messages.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>BlockStar Cypher can save received images to your photo library.</string>
+	
+	<!-- ═══════════════════════════════════════ -->
+	<!-- FACE ID -->
+	<!-- ═══════════════════════════════════════ -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>BlockStar Cypher can use Face ID for secure wallet authentication.</string>
 </dict>
 </plist>

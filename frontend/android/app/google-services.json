@@ -7,28 +7,9 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:888897781828:android:7be5694a719c0ee148fc11",
+        "mobilesdk_app_id": "1:888897781828:android:e5db173c3a6d46c648fc11",
         "android_client_info": {
-          "package_name": "com.blockstar.cypher"
-        }
-      },
-      "oauth_client": [],
-      "api_key": [
-        {
-          "current_key": "AIzaSyDMuHjhiqUaPuC2wXWExPk0f-M7XkTpiPU"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": []
-        }
-      }
-    },
-    {
-      "client_info": {
-        "mobilesdk_app_id": "1:888897781828:android:ea22d732b2326cc448fc11",
-        "android_client_info": {
-          "package_name": "com.blockstar.messenger"
+          "package_name": "world.blockstar.cypher"
         }
       },
       "oauth_client": [],

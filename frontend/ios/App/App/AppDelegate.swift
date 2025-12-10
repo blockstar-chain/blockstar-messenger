@@ -1,49 +1,310 @@
 import UIKit
 import Capacitor
+import PushKit
+import CallKit
+import UserNotifications
 
 @UIApplicationMain
-class AppDelegate: UIResponder, UIApplicationDelegate {
+class AppDelegate: UIResponder, UIApplicationDelegate, PKPushRegistryDelegate, UNUserNotificationCenterDelegate {
 
     var window: UIWindow?
+    
+    // CallKit provider for incoming calls
+    static var callKitProvider: CXProvider?
+    static var callKitController: CXCallController?
+    
+    // Store pending call data
+    static var pendingCallData: [String: Any]?
+    static var pendingMessageData: [String: Any]?
+    
+    // VoIP push registry
+    var voipRegistry: PKPushRegistry?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        print("═══════════════════════════════════════")
+        print("📱 AppDelegate: didFinishLaunchingWithOptions")
+        print("═══════════════════════════════════════")
+        
+        // Setup CallKit
+        setupCallKit()
+        
+        // Setup VoIP push notifications
+        setupVoIPPush()
+        
+        // Setup regular push notifications
+        setupPushNotifications()
+        
+        // Set notification delegate
+        UNUserNotificationCenter.current().delegate = self
+        
         return true
     }
 
+    // MARK: - CallKit Setup
+    
+    private func setupCallKit() {
+        let configuration = CXProviderConfiguration()
+        configuration.supportsVideo = true
+        configuration.maximumCallsPerCallGroup = 1
+        configuration.maximumCallGroups = 1
+        configuration.supportedHandleTypes = [.generic]
+        configuration.includesCallsInRecents = true
+        
+        // Set app icon for call screen
+        if let iconImage = UIImage(named: "AppIcon") {
+            configuration.iconTemplateImageData = iconImage.pngData()
+        }
+        
+        AppDelegate.callKitProvider = CXProvider(configuration: configuration)
+        AppDelegate.callKitProvider?.setDelegate(CallKitDelegate.shared, queue: nil)
+        AppDelegate.callKitController = CXCallController()
+        
+        print("✅ CallKit configured")
+    }
+    
+    // MARK: - VoIP Push Setup (for instant call notifications)
+    
+    private func setupVoIPPush() {
+        voipRegistry = PKPushRegistry(queue: DispatchQueue.main)
+        voipRegistry?.delegate = self
+        voipRegistry?.desiredPushTypes = [.voIP]
+        print("✅ VoIP Push registry configured")
+    }
+    
+    // MARK: - Regular Push Notifications Setup
+    
+    private func setupPushNotifications() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
+            print("📬 Push notification permission: \(granted)")
+            if let error = error {
+                print("❌ Push permission error: \(error)")
+            }
+            
+            DispatchQueue.main.async {
+                UIApplication.shared.registerForRemoteNotifications()
+            }
+        }
+    }
+    
+    // MARK: - PKPushRegistryDelegate (VoIP Push)
+    
+    func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
+        let token = pushCredentials.token.map { String(format: "%02.2hhx", $0) }.joined()
+        print("═══════════════════════════════════════")
+        print("📱 VoIP Push Token: \(token)")
+        print("═══════════════════════════════════════")
+        
+        // Send token to JavaScript
+        NotificationCenter.default.post(
+            name: NSNotification.Name("VoIPTokenReceived"),
+            object: nil,
+            userInfo: ["token": token]
+        )
+    }
+    
+    func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
+        print("═══════════════════════════════════════")
+        print("📞 VoIP PUSH RECEIVED")
+        print("  Payload: \(payload.dictionaryPayload)")
+        print("═══════════════════════════════════════")
+        
+        guard type == .voIP else {
+            completion()
+            return
+        }
+        
+        // Extract call data from payload
+        let callId = payload.dictionaryPayload["callId"] as? String ?? UUID().uuidString
+        let callerId = payload.dictionaryPayload["callerId"] as? String ?? ""
+        let callerName = payload.dictionaryPayload["callerName"] as? String ?? "Unknown"
+        let callType = payload.dictionaryPayload["callType"] as? String ?? "audio"
+        let hasVideo = callType == "video"
+        
+        // Store pending call data
+        AppDelegate.pendingCallData = [
+            "callId": callId,
+            "callerId": callerId,
+            "callerName": callerName,
+            "callType": callType,
+            "fromNotification": true
+        ]
+        
+        // Report incoming call to CallKit (THIS WAKES THE PHONE)
+        let uuid = UUID()
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(type: .generic, value: callerName)
+        update.localizedCallerName = callerName
+        update.hasVideo = hasVideo
+        update.supportsGrouping = false
+        update.supportsUngrouping = false
+        update.supportsHolding = false
+        update.supportsDTMF = false
+        
+        // Store UUID mapping
+        CallKitDelegate.shared.callUUIDs[callId] = uuid
+        CallKitDelegate.shared.callData[uuid] = AppDelegate.pendingCallData
+        
+        AppDelegate.callKitProvider?.reportNewIncomingCall(with: uuid, update: update) { error in
+            if let error = error {
+                print("❌ Error reporting incoming call: \(error)")
+            } else {
+                print("✅ Incoming call reported to CallKit - phone should wake up!")
+            }
+            completion()
+        }
+    }
+    
+    // MARK: - Regular Push Notification Delegates
+    
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        let token = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
+        print("📬 APNs Device Token: \(token)")
+        
+        // Send to JavaScript
+        NotificationCenter.default.post(
+            name: NSNotification.Name("APNsTokenReceived"),
+            object: nil,
+            userInfo: ["token": token]
+        )
+    }
+    
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        print("❌ Failed to register for remote notifications: \(error)")
+    }
+    
+    // MARK: - UNUserNotificationCenterDelegate
+    
+    // Called when notification received while app is in foreground
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        print("📬 Notification received in foreground")
+        let userInfo = notification.request.content.userInfo
+        
+        // Check if it's a message notification
+        if let type = userInfo["type"] as? String, type == "message" {
+            // Show banner and play sound for messages
+            completionHandler([.banner, .sound, .badge])
+        } else {
+            // For calls, CallKit handles the UI
+            completionHandler([])
+        }
+    }
+    
+    // Called when user taps on notification
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+        print("📬 Notification tapped")
+        let userInfo = response.notification.request.content.userInfo
+        
+        if let type = userInfo["type"] as? String {
+            switch type {
+            case "message":
+                // Store message data for JavaScript
+                AppDelegate.pendingMessageData = [
+                    "type": "open_conversation",
+                    "conversationId": userInfo["conversationId"] as? String ?? "",
+                    "fromNotification": true
+                ]
+                
+                // Notify JavaScript
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("OpenConversationFromNotification"),
+                    object: nil,
+                    userInfo: AppDelegate.pendingMessageData
+                )
+                
+            case "missed_call":
+                // Handle missed call tap
+                AppDelegate.pendingCallData = [
+                    "type": "callback",
+                    "callerId": userInfo["callerId"] as? String ?? "",
+                    "callType": userInfo["callType"] as? String ?? "audio",
+                    "fromNotification": true
+                ]
+                
+            default:
+                break
+            }
+        }
+        
+        completionHandler()
+    }
+    
+    // MARK: - Static Methods for Capacitor Plugins
+    
+    static func hasPendingCall() -> Bool {
+        return pendingCallData != nil
+    }
+    
+    static func getPendingCallData() -> [String: Any]? {
+        return pendingCallData
+    }
+    
+    static func clearPendingCall() {
+        pendingCallData = nil
+        print("✅ Cleared pending call data")
+    }
+    
+    static func getPendingMessageData() -> [String: Any]? {
+        return pendingMessageData
+    }
+    
+    static func clearPendingMessage() {
+        pendingMessageData = nil
+    }
+    
+    // MARK: - Show Local Notification (for messages when app is background)
+    
+    static func showMessageNotification(senderName: String, message: String, conversationId: String) {
+        let content = UNMutableNotificationContent()
+        content.title = senderName
+        content.body = message
+        content.sound = .default
+        content.badge = NSNumber(value: UIApplication.shared.applicationIconBadgeNumber + 1)
+        content.userInfo = [
+            "type": "message",
+            "conversationId": conversationId
+        ]
+        
+        let request = UNNotificationRequest(
+            identifier: "message-\(conversationId)-\(Date().timeIntervalSince1970)",
+            content: content,
+            trigger: nil
+        )
+        
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                print("❌ Error showing notification: \(error)")
+            }
+        }
+    }
+    
+    // MARK: - Update Badge
+    
+    static func updateBadge(count: Int) {
+        DispatchQueue.main.async {
+            UIApplication.shared.applicationIconBadgeNumber = count
+        }
+    }
+
     func applicationWillResignActive(_ application: UIApplication) {
-        // Sent when the application is about to move from active to inactive state. This can occur for certain types of temporary interruptions (such as an incoming phone call or SMS message) or when the user quits the application and it begins the transition to the background state.
-        // Use this method to pause ongoing tasks, disable timers, and invalidate graphics rendering callbacks. Games should use this method to pause the game.
     }
 
     func applicationDidEnterBackground(_ application: UIApplication) {
-        // Use this method to release shared resources, save user data, invalidate timers, and store enough application state information to restore your application to its current state in case it is terminated later.
-        // If your application supports background execution, this method is called instead of applicationWillTerminate: when the user quits.
     }
 
     func applicationWillEnterForeground(_ application: UIApplication) {
-        // Called as part of the transition from the background to the active state; here you can undo many of the changes made on entering the background.
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
-        // Restart any tasks that were paused (or not yet started) while the application was inactive. If the application was previously in the background, optionally refresh the user interface.
     }
 
     func applicationWillTerminate(_ application: UIApplication) {
-        // Called when the application is about to terminate. Save data if appropriate. See also applicationDidEnterBackground:.
     }
 
     func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
-        // Called when the app was launched with a url. Feel free to add additional processing here,
-        // but if you want the App API to support tracking app url opens, make sure to keep this call
         return ApplicationDelegateProxy.shared.application(app, open: url, options: options)
     }
 
     func application(_ application: UIApplication, continue userActivity: NSUserActivity, restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void) -> Bool {
-        // Called when the app was launched with an activity, including Universal Links.
-        // Feel free to add additional processing here, but if you want the App API to support
-        // tracking app url opens, make sure to keep this call
         return ApplicationDelegateProxy.shared.application(application, continue: userActivity, restorationHandler: restorationHandler)
     }
-
 }
