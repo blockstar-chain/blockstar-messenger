@@ -56,11 +56,12 @@ export async function initPushNotifications(
       return false;
     }
 
+    // Register for push notifications
+    await PushNotifications.register();
 
     // Listen for registration
     PushNotifications.addListener('registration', async (token: Token) => {
       console.log('📱 Push token received:', token.value.substring(0, 20) + '...');
-      alert(`Push token received - ${token.value}`)
       
       // Send token to backend
       try {
@@ -75,7 +76,6 @@ export async function initPushNotifications(
         });
         console.log('📱 Push token registered with server');
       } catch (error) {
-        alert(`Failed to register push token - ${error?.message}`)
         console.error('Failed to register push token:', error);
       }
 
@@ -86,7 +86,7 @@ export async function initPushNotifications(
 
     // Listen for registration errors
     PushNotifications.addListener('registrationError', (error: any) => {
-      alert(`Failed to register push token - ${error}`)
+      console.error('Push registration error:', error);
       if (pushCallbacks.onError) {
         pushCallbacks.onError(error);
       }
@@ -112,10 +112,6 @@ export async function initPushNotifications(
         pushCallbacks.onNotificationAction(action);
       }
     });
-
-
-    // Register for push notifications
-    await PushNotifications.register();
 
     return true;
   } catch (error) {
