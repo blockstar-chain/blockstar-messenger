@@ -1,7 +1,15 @@
 package world.blockstar.cypher;
 
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.media.AudioAttributes;
+import android.media.RingtoneManager;
+import android.net.Uri;
+import android.os.Build;
 import android.util.Log;
 
 import com.google.firebase.messaging.FirebaseMessagingService;
@@ -13,12 +21,117 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
     private static final String TAG = "FCMService";
     private static final String PREFS_NAME = "BlockStarPrefs";
     private static final String KEY_FCM_TOKEN = "fcm_token";
+    
+    // Notification channel IDs - MUST MATCH what backend sends
+    public static final String CHANNEL_CALLS = "calls";
+    public static final String CHANNEL_MESSAGES = "messages";
+    public static final String CHANNEL_MISSED_CALLS = "missed_calls";
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        Log.d(TAG, "═══════════════════════════════════════");
+        Log.d(TAG, "📬 FCM SERVICE CREATED");
+        Log.d(TAG, "═══════════════════════════════════════");
+        
+        // CRITICAL: Create notification channels IMMEDIATELY on service creation
+        // This ensures channels exist BEFORE any FCM notification arrives
+        createAllNotificationChannels();
+    }
+
+    /**
+     * Create ALL notification channels on service start
+     * This ensures channels exist BEFORE FCM tries to use them
+     */
+    private void createAllNotificationChannels() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return;
+        }
+
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager == null) return;
+
+        Log.d(TAG, "📢 Creating notification channels...");
+
+        // ═══════════════════════════════════════════════════════════════
+        // CALLS CHANNEL - MAXIMUM PRIORITY for incoming calls
+        // ═══════════════════════════════════════════════════════════════
+        NotificationChannel callsChannel = new NotificationChannel(
+            CHANNEL_CALLS,
+            "Incoming Calls",
+            NotificationManager.IMPORTANCE_HIGH
+        );
+        callsChannel.setDescription("Notifications for incoming voice and video calls");
+        callsChannel.enableLights(true);
+        callsChannel.setLightColor(0xFF3B82F6); // Blue
+        callsChannel.enableVibration(true);
+        callsChannel.setVibrationPattern(new long[]{0, 1000, 500, 1000, 500, 1000});
+        callsChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+        callsChannel.setBypassDnd(true); // Can bypass Do Not Disturb
+        
+        // Set ringtone sound
+        Uri ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+        AudioAttributes audioAttributes = new AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build();
+        callsChannel.setSound(ringtoneUri, audioAttributes);
+        
+        manager.createNotificationChannel(callsChannel);
+        Log.d(TAG, "  ✅ Created 'calls' channel (IMPORTANCE_HIGH)");
+
+        // ═══════════════════════════════════════════════════════════════
+        // MESSAGES CHANNEL - HIGH PRIORITY for new messages
+        // ═══════════════════════════════════════════════════════════════
+        NotificationChannel messagesChannel = new NotificationChannel(
+            CHANNEL_MESSAGES,
+            "Messages",
+            NotificationManager.IMPORTANCE_HIGH
+        );
+        messagesChannel.setDescription("Notifications for new messages");
+        messagesChannel.enableLights(true);
+        messagesChannel.setLightColor(0xFF10B981); // Green
+        messagesChannel.enableVibration(true);
+        messagesChannel.setVibrationPattern(new long[]{0, 250, 250, 250});
+        messagesChannel.setLockscreenVisibility(Notification.VISIBILITY_PRIVATE);
+        
+        // Set notification sound
+        Uri notificationUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+        AudioAttributes msgAudioAttributes = new AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build();
+        messagesChannel.setSound(notificationUri, msgAudioAttributes);
+        
+        manager.createNotificationChannel(messagesChannel);
+        Log.d(TAG, "  ✅ Created 'messages' channel (IMPORTANCE_HIGH)");
+
+        // ═══════════════════════════════════════════════════════════════
+        // MISSED CALLS CHANNEL
+        // ═══════════════════════════════════════════════════════════════
+        NotificationChannel missedChannel = new NotificationChannel(
+            CHANNEL_MISSED_CALLS,
+            "Missed Calls",
+            NotificationManager.IMPORTANCE_HIGH
+        );
+        missedChannel.setDescription("Notifications for missed calls");
+        missedChannel.enableLights(true);
+        missedChannel.setLightColor(0xFFEF4444); // Red
+        missedChannel.enableVibration(true);
+        missedChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+        
+        manager.createNotificationChannel(missedChannel);
+        Log.d(TAG, "  ✅ Created 'missed_calls' channel (IMPORTANCE_HIGH)");
+
+        Log.d(TAG, "📢 All notification channels created!");
+    }
 
     @Override
     public void onNewToken(String token) {
         super.onNewToken(token);
         Log.d(TAG, "═══════════════════════════════════════");
-        Log.d(TAG, "🔑 New FCM token received");
+        Log.d(TAG, "🔑 NEW FCM TOKEN RECEIVED");
+        Log.d(TAG, "   Token: " + token.substring(0, Math.min(20, token.length())) + "...");
         Log.d(TAG, "═══════════════════════════════════════");
         
         // Save token locally
@@ -32,17 +145,32 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
     public void onMessageReceived(RemoteMessage message) {
         super.onMessageReceived(message);
         
+        // Ensure channels exist (in case service was restarted)
+        createAllNotificationChannels();
+        
         Map<String, String> data = message.getData();
         String type = data.get("type");
+        
+        // Also check notification payload
+        RemoteMessage.Notification notification = message.getNotification();
         
         Log.d(TAG, "═══════════════════════════════════════");
         Log.d(TAG, "📬 FCM MESSAGE RECEIVED");
         Log.d(TAG, "Type: " + type);
         Log.d(TAG, "Data: " + data.toString());
+        if (notification != null) {
+            Log.d(TAG, "Notification Title: " + notification.getTitle());
+            Log.d(TAG, "Notification Body: " + notification.getBody());
+        }
         Log.d(TAG, "═══════════════════════════════════════");
 
         if (type == null) {
-            Log.w(TAG, "No type in FCM message");
+            // If no type in data, check if this is a notification-only message
+            if (notification != null) {
+                Log.d(TAG, "📬 Notification-only message, Android system will display it");
+            } else {
+                Log.w(TAG, "No type in FCM message and no notification payload");
+            }
             return;
         }
 
@@ -71,12 +199,27 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
         String callId = data.get("callId");
         String callerId = data.get("callerId");
         String callerName = data.get("callerName");
+        if (callerName == null || callerName.isEmpty()) {
+            callerName = data.get("caller"); // Fallback
+        }
         String callType = data.get("callType");
 
+        Log.d(TAG, "═══════════════════════════════════════");
         Log.d(TAG, "📞 INCOMING CALL");
         Log.d(TAG, "  Call ID: " + callId);
         Log.d(TAG, "  Caller: " + callerName + " (" + callerId + ")");
         Log.d(TAG, "  Type: " + callType);
+        Log.d(TAG, "═══════════════════════════════════════");
+
+        // Store call data in SharedPreferences for the app to read
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        prefs.edit()
+            .putString("pending_call_id", callId)
+            .putString("pending_caller_id", callerId)
+            .putString("pending_caller_name", callerName != null ? callerName : "Unknown")
+            .putString("pending_call_type", callType != null ? callType : "audio")
+            .putLong("pending_call_timestamp", System.currentTimeMillis())
+            .apply();
 
         // Start the IncomingCallService to show full-screen notification
         Intent serviceIntent = new Intent(this, IncomingCallService.class);
@@ -87,7 +230,7 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
         serviceIntent.putExtra("callType", callType != null ? callType : "audio");
 
         // Start as foreground service
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(serviceIntent);
         } else {
             startService(serviceIntent);
@@ -102,10 +245,12 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
         String conversationId = data.get("conversationId");
         String messageId = data.get("messageId");
 
+        Log.d(TAG, "═══════════════════════════════════════");
         Log.d(TAG, "💬 NEW MESSAGE");
         Log.d(TAG, "  From: " + senderName);
         Log.d(TAG, "  Preview: " + messagePreview);
         Log.d(TAG, "  Conversation: " + conversationId);
+        Log.d(TAG, "═══════════════════════════════════════");
 
         // Start MessageNotificationService to show notification
         Intent serviceIntent = new Intent(this, MessageNotificationService.class);
@@ -114,7 +259,7 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
         serviceIntent.putExtra("conversationId", conversationId);
         serviceIntent.putExtra("messageId", messageId);
 
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(serviceIntent);
         } else {
             startService(serviceIntent);
@@ -132,7 +277,7 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
         serviceIntent.putExtra("callerName", callerName);
         serviceIntent.putExtra("callType", callType);
 
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(serviceIntent);
         } else {
             startService(serviceIntent);
@@ -149,19 +294,101 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
         }
 
         Log.d(TAG, "🔢 Badge update: " + count);
-
-        // Update app badge using ShortcutBadger or similar
-        // This is handled by the Capacitor badge plugin on the frontend
+        // Badge is handled by Capacitor plugin on frontend
     }
 
     private void handleCallCancelled(Map<String, String> data) {
         String callId = data.get("callId");
         
-        Log.d(TAG, "📴 Call cancelled: " + callId);
+        Log.d(TAG, "═══════════════════════════════════════");
+        Log.d(TAG, "📴 CALL CANCELLED: " + callId);
+        Log.d(TAG, "═══════════════════════════════════════");
+
+        // Clear pending call from SharedPreferences
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        prefs.edit()
+            .remove("pending_call_id")
+            .remove("pending_caller_id")
+            .remove("pending_caller_name")
+            .remove("pending_call_type")
+            .remove("pending_call_timestamp")
+            .apply();
 
         // Stop the IncomingCallService
         Intent serviceIntent = new Intent(this, IncomingCallService.class);
         serviceIntent.setAction("STOP_SERVICE");
         startService(serviceIntent);
+    }
+    
+    /**
+     * Static method to create notification channels
+     * Can be called from MainActivity on app startup
+     */
+    public static void createNotificationChannels(Context context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return;
+        }
+
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) return;
+
+        Log.d(TAG, "📢 Creating notification channels from static method...");
+
+        // CALLS CHANNEL
+        NotificationChannel callsChannel = new NotificationChannel(
+            CHANNEL_CALLS,
+            "Incoming Calls",
+            NotificationManager.IMPORTANCE_HIGH
+        );
+        callsChannel.setDescription("Notifications for incoming voice and video calls");
+        callsChannel.enableLights(true);
+        callsChannel.enableVibration(true);
+        callsChannel.setVibrationPattern(new long[]{0, 1000, 500, 1000, 500, 1000});
+        callsChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+        callsChannel.setBypassDnd(true);
+        
+        Uri ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+        AudioAttributes audioAttributes = new AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build();
+        callsChannel.setSound(ringtoneUri, audioAttributes);
+        
+        manager.createNotificationChannel(callsChannel);
+
+        // MESSAGES CHANNEL
+        NotificationChannel messagesChannel = new NotificationChannel(
+            CHANNEL_MESSAGES,
+            "Messages",
+            NotificationManager.IMPORTANCE_HIGH
+        );
+        messagesChannel.setDescription("Notifications for new messages");
+        messagesChannel.enableLights(true);
+        messagesChannel.enableVibration(true);
+        messagesChannel.setLockscreenVisibility(Notification.VISIBILITY_PRIVATE);
+        
+        Uri notificationUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+        AudioAttributes msgAudioAttributes = new AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build();
+        messagesChannel.setSound(notificationUri, msgAudioAttributes);
+        
+        manager.createNotificationChannel(messagesChannel);
+
+        // MISSED CALLS CHANNEL
+        NotificationChannel missedChannel = new NotificationChannel(
+            CHANNEL_MISSED_CALLS,
+            "Missed Calls",
+            NotificationManager.IMPORTANCE_HIGH
+        );
+        missedChannel.setDescription("Notifications for missed calls");
+        missedChannel.enableLights(true);
+        missedChannel.enableVibration(true);
+        missedChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+        
+        manager.createNotificationChannel(missedChannel);
+
+        Log.d(TAG, "📢 All notification channels created from static method!");
     }
 }

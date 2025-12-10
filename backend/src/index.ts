@@ -222,6 +222,177 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// Check if push token exists for a wallet (used by app on startup)
+app.get('/api/push-token/check/:walletAddress', async (req, res) => {
+  const { walletAddress } = req.params;
+
+  if (!walletAddress) {
+    return res.status(400).json({
+      success: false,
+      error: 'walletAddress is required'
+    });
+  }
+
+  try {
+    const tokens = await db.getPushTokens(walletAddress.toLowerCase());
+    
+    console.log(`📱 Token check for ${walletAddress}: ${tokens.length} token(s) found`);
+    
+    res.json({
+      success: true,
+      hasToken: tokens.length > 0,
+      tokenCount: tokens.length,
+      platforms: tokens.map(t => t.platform),
+    });
+  } catch (error) {
+    console.error('Error checking push token:', error);
+    res.status(500).json({ success: false, error: 'Failed to check push token' });
+  }
+});
+
+// Get push token status with detailed info
+app.get('/api/push-token/status/:walletAddress', async (req, res) => {
+  const { walletAddress } = req.params;
+
+  if (!walletAddress) {
+    return res.status(400).json({
+      success: false,
+      error: 'walletAddress is required'
+    });
+  }
+
+  try {
+    const tokens = await db.getPushTokens(walletAddress.toLowerCase());
+    
+    const firebaseReady = pushService.firebaseInitialized? true : false;
+    
+    res.json({
+      success: true,
+      enabled: tokens.length > 0,
+      tokenCount: tokens.length,
+      tokens: tokens.map(t => ({
+        platform: t.platform,
+        tokenPreview: t.push_token ? t.push_token.substring(0, 20) + '...' : null,
+        updatedAt: t.updated_at,
+      })),
+      firebaseReady,
+    });
+  } catch (error) {
+    console.error('Error getting push token status:', error);
+    res.status(500).json({ success: false, error: 'Failed to get push token status' });
+  }
+});
+
+// Force re-register push token (clears old tokens and adds new one)
+app.post('/api/push-token/force-register', async (req, res) => {
+  const { token, walletAddress, platform } = req.body;
+
+  if (!token || !walletAddress || !platform) {
+    return res.status(400).json({
+      success: false,
+      error: 'token, walletAddress, and platform are required'
+    });
+  }
+
+  if (!['ios', 'android'].includes(platform)) {
+    return res.status(400).json({
+      success: false,
+      error: 'platform must be ios or android'
+    });
+  }
+
+  try {
+    const normalizedAddress = walletAddress.toLowerCase();
+    
+    // Delete all existing tokens for this wallet on this platform
+    // This ensures we don't have stale tokens
+    const existingTokens = await db.getPushTokens(normalizedAddress);
+    for (const existing of existingTokens) {
+      if (existing.platform === platform && existing.push_token !== token) {
+        await db.deletePushToken(normalizedAddress, existing.push_token);
+        console.log(`📱 Removed old ${platform} token for ${walletAddress}`);
+      }
+    }
+
+    // Save new token
+    await db.savePushToken({
+      wallet_address: normalizedAddress,
+      push_token: token,
+      platform,
+      updated_at: new Date(),
+    });
+
+    console.log(`📱 Force-registered push token for ${walletAddress} (${platform})`);
+    res.json({ success: true, message: 'Token force-registered successfully' });
+  } catch (error) {
+    console.error('Error force-registering push token:', error);
+    res.status(500).json({ success: false, error: 'Failed to force-register push token' });
+  }
+});
+
+// Test push notification to a specific wallet
+app.post('/api/push-token/test', async (req, res) => {
+  const { walletAddress } = req.body;
+
+  if (!walletAddress) {
+    return res.status(400).json({
+      success: false,
+      error: 'walletAddress is required'
+    });
+  }
+
+  try {
+    const tokens = await db.getPushTokens(walletAddress.toLowerCase());
+
+    if (tokens.length === 0) {
+      return res.json({
+        success: false,
+        error: 'No push tokens registered for this wallet',
+        hint: 'The app needs to register a push token first'
+      });
+    }
+
+    let sent = 0;
+    let failed = 0;
+
+    for (const { push_token, platform } of tokens) {
+      try {
+        const success = await pushService.sendFCMPush(
+          push_token,
+          {
+            title: '🧪 Test Notification',
+            body: 'Push notifications are working!',
+            data: { type: 'test', timestamp: Date.now().toString() },
+          },
+          platform as 'ios' | 'android'
+        );
+        
+        if (success) {
+          sent++;
+        } else {
+          failed++;
+        }
+      } catch (err) {
+        console.error(`Test push failed for ${platform}:`, err);
+        failed++;
+      }
+    }
+
+    res.json({
+      success: sent > 0,
+      sent,
+      failed,
+      totalTokens: tokens.length,
+      message: sent > 0 
+        ? `Test notification sent to ${sent} device(s)` 
+        : 'Failed to send test notification'
+    });
+  } catch (error) {
+    console.error('Error sending test push:', error);
+    res.status(500).json({ success: false, error: 'Failed to send test push' });
+  }
+});
+
 app.post('/api/push-token', async (req, res) => {
   const { token, walletAddress, platform } = req.body;
 

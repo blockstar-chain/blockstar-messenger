@@ -7,6 +7,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Color;
 import android.media.AudioAttributes;
 import android.media.AudioManager;
 import android.media.Ringtone;
@@ -21,6 +22,7 @@ import android.os.VibratorManager;
 import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
+import androidx.core.app.NotificationManagerCompat;
 
 public class IncomingCallService extends Service {
     private static final String TAG = "IncomingCallService";
@@ -31,6 +33,7 @@ public class IncomingCallService extends Service {
     private Ringtone ringtone;
     private Vibrator vibrator;
     private PowerManager.WakeLock wakeLock;
+    private PowerManager.WakeLock screenWakeLock;
 
     // Store call data for actions
     private String currentCallId;
@@ -44,6 +47,8 @@ public class IncomingCallService extends Service {
         Log.d(TAG, "═══════════════════════════════════════");
         Log.d(TAG, "📞 IncomingCallService CREATED");
         Log.d(TAG, "═══════════════════════════════════════");
+        
+        // Create notification channel immediately
         createNotificationChannel();
     }
 
@@ -77,6 +82,13 @@ public class IncomingCallService extends Service {
             Log.d(TAG, "🛑 STOP_SERVICE action received");
             stopRingtoneAndVibration();
             stopForeground(true);
+            
+            // Also cancel any notification
+            NotificationManager notificationManager = getSystemService(NotificationManager.class);
+            if (notificationManager != null) {
+                notificationManager.cancel(NOTIFICATION_ID);
+            }
+            
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -103,14 +115,21 @@ public class IncomingCallService extends Service {
             Log.d(TAG, "  Call Type: " + currentCallType);
             Log.d(TAG, "═══════════════════════════════════════");
 
-            // Acquire wake lock to turn on screen
-            acquireWakeLock();
+            // CRITICAL: Acquire wake locks FIRST to turn on screen
+            acquireWakeLocks();
 
             // Build and show notification
             Notification notification = buildCallNotification();
-            startForeground(NOTIFICATION_ID, notification);
+            
+            // Start foreground IMMEDIATELY
+            try {
+                startForeground(NOTIFICATION_ID, notification);
+                Log.d(TAG, "✅ Started foreground service with notification");
+            } catch (Exception e) {
+                Log.e(TAG, "❌ Failed to start foreground: " + e.getMessage());
+            }
 
-            // Start ringtone and vibration
+            // Start ringtone and vibration AFTER notification is shown
             playRingtone();
             startVibration();
 
@@ -123,9 +142,14 @@ public class IncomingCallService extends Service {
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager == null) return;
             
-            // Delete existing channel to update settings
-            manager.deleteNotificationChannel(CHANNEL_ID);
+            // Check if channel already exists
+            NotificationChannel existingChannel = manager.getNotificationChannel(CHANNEL_ID);
+            if (existingChannel != null) {
+                Log.d(TAG, "📢 Notification channel already exists");
+                return;
+            }
 
             NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
@@ -135,13 +159,19 @@ public class IncomingCallService extends Service {
 
             channel.setDescription("Incoming call notifications");
             channel.enableLights(true);
+            channel.setLightColor(Color.BLUE);
             channel.enableVibration(true);
             channel.setVibrationPattern(new long[]{0, 1000, 500, 1000});
             channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
             channel.setBypassDnd(true);
             
-            // Set sound to none - we handle it ourselves
-            channel.setSound(null, null);
+            // Set ringtone sound
+            Uri ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+            AudioAttributes audioAttributes = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build();
+            channel.setSound(ringtoneUri, audioAttributes);
 
             manager.createNotificationChannel(channel);
             Log.d(TAG, "✅ Notification channel created: " + CHANNEL_ID);
@@ -151,7 +181,9 @@ public class IncomingCallService extends Service {
     private Notification buildCallNotification() {
         // Intent to open app when notification is tapped
         Intent fullScreenIntent = new Intent(this, MainActivity.class);
-        fullScreenIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        fullScreenIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | 
+                                  Intent.FLAG_ACTIVITY_CLEAR_TOP | 
+                                  Intent.FLAG_ACTIVITY_SINGLE_TOP);
         fullScreenIntent.putExtra("callId", currentCallId);
         fullScreenIntent.putExtra("callerId", currentCallerId);
         fullScreenIntent.putExtra("caller", currentCallerName);
@@ -203,30 +235,41 @@ public class IncomingCallService extends Service {
             .setSmallIcon(android.R.drawable.ic_menu_call)
             .setContentTitle(title)
             .setContentText(text)
+            .setTicker(text) // For accessibility and older devices
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(true)
             .setAutoCancel(false)
+            .setShowWhen(true)
+            .setUsesChronometer(true)
+            // Full screen intent - CRITICAL for lock screen
             .setFullScreenIntent(fullScreenPendingIntent, true)
             .setContentIntent(fullScreenPendingIntent)
-            // Answer button (green)
+            // Vibration pattern
+            .setVibrate(new long[]{0, 1000, 500, 1000, 500, 1000})
+            // Lights
+            .setLights(Color.BLUE, 500, 500)
+            // Answer button
             .addAction(
                 android.R.drawable.ic_menu_call,
                 "✓ Answer",
                 answerPendingIntent
             )
-            // Decline button (red)
+            // Decline button
             .addAction(
                 android.R.drawable.ic_menu_close_clear_cancel,
                 "✗ Decline",
                 declinePendingIntent
             );
 
-        // Use call style for Android 12+
+        // Android 12+ specific settings
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
         }
+
+        // Set color accent
+        builder.setColor(0xFF3B82F6); // Blue color
 
         return builder.build();
     }
@@ -241,7 +284,9 @@ public class IncomingCallService extends Service {
 
         // Open app with answer action
         Intent intent = new Intent(this, MainActivity.class);
-        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | 
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP |
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP);
         intent.putExtra("callId", currentCallId);
         intent.putExtra("callerId", currentCallerId);
         intent.putExtra("caller", currentCallerName);
@@ -277,26 +322,63 @@ public class IncomingCallService extends Service {
         stopSelf();
     }
 
-    private void acquireWakeLock() {
+    /**
+     * Acquire wake locks to turn on screen and keep device awake
+     */
+    private void acquireWakeLocks() {
         try {
             PowerManager powerManager = (PowerManager) getSystemService(Context.POWER_SERVICE);
-            if (powerManager != null) {
-                // Release any existing wake lock
-                if (wakeLock != null && wakeLock.isHeld()) {
-                    wakeLock.release();
-                }
+            if (powerManager == null) return;
 
-                wakeLock = powerManager.newWakeLock(
-                    PowerManager.FULL_WAKE_LOCK |
-                    PowerManager.ACQUIRE_CAUSES_WAKEUP |
-                    PowerManager.ON_AFTER_RELEASE,
-                    "BlockStarCypher:IncomingCallWakeLock"
-                );
-                wakeLock.acquire(60000); // 60 seconds max
-                Log.d(TAG, "✅ Wake lock acquired - screen should turn on");
+            // Release any existing wake locks
+            releaseWakeLocks();
+
+            // Wake lock to keep CPU running
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "BlockStarCypher:IncomingCallWakeLock"
+            );
+            wakeLock.acquire(60000); // 60 seconds max
+            Log.d(TAG, "✅ Partial wake lock acquired");
+
+            // Screen wake lock - CRITICAL for turning on screen
+            // Note: FULL_WAKE_LOCK is deprecated but still works for this use case
+            screenWakeLock = powerManager.newWakeLock(
+                PowerManager.FULL_WAKE_LOCK |
+                PowerManager.ACQUIRE_CAUSES_WAKEUP |
+                PowerManager.ON_AFTER_RELEASE,
+                "BlockStarCypher:ScreenWakeLock"
+            );
+            screenWakeLock.acquire(60000); // 60 seconds max
+            Log.d(TAG, "✅ Screen wake lock acquired - screen should turn on");
+
+        } catch (Exception e) {
+            Log.e(TAG, "❌ Failed to acquire wake locks: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Release all wake locks
+     */
+    private void releaseWakeLocks() {
+        try {
+            if (wakeLock != null && wakeLock.isHeld()) {
+                wakeLock.release();
+                wakeLock = null;
+                Log.d(TAG, "  ✓ Partial wake lock released");
             }
         } catch (Exception e) {
-            Log.e(TAG, "❌ Failed to acquire wake lock: " + e.getMessage());
+            Log.e(TAG, "  ✗ Error releasing partial wake lock: " + e.getMessage());
+        }
+
+        try {
+            if (screenWakeLock != null && screenWakeLock.isHeld()) {
+                screenWakeLock.release();
+                screenWakeLock = null;
+                Log.d(TAG, "  ✓ Screen wake lock released");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "  ✗ Error releasing screen wake lock: " + e.getMessage());
         }
     }
 
@@ -304,14 +386,16 @@ public class IncomingCallService extends Service {
         try {
             // Check if phone is not in silent mode
             AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-            int ringerMode = audioManager.getRingerMode();
-            int volume = audioManager.getStreamVolume(AudioManager.STREAM_RING);
+            if (audioManager != null) {
+                int ringerMode = audioManager.getRingerMode();
+                int volume = audioManager.getStreamVolume(AudioManager.STREAM_RING);
 
-            Log.d(TAG, "📢 Ringer mode: " + ringerMode + ", Volume: " + volume);
+                Log.d(TAG, "📢 Ringer mode: " + ringerMode + ", Volume: " + volume);
 
-            if (ringerMode == AudioManager.RINGER_MODE_SILENT) {
-                Log.w(TAG, "⚠️ Phone is in silent mode - no ringtone will play");
-                return;
+                if (ringerMode == AudioManager.RINGER_MODE_SILENT) {
+                    Log.w(TAG, "⚠️ Phone is in silent mode - no ringtone will play");
+                    return;
+                }
             }
 
             Uri ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
@@ -387,15 +471,8 @@ public class IncomingCallService extends Service {
             Log.e(TAG, "  ✗ Error stopping vibration: " + e.getMessage());
         }
 
-        try {
-            if (wakeLock != null && wakeLock.isHeld()) {
-                wakeLock.release();
-                wakeLock = null;
-                Log.d(TAG, "  ✓ Wake lock released");
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "  ✗ Error releasing wake lock: " + e.getMessage());
-        }
+        // Release wake locks
+        releaseWakeLocks();
     }
 
     @Override

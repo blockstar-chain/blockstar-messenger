@@ -22,6 +22,13 @@ public class MainActivity extends BridgeActivity {
         Log.d(TAG, "📱 MainActivity onCreate");
         Log.d(TAG, "═══════════════════════════════════════");
 
+        // ═══════════════════════════════════════════════════════════════
+        // CRITICAL: Create notification channels IMMEDIATELY on app start
+        // This ensures channels exist BEFORE any FCM notification arrives
+        // ═══════════════════════════════════════════════════════════════
+        CallFirebaseMessagingService.createNotificationChannels(this);
+        Log.d(TAG, "✅ Notification channels created on app start");
+
         // Handle the intent that started the activity
         handleIntent(getIntent());
     }
