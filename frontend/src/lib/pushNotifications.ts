@@ -347,11 +347,33 @@ async function requestPushPermission(walletAddress: string): Promise<boolean> {
  * 2. Request permission if needed
  * 3. Register or re-register the token
  */
+
+async function debug(message: any, extra?: any) {
+  try {
+    const payload = {
+      message: String(message),
+      extra: extra ?? null,
+      timestamp: new Date().toISOString(),
+      platform: Capacitor.getPlatform(),
+    };
+
+    await fetch(`${API_URL}/api/debug-log`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (e) {
+    // Avoid infinite recursion if debug endpoint is unreachable
+  }
+}
 export async function initializePushNotifications(
   walletAddress: string,
   notificationCallbacks?: PushNotificationCallbacks
 ): Promise<boolean> {
+  debug("Initializing push notifications for wallet: " + walletAddress);
+  debug("API_URL used: " + API_URL);
   if (!isNative) {
+    debug("Push notifications not available on web");
     console.log('Push notifications not available on web');
     return false;
   }
@@ -368,15 +390,16 @@ export async function initializePushNotifications(
 
     if (permStatus.receive !== 'granted') {
       console.log('Push notification permission not granted');
+      debug('Push notification permission not granted');
       return false;
     }
 
-    // Register for push notifications
-    await PushNotifications.register();
-
-    // Listen for registration
+    debug('all check passed');
+        // Listen for registration
     PushNotifications.addListener('registration', async (token: Token) => {
       console.log('📱 Push token received:', token.value.substring(0, 20) + '...');
+      debug('📱 Push token received:', token.value.substring(0, 20) + '...');
+      
 
       // Send token to backend
       try {
@@ -419,9 +442,12 @@ export async function initializePushNotifications(
       handleNotificationData(notification.data, false);
     });
 
+    // Register for push notifications
+    await PushNotifications.register();
 
     return true;
-  } catch (error) {
+  } catch (error : any) {
+    debug("Failed to send token: " + error.message);
     console.error('Error initializing push notifications:', error);
     return false;
   }
