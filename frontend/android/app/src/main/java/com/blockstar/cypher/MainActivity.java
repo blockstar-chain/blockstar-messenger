@@ -1,8 +1,15 @@
 package world.blockstar.cypher;
 
+import android.Manifest;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
+
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.JSObject;
@@ -14,13 +21,43 @@ public class MainActivity extends BridgeActivity {
     private static JSObject pendingCallData = null;
     private static JSObject pendingMessageData = null;
 
+    // Permission request launcher for Android 13+
+    private ActivityResultLauncher<String> notificationPermissionLauncher;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         
         Log.d(TAG, "═══════════════════════════════════════");
         Log.d(TAG, "📱 MainActivity onCreate");
+        Log.d(TAG, "   Android Version: " + Build.VERSION.SDK_INT);
         Log.d(TAG, "═══════════════════════════════════════");
+
+        // ═══════════════════════════════════════════════════════════════
+        // Initialize debug logger for remote debugging
+        // Set your backend URL here (or it will be set by JavaScript later)
+        // ═══════════════════════════════════════════════════════════════
+        DebugLogger.init(this);
+        // TODO: Set your actual backend URL here:
+        // DebugLogger.setApiUrl("https://your-backend.com");
+        // Or call DebugLogger.setApiUrl() from JavaScript via a Capacitor plugin
+        
+        DebugLogger.log("📱 MainActivity onCreate - Android " + Build.VERSION.SDK_INT);
+
+        // Set up notification permission launcher
+        notificationPermissionLauncher = registerForActivityResult(
+            new ActivityResultContracts.RequestPermission(),
+            isGranted -> {
+                if (isGranted) {
+                    Log.d(TAG, "✅ POST_NOTIFICATIONS permission GRANTED");
+                    DebugLogger.log("✅ POST_NOTIFICATIONS permission GRANTED");
+                } else {
+                    Log.e(TAG, "❌ POST_NOTIFICATIONS permission DENIED");
+                    Log.e(TAG, "   User will not receive call notifications!");
+                    DebugLogger.log("❌ POST_NOTIFICATIONS permission DENIED - User will not receive notifications!");
+                }
+            }
+        );
 
         // ═══════════════════════════════════════════════════════════════
         // CRITICAL: Create notification channels IMMEDIATELY on app start
@@ -29,8 +66,33 @@ public class MainActivity extends BridgeActivity {
         CallFirebaseMessagingService.createNotificationChannels(this);
         Log.d(TAG, "✅ Notification channels created on app start");
 
+        // ═══════════════════════════════════════════════════════════════
+        // CRITICAL: Request notification permission on Android 13+
+        // Without this, NO notifications will appear!
+        // ═══════════════════════════════════════════════════════════════
+        requestNotificationPermission();
+
         // Handle the intent that started the activity
         handleIntent(getIntent());
+    }
+
+    /**
+     * Request POST_NOTIFICATIONS permission on Android 13+ (API 33+)
+     * This is REQUIRED for any notifications to appear!
+     */
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Android 13+ requires explicit notification permission
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) 
+                    == PackageManager.PERMISSION_GRANTED) {
+                Log.d(TAG, "✅ POST_NOTIFICATIONS permission already granted");
+            } else {
+                Log.d(TAG, "📢 Requesting POST_NOTIFICATIONS permission...");
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS);
+            }
+        } else {
+            Log.d(TAG, "✅ Android < 13, no notification permission needed");
+        }
     }
 
     @Override

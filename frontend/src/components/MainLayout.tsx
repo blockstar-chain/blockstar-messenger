@@ -15,15 +15,22 @@ import {
   initializePushNotifications,
 } from '@/lib/pushNotifications';
 import { useAuthSession } from '@/hooks/useAutoLogin';
-import { 
-  setUnreadMessageCount, 
+import {
+  setUnreadMessageCount,
   requestNotificationPermission,
   showIncomingCallNotification,
-  initializeLocalNotifications 
+  initializeLocalNotifications
 } from '@/lib/notificationService';
 import { handleCallMissed } from '@/lib/missedCallService';
 import { useIncomingCallFromNotification, useMessageFromNotification } from '@/hooks/useIncomingCallFromNotification';
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
+
+interface IncomingCallPlugin {
+  setDebugUrl(options: { url: string }): Promise<{ success: boolean }>;
+  hasPendingCall(): Promise<{ hasPendingCall: boolean }>;
+  getPendingCall(): Promise<any>;
+  clearPendingCall(): Promise<void>;
+}
 
 export default function MainLayout() {
   const {
@@ -103,6 +110,19 @@ export default function MainLayout() {
     setUnreadMessageCount(totalUnread);
   }, [totalUnread]);
 
+  useEffect(() => {
+    const IncomingCall = registerPlugin<IncomingCallPlugin>('IncomingCall');
+    // Then use it
+    if (Capacitor.isNativePlatform()) {
+      const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
+      IncomingCall.setDebugUrl({ url: API_URL }).then(() => {
+        console.log('✅ Debug URL set for native logging');
+      }).catch(err => {
+        console.log('Debug URL error:', err);
+      });
+    }
+  }, [])
+
   // ========================================
   // INITIALIZE NOTIFICATIONS on app start
   // ========================================
@@ -110,13 +130,13 @@ export default function MainLayout() {
     const initNotifications = async () => {
       // Request browser notification permission
       await requestNotificationPermission();
-      
+
       // Initialize local notifications for native
       if (Capacitor.isNativePlatform()) {
         await initializeLocalNotifications();
       }
     };
-    
+
     if (currentUser?.walletAddress) {
       initNotifications();
     }
@@ -447,7 +467,7 @@ export default function MainLayout() {
   useEffect(() => {
     const initPush = async () => {
       console.log("initPush ==========");
-      console.log("currentUser" , currentUser);
+      console.log("currentUser", currentUser);
       // Only initialize if we have a wallet and on native platform
       if (!currentUser) {
         return;

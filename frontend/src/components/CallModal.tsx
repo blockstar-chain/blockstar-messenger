@@ -548,6 +548,16 @@ export default function CallModal() {
     const wasConnected = callStatus === 'active';
     const isCaller = activeCall?.callerId?.toLowerCase() === currentUser?.walletAddress?.toLowerCase();
 
+    console.log('═══════════════════════════════════════');
+    console.log('📞 ENDING CALL');
+    console.log('  Call ID:', activeCall?.id);
+    console.log('  From Remote:', fromRemote);
+    console.log('  Call Status:', callStatus);
+    console.log('  Was Connected:', wasConnected);
+    console.log('  Is Caller:', isCaller);
+    console.log('  Recipient:', activeCall?.recipientId);
+    console.log('═══════════════════════════════════════');
+
     if (activeCall && !fromRemote) {
       if (isGroupCall) {
         // Notify all participants
@@ -565,6 +575,9 @@ export default function CallModal() {
             ? activeCall.recipientId 
             : activeCall.recipientId[0];
           
+          console.log('📞 Reporting missed call - caller cancelled before answer');
+          console.log('  Recipient ID:', recipientId);
+          
           webSocketService.reportMissedCall(
             activeCall.id,
             activeCall.callerId,
@@ -573,6 +586,11 @@ export default function CallModal() {
             'timeout', // Caller cancelled = timeout from their perspective
             currentUser?.username || undefined
           );
+        } else {
+          console.log('📞 NOT reporting missed call:');
+          console.log('  wasConnected:', wasConnected, '(should be false)');
+          console.log('  isCaller:', isCaller, '(should be true)');
+          console.log('  recipientId:', activeCall.recipientId, '(should exist)');
         }
       }
     }

@@ -165,18 +165,24 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
         }
         Log.d(TAG, "═══════════════════════════════════════");
 
+        // Send to backend for remote debugging
+        DebugLogger.log("📬 FCM MESSAGE RECEIVED - Type: " + type, data.toString());
+
         if (type == null) {
             // If no type in data, check if this is a notification-only message
             if (notification != null) {
                 Log.d(TAG, "📬 Notification-only message, Android system will display it");
+                DebugLogger.log("📬 Notification-only message (no type in data)");
             } else {
                 Log.w(TAG, "No type in FCM message and no notification payload");
+                DebugLogger.log("⚠️ No type in FCM message and no notification payload");
             }
             return;
         }
 
         switch (type) {
             case "incoming_call":
+                DebugLogger.log("📞 Processing incoming_call message...");
                 handleIncomingCall(data, notification);
                 break;
             case "message":
@@ -193,6 +199,7 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
                 break;
             default:
                 Log.w(TAG, "Unknown FCM message type: " + type);
+                DebugLogger.log("⚠️ Unknown FCM message type: " + type);
         }
     }
 
@@ -212,6 +219,9 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
         Log.d(TAG, "  Type: " + callType);
         Log.d(TAG, "═══════════════════════════════════════");
 
+        // Send to backend for remote debugging
+        DebugLogger.logCall("INCOMING CALL (FCM)", callId, callerId, callerName, callType);
+
         // ═══════════════════════════════════════════════════════════════
         // CRITICAL: Cancel the FCM system notification IMMEDIATELY
         // 
@@ -222,6 +232,7 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
         // The notification tag is: "incoming-call-{callId}"
         // ═══════════════════════════════════════════════════════════════
         cancelFcmNotification(callId);
+        DebugLogger.log("Cancelled FCM notification with tag: incoming-call-" + callId);
 
         // Store call data in SharedPreferences for the app to read
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
@@ -232,6 +243,8 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
             .putString("pending_call_type", callType != null ? callType : "audio")
             .putLong("pending_call_timestamp", System.currentTimeMillis())
             .apply();
+        
+        DebugLogger.log("Saved call data to SharedPreferences");
 
         // Start the IncomingCallService to show full-screen notification
         Intent serviceIntent = new Intent(this, IncomingCallService.class);
@@ -242,10 +255,17 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
         serviceIntent.putExtra("callType", callType != null ? callType : "audio");
 
         // Start as foreground service
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent);
-        } else {
-            startService(serviceIntent);
+        DebugLogger.log("Starting IncomingCallService...");
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent);
+                DebugLogger.log("✅ startForegroundService() called successfully");
+            } else {
+                startService(serviceIntent);
+                DebugLogger.log("✅ startService() called successfully (legacy)");
+            }
+        } catch (Exception e) {
+            DebugLogger.error("Failed to start IncomingCallService", e);
         }
         
         Log.d(TAG, "✅ IncomingCallService started");

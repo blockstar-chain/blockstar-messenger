@@ -7,7 +7,7 @@ import { useAppStore } from '@/store';
 import { webRTCService } from '@/lib/webrtc';
 import { webSocketService } from '@/lib/websocket';
 import { getAvatarColor, getInitials, truncateAddress } from '@/utils/helpers';
-import { profileResolverService, resolveProfilesByWallets } from '@/lib/profileResolver';
+import { resolveProfilesByWallets } from '@/lib/profileResolver';
 import toast from 'react-hot-toast';
 
 export default function IncomingCallModal() {
@@ -180,12 +180,19 @@ export default function IncomingCallModal() {
   const handleDecline = useCallback(() => {
     if (!incomingCall) return;
     
-    console.log('📞 Declining call:', incomingCall.id);
+    console.log('═══════════════════════════════════════');
+    console.log('📞 DECLINING CALL');
+    console.log('  Call ID:', incomingCall.id);
+    console.log('  Caller ID:', incomingCall.callerId);
+    console.log('  My Address:', currentUser?.walletAddress);
+    console.log('  Call Type:', incomingCall.type);
+    console.log('═══════════════════════════════════════');
     
     // Notify caller that call was declined
     webSocketService.endCall(incomingCall.id);
     
     // Report this as a declined call for the chat history
+    console.log('📞 Reporting declined call...');
     webSocketService.reportMissedCall(
       incomingCall.id,
       incomingCall.callerId,

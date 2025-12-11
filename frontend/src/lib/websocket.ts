@@ -110,6 +110,17 @@ export class WebSocketService {
     });
 
     this.socket.on('message', (message: Message) => {
+      // Debug log for all messages, especially system messages
+      if (message.type === 'system' || message.isSystemMessage) {
+        console.log('═══════════════════════════════════════');
+        console.log('📨 SYSTEM MESSAGE RECEIVED VIA WEBSOCKET');
+        console.log('  ID:', message.id);
+        console.log('  Type:', message.type);
+        console.log('  SystemMessageType:', (message as any).systemMessageType);
+        console.log('  ConversationId:', message.conversationId);
+        console.log('  Full message:', JSON.stringify(message, null, 2));
+        console.log('═══════════════════════════════════════');
+      }
       this.messageHandlers.forEach((handler) => handler(message));
     });
 
@@ -261,21 +272,50 @@ export class WebSocketService {
     reason: 'timeout' | 'declined' | 'unavailable',
     callerName?: string
   ): void {
-    if (!this.socket || !this.socket.connected) {
-      console.warn('Socket not connected, cannot report missed call');
-      return;
-    }
-
-    console.log('📞 Reporting missed call:', { callId, callerId, recipientId, callType, reason });
-
-    this.socket.emit('call:missed', {
+    const payload = {
       callId,
       callerId,
       recipientId,
       callType,
       callerName,
       reason,
-    });
+    };
+
+    console.log('═══════════════════════════════════════');
+    console.log('📞 REPORTING MISSED CALL');
+    console.log('  Payload:', JSON.stringify(payload, null, 2));
+    console.log('  Socket connected:', this.socket?.connected);
+    console.log('═══════════════════════════════════════');
+
+    if (!this.socket) {
+      console.error('❌ Socket is null, cannot report missed call');
+      return;
+    }
+
+    if (!this.socket.connected) {
+      console.warn('⚠️ Socket not connected, queuing missed call report...');
+      // Queue it to send when reconnected
+      const sendWhenConnected = () => {
+        if (this.socket?.connected) {
+          console.log('✅ Socket reconnected, sending missed call report');
+          this.socket.emit('call:missed', payload);
+          this.socket.off('connect', sendWhenConnected);
+        }
+      };
+      this.socket.once('connect', sendWhenConnected);
+      
+      // Also try immediately in case connection is just slow
+      setTimeout(() => {
+        if (this.socket?.connected) {
+          console.log('✅ Delayed send: Socket connected, sending missed call');
+          this.socket.emit('call:missed', payload);
+        }
+      }, 500);
+      return;
+    }
+
+    this.socket.emit('call:missed', payload);
+    console.log('✅ Missed call event emitted');
   }
 
   /**

@@ -28,6 +28,27 @@ const io = new Server(httpServer, {
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
+// ═══════════════════════════════════════════════════════════════
+// Debug logging endpoint - receives logs from mobile apps
+// ═══════════════════════════════════════════════════════════════
+app.post('/api/debug-log', (req, res) => {
+  const { message, extra, timestamp, platform, source } = req.body;
+  
+  console.log('');
+  console.log('📱═══════════════════════════════════════════════════════');
+  console.log(`📱 MOBILE DEBUG [${platform || 'unknown'}] ${source ? `(${source})` : ''}`);
+  console.log(`📱 Time: ${timestamp || new Date().toISOString()}`);
+  console.log('📱───────────────────────────────────────────────────────');
+  console.log(`📱 ${message}`);
+  if (extra) {
+    console.log('📱 Extra:', extra);
+  }
+  console.log('📱═══════════════════════════════════════════════════════');
+  console.log('');
+  
+  res.status(200).json({ success: true });
+});
+
 
 // Create uploads directory
 const uploadsDir = path.join(__dirname, '../uploads');
@@ -2300,18 +2321,30 @@ io.on('connection', (socket: Socket) => {
   }) => {
     try {
       console.log('═══════════════════════════════════════');
-      console.log('📞 MISSED CALL EVENT');
+      console.log('📞 MISSED CALL EVENT RECEIVED');
       console.log('  CallId:', callId);
-      console.log('  From:', callerId);
-      console.log('  To:', recipientId);
+      console.log('  From (callerId):', callerId);
+      console.log('  To (recipientId):', recipientId);
       console.log('  Type:', callType);
       console.log('  Reason:', reason);
+      console.log('  CallerName:', callerName);
       console.log('═══════════════════════════════════════');
+
+      // Validate required fields
+      if (!callId || !callerId || !recipientId) {
+        console.error('❌ Missing required fields for missed call!');
+        console.error('  callId:', callId);
+        console.error('  callerId:', callerId);
+        console.error('  recipientId:', recipientId);
+        return;
+      }
 
       // Create a system message for the missed call
       const conversationId = [callerId.toLowerCase(), recipientId.toLowerCase()]
         .sort()
         .join('-');
+
+      console.log('📝 Generated conversationId:', conversationId);
 
       const missedCallMessage = {
         id: `missed-call-${callId}-${Date.now()}`,
@@ -2334,22 +2367,36 @@ io.on('connection', (socket: Socket) => {
         },
       };
 
+      console.log('📝 Created missed call message:', JSON.stringify(missedCallMessage, null, 2));
+
       // Save to database
-      await db.saveMessage(missedCallMessage);
-      console.log('✅ Missed call message saved to DB');
+      try {
+        await db.saveMessage(missedCallMessage);
+        console.log('✅ Missed call message saved to DB');
+      } catch (dbError) {
+        console.error('❌ Failed to save missed call message to DB:', dbError);
+      }
 
       // Send to recipient if online
       const recipientSocketId = activeConnections.get(recipientId.toLowerCase());
+      console.log('📤 Recipient socket lookup:', recipientId.toLowerCase(), '→', recipientSocketId || 'NOT ONLINE');
+      
       if (recipientSocketId) {
         io.to(recipientSocketId).emit('message', missedCallMessage);
-        console.log('📤 Missed call message sent to recipient');
+        console.log('✅ Missed call message sent to recipient via socket');
+      } else {
+        console.log('⚠️ Recipient not online, message saved to DB only');
       }
 
       // Also send to caller so they see it in their chat
       const callerSocketId = activeConnections.get(callerId.toLowerCase());
+      console.log('📤 Caller socket lookup:', callerId.toLowerCase(), '→', callerSocketId || 'NOT ONLINE');
+      
       if (callerSocketId) {
         io.to(callerSocketId).emit('message', missedCallMessage);
-        console.log('📤 Missed call message sent to caller');
+        console.log('✅ Missed call message sent to caller via socket');
+      } else {
+        console.log('⚠️ Caller not online (unusual), message saved to DB only');
       }
 
       // Send push notification for missed call
@@ -2362,9 +2409,15 @@ io.on('connection', (socket: Socket) => {
       
       if (pushSent) {
         console.log('📱 Missed call push notification sent');
+      } else {
+        console.log('⚠️ No push notification sent (recipient may not have FCM token)');
       }
+      
+      console.log('═══════════════════════════════════════');
+      console.log('✅ MISSED CALL HANDLING COMPLETE');
+      console.log('═══════════════════════════════════════');
     } catch (error) {
-      console.error('Error handling missed call:', error);
+      console.error('❌ Error handling missed call:', error);
     }
   });
 

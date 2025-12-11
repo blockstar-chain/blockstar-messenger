@@ -95,4 +95,44 @@ public class IncomingCallPlugin extends Plugin {
         
         call.resolve();
     }
+
+    /**
+     * Set the API URL for debug logging
+     * This allows native Android logs to be sent to the backend
+     * 
+     * Call this after getting your API_URL, e.g.:
+     * IncomingCall.setDebugUrl({ url: 'https://your-backend.com' });
+     */
+    @PluginMethod
+    public void setDebugUrl(PluginCall call) {
+        String url = call.getString("url");
+        
+        if (url != null && !url.isEmpty()) {
+            DebugLogger.setApiUrl(url);
+            Log.d(TAG, "✅ Debug URL set: " + url);
+            DebugLogger.log("✅ Debug logging initialized from JavaScript");
+            
+            JSObject result = new JSObject();
+            result.put("success", true);
+            call.resolve(result);
+        } else {
+            call.reject("URL is required");
+        }
+    }
+
+    /**
+     * Send a debug message to the backend
+     * Useful for logging JavaScript events to the same log stream
+     */
+    @PluginMethod
+    public void debugLog(PluginCall call) {
+        String message = call.getString("message");
+        String extra = call.getString("extra");
+        
+        if (message != null) {
+            DebugLogger.log("[JS] " + message, extra);
+        }
+        
+        call.resolve();
+    }
 }
