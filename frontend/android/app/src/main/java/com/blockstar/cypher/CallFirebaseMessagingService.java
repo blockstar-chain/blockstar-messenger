@@ -161,6 +161,7 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
         if (notification != null) {
             Log.d(TAG, "Notification Title: " + notification.getTitle());
             Log.d(TAG, "Notification Body: " + notification.getBody());
+            Log.d(TAG, "Notification Tag: " + notification.getTag());
         }
         Log.d(TAG, "═══════════════════════════════════════");
 
@@ -176,7 +177,7 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
 
         switch (type) {
             case "incoming_call":
-                handleIncomingCall(data);
+                handleIncomingCall(data, notification);
                 break;
             case "message":
                 handleNewMessage(data);
@@ -195,7 +196,7 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
         }
     }
 
-    private void handleIncomingCall(Map<String, String> data) {
+    private void handleIncomingCall(Map<String, String> data, RemoteMessage.Notification fcmNotification) {
         String callId = data.get("callId");
         String callerId = data.get("callerId");
         String callerName = data.get("callerName");
@@ -210,6 +211,17 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
         Log.d(TAG, "  Caller: " + callerName + " (" + callerId + ")");
         Log.d(TAG, "  Type: " + callType);
         Log.d(TAG, "═══════════════════════════════════════");
+
+        // ═══════════════════════════════════════════════════════════════
+        // CRITICAL: Cancel the FCM system notification IMMEDIATELY
+        // 
+        // The backend sends a notification payload to wake the device,
+        // but we want our IncomingCallService to show the notification
+        // with Answer/Decline buttons and proper ringtone control.
+        //
+        // The notification tag is: "incoming-call-{callId}"
+        // ═══════════════════════════════════════════════════════════════
+        cancelFcmNotification(callId);
 
         // Store call data in SharedPreferences for the app to read
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
@@ -237,6 +249,27 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
         }
         
         Log.d(TAG, "✅ IncomingCallService started");
+    }
+
+    /**
+     * Cancel the FCM system notification by tag
+     * This prevents duplicate notifications (FCM's + app's)
+     */
+    private void cancelFcmNotification(String callId) {
+        try {
+            NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (manager != null && callId != null) {
+                // The tag we set in the backend notification payload
+                String tag = "incoming-call-" + callId;
+                
+                // Cancel by tag (notification ID 0 is used for tagged notifications)
+                manager.cancel(tag, 0);
+                
+                Log.d(TAG, "✅ Cancelled FCM notification with tag: " + tag);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error cancelling FCM notification: " + e.getMessage());
+        }
     }
 
     private void handleNewMessage(Map<String, String> data) {
@@ -268,6 +301,7 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
 
     private void handleMissedCall(Map<String, String> data) {
         String callerName = data.get("callerName");
+        String callerId = data.get("callerId");
         String callType = data.get("callType");
 
         Log.d(TAG, "📵 MISSED CALL from " + callerName);
@@ -275,6 +309,7 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
         // Show missed call notification
         Intent serviceIntent = new Intent(this, MissedCallNotificationService.class);
         serviceIntent.putExtra("callerName", callerName);
+        serviceIntent.putExtra("callerId", callerId);
         serviceIntent.putExtra("callType", callType);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -303,6 +338,9 @@ public class CallFirebaseMessagingService extends FirebaseMessagingService {
         Log.d(TAG, "═══════════════════════════════════════");
         Log.d(TAG, "📴 CALL CANCELLED: " + callId);
         Log.d(TAG, "═══════════════════════════════════════");
+
+        // Cancel any FCM notification for this call
+        cancelFcmNotification(callId);
 
         // Clear pending call from SharedPreferences
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);

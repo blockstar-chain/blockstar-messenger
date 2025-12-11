@@ -185,13 +185,23 @@ export default function IncomingCallModal() {
     // Notify caller that call was declined
     webSocketService.endCall(incomingCall.id);
     
+    // Report this as a declined call for the chat history
+    webSocketService.reportMissedCall(
+      incomingCall.id,
+      incomingCall.callerId,
+      currentUser?.walletAddress || '',
+      incomingCall.type,
+      'declined',
+      undefined // callerName - backend will look it up
+    );
+    
     // Clean up
     setIncomingCall(null);
     sessionStorage.removeItem('incomingCallOffer');
     sessionStorage.removeItem('incomingCallInfo');
     
     toast('Call declined', { icon: '📵' });
-  }, [incomingCall, setIncomingCall]);
+  }, [incomingCall, currentUser?.walletAddress, setIncomingCall]);
 
   // Don't render if no incoming call
   if (!incomingCall) return null;

@@ -369,30 +369,34 @@ async function sendFCMCallNotification(
 
   if (platform === 'android') {
     // ════════════════════════════════════════════════════════════════
-    // CRITICAL FIX: Include notification payload to WAKE the device
-    // Without this, data-only messages won't wake a sleeping device!
+    // Android Call Notification Strategy:
+    // 
+    // We use BOTH notification and data payloads because:
+    // - notification payload: Wakes device from Doze/deep sleep reliably
+    // - data payload: Passes call info to the app
+    //
+    // The app's CallFirebaseMessagingService will:
+    // 1. Receive the data payload in onMessageReceived()
+    // 2. Start IncomingCallService with full-screen intent
+    // 3. Cancel the FCM system notification using the tag
+    //
+    // The notification tag allows the app to cancel/replace the FCM
+    // notification with its own richer notification (with Answer/Decline buttons)
     // ════════════════════════════════════════════════════════════════
     message.android = {
       priority: 'high',
       ttl: 30000, // 30 seconds
       notification: {
-        channelId: 'calls', // Must match Android notification channel
+        channelId: 'calls',
         title: `Incoming ${callPayload.callType} call`,
         body: `${callerDisplay} is calling...`,
         priority: 'max',
         visibility: 'public',
+        // IMPORTANT: Tag allows app to cancel this notification
+        // and replace with its own full-featured notification
+        tag: `incoming-call-${callPayload.callId}`,
+        // Minimal sound/vibration - let IncomingCallService handle this
         sound: 'default',
-        // These help wake the device
-        defaultVibrateTimings: false,
-        vibrateTimingsMillis: [0, 500, 200, 500, 200, 500],
-        defaultLightSettings: false,
-        lightSettings: {
-          color: '#0000FF',
-          lightOnDurationMillis: 500,
-          lightOffDurationMillis: 500,
-        },
-        // Tag allows replacing/canceling this notification
-        tag: `call-${callPayload.callId}`,
       },
     };
   }

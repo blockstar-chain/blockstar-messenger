@@ -493,6 +493,54 @@ async function sendCallPushNotification(
   }
 }
 
+// Send missed call push notification
+async function sendMissedCallPushNotification(
+  recipientWallet: string,
+  callerId: string,
+  callerName: string,
+  callType: 'audio' | 'video'
+): Promise<boolean> {
+  try {
+    const tokens = await db.getPushTokens(recipientWallet);
+
+    if (tokens.length === 0) {
+      console.log(`📱 No push tokens for ${recipientWallet.substring(0, 10)}... - cannot send missed call notification`);
+      return false;
+    }
+
+    console.log(`📞 Sending missed call notification to ${tokens.length} device(s)`);
+
+    let sent = false;
+    for (const { push_token, platform } of tokens) {
+      try {
+        const success = await pushService.sendFCMPush(
+          push_token,
+          {
+            title: `Missed ${callType} call`,
+            body: `You missed a ${callType} call from ${callerName}`,
+            data: {
+              type: 'missed_call',
+              callerId,
+              callerName,
+              callType,
+            },
+            sound: 'default',
+          },
+          platform as 'ios' | 'android'
+        );
+        if (success) sent = true;
+      } catch (err) {
+        console.error(`Failed to send missed call push to ${platform}:`, err);
+      }
+    }
+
+    return sent;
+  } catch (error) {
+    console.error('Error sending missed call push notification:', error);
+    return false;
+  }
+}
+
 // Helper function to truncate wallet address for display
 function truncateAddress(address: string): string {
   if (!address || address.length < 10) return address;
@@ -2231,6 +2279,92 @@ io.on('connection', (socket: Socket) => {
       }
     } catch (error) {
       console.error('Error ending call:', error);
+    }
+  });
+
+  // Handle missed call - creates a message in chat
+  socket.on('call:missed', async ({ 
+    callId, 
+    callerId, 
+    recipientId, 
+    callType, 
+    callerName,
+    reason 
+  }: { 
+    callId: string;
+    callerId: string;
+    recipientId: string;
+    callType: 'audio' | 'video';
+    callerName?: string;
+    reason: 'timeout' | 'declined' | 'unavailable';
+  }) => {
+    try {
+      console.log('═══════════════════════════════════════');
+      console.log('📞 MISSED CALL EVENT');
+      console.log('  CallId:', callId);
+      console.log('  From:', callerId);
+      console.log('  To:', recipientId);
+      console.log('  Type:', callType);
+      console.log('  Reason:', reason);
+      console.log('═══════════════════════════════════════');
+
+      // Create a system message for the missed call
+      const conversationId = [callerId.toLowerCase(), recipientId.toLowerCase()]
+        .sort()
+        .join('-');
+
+      const missedCallMessage = {
+        id: `missed-call-${callId}-${Date.now()}`,
+        conversationId,
+        senderId: 'system',
+        recipientId: recipientId.toLowerCase(),
+        content: '', // System messages don't have content
+        type: 'system',
+        isSystemMessage: true,
+        systemMessageType: reason === 'declined' ? 'call_declined' : 'missed_call',
+        callType,
+        timestamp: Date.now(),
+        delivered: true,
+        read: false,
+        metadata: {
+          callId,
+          callerId: callerId.toLowerCase(),
+          callerName: callerName || truncateAddress(callerId),
+          reason,
+        },
+      };
+
+      // Save to database
+      await db.saveMessage(missedCallMessage);
+      console.log('✅ Missed call message saved to DB');
+
+      // Send to recipient if online
+      const recipientSocketId = activeConnections.get(recipientId.toLowerCase());
+      if (recipientSocketId) {
+        io.to(recipientSocketId).emit('message', missedCallMessage);
+        console.log('📤 Missed call message sent to recipient');
+      }
+
+      // Also send to caller so they see it in their chat
+      const callerSocketId = activeConnections.get(callerId.toLowerCase());
+      if (callerSocketId) {
+        io.to(callerSocketId).emit('message', missedCallMessage);
+        console.log('📤 Missed call message sent to caller');
+      }
+
+      // Send push notification for missed call
+      const pushSent = await sendMissedCallPushNotification(
+        recipientId.toLowerCase(),
+        callerId.toLowerCase(),
+        callerName || truncateAddress(callerId),
+        callType
+      );
+      
+      if (pushSent) {
+        console.log('📱 Missed call push notification sent');
+      }
+    } catch (error) {
+      console.error('Error handling missed call:', error);
     }
   });
 

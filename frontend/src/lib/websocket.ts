@@ -250,6 +250,35 @@ export class WebSocketService {
   }
 
   /**
+   * Report a missed call (timeout, declined, etc.)
+   * This creates a system message in the chat
+   */
+  reportMissedCall(
+    callId: string,
+    callerId: string,
+    recipientId: string,
+    callType: 'audio' | 'video',
+    reason: 'timeout' | 'declined' | 'unavailable',
+    callerName?: string
+  ): void {
+    if (!this.socket || !this.socket.connected) {
+      console.warn('Socket not connected, cannot report missed call');
+      return;
+    }
+
+    console.log('📞 Reporting missed call:', { callId, callerId, recipientId, callType, reason });
+
+    this.socket.emit('call:missed', {
+      callId,
+      callerId,
+      recipientId,
+      callType,
+      callerName,
+      reason,
+    });
+  }
+
+  /**
    * Update user status
    */
   updateStatus(status: 'online' | 'away' | 'offline'): void {

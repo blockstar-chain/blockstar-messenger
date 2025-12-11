@@ -20,7 +20,12 @@ export interface Message {
   timestamp: number;
   delivered: boolean;
   read: boolean;
-  type: 'text' | 'image' | 'file' | 'voice' | 'audio' | 'video' | 'location';
+  type: 'text' | 'image' | 'file' | 'voice' | 'audio' | 'video' | 'location' | 'system';
+  
+  // System message fields
+  isSystemMessage?: boolean;
+  systemMessageType?: 'missed_call' | 'call_ended' | 'call_declined';
+  callType?: 'audio' | 'video';
   
   // File metadata
   fileName?: string;

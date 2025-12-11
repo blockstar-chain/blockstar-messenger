@@ -544,6 +544,10 @@ export default function CallModal() {
     if (hasEnded.current) return;
     hasEnded.current = true;
 
+    // Check if this was a missed call (call ended during ringing, never connected)
+    const wasConnected = callStatus === 'active';
+    const isCaller = activeCall?.callerId?.toLowerCase() === currentUser?.walletAddress?.toLowerCase();
+
     if (activeCall && !fromRemote) {
       if (isGroupCall) {
         // Notify all participants
@@ -553,6 +557,23 @@ export default function CallModal() {
         });
       } else {
         webSocketService.endCall(activeCall.id);
+
+        // Report missed call if the call never connected and caller is ending it
+        // (caller cancelled before recipient answered)
+        if (!wasConnected && isCaller && activeCall.recipientId) {
+          const recipientId = typeof activeCall.recipientId === 'string' 
+            ? activeCall.recipientId 
+            : activeCall.recipientId[0];
+          
+          webSocketService.reportMissedCall(
+            activeCall.id,
+            activeCall.callerId,
+            recipientId,
+            activeCall.type,
+            'timeout', // Caller cancelled = timeout from their perspective
+            currentUser?.username || undefined
+          );
+        }
       }
     }
 
