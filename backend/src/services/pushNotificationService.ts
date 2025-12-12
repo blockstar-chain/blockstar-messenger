@@ -131,21 +131,27 @@ async function sendAPNsCallNotification(
     return false;
   }
 
-  const callerDisplay = callPayload.callerName || 
-    (callPayload.callerId?.substring(0, 10) + '...');
-
+  // ═══════════════════════════════════════════════════════════════
+  // iOS uses VoIP push for incoming calls (handled by PKPushRegistry)
+  // VoIP push triggers CallKit which shows the native phone call UI
+  // 
+  // We should NOT send a regular APNs alert for calls because:
+  // 1. VoIP push already wakes the device and shows CallKit UI
+  // 2. Regular APNs alert would show DUPLICATE notification banner
+  //
+  // Instead, we send a silent/background notification as a fallback
+  // in case VoIP push fails or isn't registered.
+  // ═══════════════════════════════════════════════════════════════
+  
+  console.log('📱 [APNs] Skipping call alert notification for iOS (VoIP handles this)');
+  console.log('📱 [APNs] Sending silent background notification as fallback...');
+  
   const notification = new apn.Notification({
-    alert: {
-      title: `Incoming ${callPayload.callType} call`,
-      body: `${callerDisplay} is calling...`,
-    },
-    sound: 'default', // Use 'ringtone.caf' if you have a custom ringtone
-    badge: 1,
-    category: 'INCOMING_CALL',
-    contentAvailable: true,
-    mutableContent: true,
-    topic: process.env.APNS_BUNDLE_ID!,
+    // NO alert - this prevents duplicate notification banner
+    // alert: { ... },  // REMOVED to prevent duplicate notification
+    contentAvailable: true,  // This wakes the app in background
     priority: 10, // Immediate delivery
+    topic: process.env.APNS_BUNDLE_ID!,
     expiry: Math.floor(Date.now() / 1000) + 30, // Expire in 30 seconds
     payload: {
       type: 'incoming_call',
@@ -173,7 +179,7 @@ async function sendAPNsCallNotification(
       return false;
     }
     
-    console.log(`📱 [APNs] Call notification sent successfully`);
+    console.log(`📱 [APNs] Silent call notification sent successfully`);
     return true;
   } catch (error) {
     console.error('📱 [APNs] Error sending notification:', error);
@@ -371,54 +377,53 @@ async function sendFCMCallNotification(
     // ════════════════════════════════════════════════════════════════
     // Android Call Notification Strategy:
     // 
-    // We use BOTH notification and data payloads because:
-    // - notification payload: Wakes device from Doze/deep sleep reliably
-    // - data payload: Passes call info to the app
+    // We use DATA-ONLY payload (no notification) because:
+    // - data payload with high priority: Wakes device from Doze/deep sleep
+    // - The app's CallFirebaseMessagingService handles everything
     //
-    // The app's CallFirebaseMessagingService will:
-    // 1. Receive the data payload in onMessageReceived()
-    // 2. Start IncomingCallService with full-screen intent
-    // 3. Cancel the FCM system notification using the tag
+    // Previously we sent BOTH notification + data payloads, but this caused
+    // DUPLICATE notifications:
+    // 1. FCM system notification (from notification payload)
+    // 2. App's IncomingCallService notification (with Answer/Decline buttons)
     //
-    // The notification tag allows the app to cancel/replace the FCM
-    // notification with its own richer notification (with Answer/Decline buttons)
+    // With data-only:
+    // 1. FCM delivers high-priority data message
+    // 2. CallFirebaseMessagingService.onMessageReceived() is called
+    // 3. IncomingCallService shows ONE notification with full controls
     // ════════════════════════════════════════════════════════════════
     message.android = {
       priority: 'high',
       ttl: 30000, // 30 seconds
-      notification: {
-        channelId: 'calls',
-        title: `Incoming ${callPayload.callType} call`,
-        body: `${callerDisplay} is calling...`,
-        priority: 'max',
-        visibility: 'public',
-        // IMPORTANT: Tag allows app to cancel this notification
-        // and replace with its own full-featured notification
-        tag: `incoming-call-${callPayload.callId}`,
-        // Minimal sound/vibration - let IncomingCallService handle this
-        sound: 'default',
-      },
+      // NO notification payload - this prevents duplicate notifications
+      // The app will create its own notification via IncomingCallService
     };
   }
 
   if (platform === 'ios') {
+    // ════════════════════════════════════════════════════════════════
+    // iOS Call Notification Strategy:
+    // 
+    // VoIP push (via PKPushRegistry) handles incoming calls on iOS.
+    // VoIP push triggers CallKit which shows the native phone call UI.
+    // 
+    // We should NOT send an FCM alert for calls because:
+    // 1. VoIP push already wakes the device and shows CallKit UI
+    // 2. FCM alert would show DUPLICATE notification banner
+    //
+    // Instead, we send a background/silent notification as a fallback.
+    // ════════════════════════════════════════════════════════════════
+    console.log('📱 [FCM iOS] Sending silent call notification (VoIP handles UI)');
+    
     message.apns = {
       headers: {
         'apns-priority': '10', // Immediate delivery
-        'apns-push-type': 'alert',
+        'apns-push-type': 'background', // Background push, no alert
         'apns-expiration': String(Math.floor(Date.now() / 1000) + 30), // Expire in 30s
       },
       payload: {
         aps: {
-          alert: {
-            title: `Incoming ${callPayload.callType} call`,
-            body: `${callerDisplay} is calling...`,
-          },
-          sound: 'default',
-          badge: 1,
+          // NO alert - this prevents duplicate notification banner
           'content-available': 1,
-          'mutable-content': 1,
-          category: 'INCOMING_CALL',
         },
         // Custom data for the app
         callData: {
