@@ -1,6 +1,7 @@
 import Foundation
 import Capacitor
 import UserNotifications
+import AVFoundation
 
 @objc(PushNotificationPlugin)
 public class PushNotificationPlugin: CAPPlugin {
@@ -52,6 +53,15 @@ public class PushNotificationPlugin: CAPPlugin {
     
     deinit {
         tokenObservers.forEach { NotificationCenter.default.removeObserver($0) }
+    }
+    
+    // MARK: - Silent Mode Detection
+    
+    /// Check if the device is in silent mode by checking output volume
+    private func isSilentModeEnabled() -> Bool {
+        let audioSession = AVAudioSession.sharedInstance()
+        let outputVolume = audioSession.outputVolume
+        return outputVolume < 0.01
     }
     
     // MARK: - Request Permission
@@ -136,7 +146,11 @@ public class PushNotificationPlugin: CAPPlugin {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        content.sound = .default
+        
+        // Only add sound if not in silent mode - respect user's audio settings
+        if !isSilentModeEnabled() {
+            content.sound = .default
+        }
         
         if let data = call.getObject("data") {
             content.userInfo = data

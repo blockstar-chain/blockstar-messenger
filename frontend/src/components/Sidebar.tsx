@@ -1389,27 +1389,59 @@ export default function Sidebar({
       // 1. Unregister push notifications
       await unregisterPushNotifications();
       
-      // 2. Disconnect wallet
-      await disconnect();
-      blockchainService.disconnect();
+      // 2. Disconnect wallet - wrap in try/catch to handle network modal issues
+      try {
+        await disconnect();
+      } catch (disconnectError) {
+        console.warn('⚠️ Wallet disconnect error (may be network modal issue):', disconnectError);
+        // Continue with logout even if disconnect fails
+      }
       
-      // 3. Disconnect WebSocket
-      webSocketService.disconnect();
+      // 3. Force blockchain service disconnect
+      try {
+        blockchainService.disconnect();
+      } catch (e) {
+        console.warn('⚠️ Blockchain disconnect error:', e);
+      }
       
-      // 4. Clear persistent session - IMPORTANT for staying logged out!
+      // 4. Disconnect WebSocket
+      try {
+        webSocketService.disconnect();
+      } catch (e) {
+        console.warn('⚠️ WebSocket disconnect error:', e);
+      }
+      
+      // 5. Clear persistent session - IMPORTANT for staying logged out!
       await clearUserSession();
       
-      // 5. Reset app store
+      // 6. Reset app store
       useAppStore.getState().reset();
+      
+      // 7. Clear any cached data
+      try {
+        localStorage.removeItem('wagmi.store');
+        localStorage.removeItem('wagmi.connected');
+        localStorage.removeItem('wagmi.connectedWallet');
+        localStorage.removeItem('wc@2:client:0.3');
+        sessionStorage.clear();
+      } catch (e) {
+        console.warn('⚠️ Cache clear error:', e);
+      }
       
       console.log('✅ Logged out successfully');
       
-      // 6. Reload to clear any remaining state
+      // 8. Reload to clear any remaining state
       window.location.reload();
     } catch (error) {
       console.error('❌ Logout error:', error);
       // Still try to clear session and reload even on error
-      await clearUserSession();
+      try {
+        await clearUserSession();
+        localStorage.removeItem('wagmi.store');
+        sessionStorage.clear();
+      } catch (e) {
+        // Ignore cleanup errors
+      }
       window.location.reload();
     }
   };
@@ -1867,8 +1899,14 @@ export default function Sidebar({
 
       {/* New Chat Modal */}
       {showNewChatModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end md:items-center justify-center p-0 md:p-4">
-          <div className="bg-card border border-midnight rounded-t-2xl md:rounded-2xl shadow-2xl max-w-md w-full p-4 md:p-6 max-h-[90vh] overflow-y-auto pb-safe">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end md:items-center justify-center p-0 md:p-4 overflow-y-auto">
+          <div 
+            className="bg-card border border-midnight rounded-t-2xl md:rounded-2xl shadow-2xl max-w-md w-full p-4 md:p-6 max-h-[85vh] md:max-h-[90vh] overflow-y-auto new-chat-modal"
+            style={{
+              marginBottom: 'env(safe-area-inset-bottom, 0)',
+              paddingBottom: 'calc(16px + env(safe-area-inset-bottom, 0))',
+            }}
+          >
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg md:text-xl font-bold text-white">New Chat</h3>
               <button
@@ -1948,8 +1986,10 @@ export default function Sidebar({
                       placeholder="@name or 0x..."
                       value={newChatAddress}
                       onChange={(e) => setNewChatAddress(e.target.value)}
-                      className="w-full px-4 py-3 bg-dark-200 border border-midnight rounded-xl text-white placeholder-muted focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500/50 transition mb-4"
+                      className="w-full px-4 py-3 bg-dark-200 border-2 border-gray-600 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/50 focus:shadow-[0_0_15px_rgba(0,102,255,0.3)] transition mb-4"
                       onKeyDown={(e) => e.key === 'Enter' && handleStartNewChat()}
+                      autoComplete="off"
+                      autoCapitalize="off"
                     />
                   </>
                 ) : (
@@ -2031,7 +2071,8 @@ export default function Sidebar({
                     placeholder="Enter group name..."
                     value={groupName}
                     onChange={(e) => setGroupName(e.target.value)}
-                    className="w-full px-4 py-3 bg-dark-200 border border-midnight rounded-xl text-white placeholder-muted focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500/50 transition"
+                    className="w-full px-4 py-3 bg-dark-200 border-2 border-gray-600 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/50 focus:shadow-[0_0_15px_rgba(0,102,255,0.3)] transition"
+                    autoComplete="off"
                   />
                 </div>
 
@@ -2051,7 +2092,8 @@ export default function Sidebar({
                       placeholder="Enter image URL..."
                       value={groupAvatar}
                       onChange={(e) => setGroupAvatar(e.target.value)}
-                      className="flex-1 px-4 py-3 bg-dark-200 border border-midnight rounded-xl text-white placeholder-muted focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500/50 transition text-sm"
+                      className="flex-1 px-4 py-3 bg-dark-200 border-2 border-gray-600 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/50 focus:shadow-[0_0_15px_rgba(0,102,255,0.3)] transition text-sm"
+                      autoComplete="off"
                     />
                   </div>
                 </div>
@@ -2092,7 +2134,9 @@ export default function Sidebar({
                         value={memberInput}
                         onChange={(e) => setMemberInput(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && handleAddMember()}
-                        className="flex-1 px-4 py-3 bg-dark-200 border border-midnight rounded-xl text-white placeholder-muted focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500/50 transition"
+                        className="flex-1 px-4 py-3 bg-dark-200 border-2 border-gray-600 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/50 focus:shadow-[0_0_15px_rgba(0,102,255,0.3)] transition"
+                        autoComplete="off"
+                        autoCapitalize="off"
                       />
                       <button
                         onClick={handleAddMember}
@@ -2197,20 +2241,23 @@ export default function Sidebar({
                   </div>
                 )}
 
-                <div className="flex gap-3">
-                  <button
-                    onClick={resetNewChatModal}
-                    className="flex-1 px-4 py-3 border border-midnight text-secondary rounded-xl hover:bg-dark-200 transition"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleCreateGroup}
-                    disabled={!groupName.trim() || groupMembers.length === 0}
-                    className="flex-1 px-4 py-3 bg-primary-500 text-white rounded-xl hover:bg-primary-600 transition shadow-glow disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Create Group
-                  </button>
+                {/* Action buttons - sticky at bottom for keyboard visibility */}
+                <div className="sticky bottom-0 bg-card pt-4 pb-2 -mx-4 px-4 md:-mx-6 md:px-6 border-t border-midnight mt-4">
+                  <div className="flex gap-3">
+                    <button
+                      onClick={resetNewChatModal}
+                      className="flex-1 px-4 py-3 border border-midnight text-secondary rounded-xl hover:bg-dark-200 transition"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleCreateGroup}
+                      disabled={!groupName.trim() || groupMembers.length === 0}
+                      className="flex-1 px-4 py-3 bg-primary-500 text-white rounded-xl hover:bg-primary-600 transition shadow-glow disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Create Group
+                    </button>
+                  </div>
                 </div>
               </>
             )}

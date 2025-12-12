@@ -2346,12 +2346,15 @@ io.on('connection', (socket: Socket) => {
 
       console.log('📝 Generated conversationId:', conversationId);
 
+      // FIX: Use callerId as senderId so the message appears in the correct conversation
+      // The isSystemMessage flag indicates it's a system-generated message for special rendering
       const missedCallMessage = {
         id: `missed-call-${callId}-${Date.now()}`,
         conversationId,
-        senderId: 'system',
+        // Changed from 'system' to callerId to ensure message goes to correct conversation
+        senderId: callerId.toLowerCase(),
         recipientId: recipientId.toLowerCase(),
-        content: '', // System messages don't have content
+        content: '', // System messages don't have text content
         type: 'system',
         isSystemMessage: true,
         systemMessageType: reason === 'declined' ? 'call_declined' : 'missed_call',
@@ -2369,9 +2372,33 @@ io.on('connection', (socket: Socket) => {
 
       console.log('📝 Created missed call message:', JSON.stringify(missedCallMessage, null, 2));
 
-      // Save to database
+      // Save to database - first ensure conversation exists
       try {
-        await db.saveMessage(missedCallMessage);
+        // Get or create conversation between caller and recipient (returns string ID)
+        const conversationId = await db.getOrCreateDirectConversation(
+          callerId.toLowerCase(),
+          recipientId.toLowerCase()
+        );
+        
+        // Create the message content as a JSON object with all the metadata
+        const messageContent = JSON.stringify({
+          isSystemMessage: true,
+          systemMessageType: reason === 'declined' ? 'call_declined' : 'missed_call',
+          callType,
+          callId,
+          callerId: callerId.toLowerCase(),
+          callerName: callerName || truncateAddress(callerId),
+          reason,
+        });
+        
+        // Save using correct function signature: (conversationId, senderWallet, content, messageType, clientId)
+        await db.saveMessage(
+          conversationId,
+          callerId.toLowerCase(),
+          messageContent,
+          'system',
+          missedCallMessage.id
+        );
         console.log('✅ Missed call message saved to DB');
       } catch (dbError) {
         console.error('❌ Failed to save missed call message to DB:', dbError);

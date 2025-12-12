@@ -414,3 +414,208 @@ button, a {
   }
 }
 
+/* ============================================
+   iOS Keyboard Handling
+   ============================================ */
+
+/* When virtual keyboard is open, ensure content scrolls into view */
+@supports (-webkit-touch-callout: none) {
+  /* iOS specific fixes */
+  
+  /* Ensure inputs scroll into view when focused */
+  input:focus,
+  textarea:focus {
+    scroll-margin-bottom: 300px;
+  }
+  
+  /* Modal content should scroll when keyboard is open */
+  .modal-content {
+    max-height: calc(100vh - env(keyboard-inset-height, 0px) - 100px);
+    overflow-y: auto;
+  }
+  
+  /* Better modal positioning on iOS */
+  .modal-ios-fix {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+/* Keyboard-aware container - use this class on containers with inputs */
+.keyboard-aware {
+  transition: transform 0.3s ease;
+}
+
+/* When keyboard is potentially visible, add padding */
+@media screen and (max-height: 500px) {
+  .keyboard-aware {
+    padding-bottom: 250px;
+  }
+  
+  /* Ensure modals don't get cut off */
+  .fixed.inset-0 {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* ============================================
+   Enhanced Input Field Visibility
+   ============================================ */
+
+/* Stronger border for input fields - fixes "outline too subtle" issue */
+.input-enhanced {
+  border: 2px solid #2a2a3a !important;
+  transition: all 0.2s ease;
+}
+
+.input-enhanced:focus {
+  border-color: #0066FF !important;
+  box-shadow: 0 0 0 3px rgba(0, 102, 255, 0.25), 0 0 15px rgba(0, 102, 255, 0.15) !important;
+}
+
+.input-enhanced::placeholder {
+  color: #6a6a7a;
+}
+
+/* Apply stronger borders to all text inputs by default */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="search"],
+textarea {
+  border: 2px solid #2a2a3a;
+  background-color: #0a0a12;
+}
+
+input[type="text"]:focus,
+input[type="email"]:focus,
+input[type="password"]:focus,
+input[type="search"]:focus,
+textarea:focus {
+  border-color: #0066FF;
+  box-shadow: 0 0 0 3px rgba(0, 102, 255, 0.25);
+  outline: none;
+}
+
+/* ============================================
+   Chat Input Area - Keyboard Aware
+   ============================================ */
+
+/* Message input container should stay above keyboard */
+.chat-input-container {
+  position: sticky;
+  bottom: 0;
+  background: linear-gradient(transparent, #030308 20%);
+  padding-bottom: env(safe-area-inset-bottom);
+  z-index: 10;
+}
+
+/* On iOS, ensure the input doesn't get hidden */
+@supports (-webkit-touch-callout: none) {
+  .chat-input-container {
+    /* Use visual viewport to stay above keyboard */
+    position: fixed;
+    bottom: env(safe-area-inset-bottom, 0);
+    left: 0;
+    right: 0;
+    background: #030308;
+    padding: 8px 16px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0));
+  }
+  
+  /* Add padding to message container when input is fixed */
+  .chat-messages-container {
+    padding-bottom: 80px;
+  }
+}
+
+/* ============================================
+   Modal Improvements for Mobile
+   ============================================ */
+
+/* New Chat Modal - ensure content is scrollable */
+.new-chat-modal {
+  max-height: 90vh;
+  max-height: 90dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* When keyboard is open, modal should resize */
+@media screen and (max-height: 600px) {
+  .new-chat-modal {
+    max-height: 70vh;
+    margin-bottom: 20px;
+  }
+}
+
+/* Group creation form - keep button visible */
+.group-create-form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.group-create-form .form-content {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.group-create-form .form-actions {
+  flex-shrink: 0;
+  padding-top: 16px;
+  background: inherit;
+}
+
+/* ============================================
+   Unread Badge Visibility
+   ============================================ */
+
+/* Ensure unread badges are always visible */
+.unread-badge {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  background: #0066FF;
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Group chat unread indicator */
+.group-unread-badge {
+  background: linear-gradient(135deg, #0066FF, #00c8ff);
+  box-shadow: 0 0 8px rgba(0, 102, 255, 0.4);
+}
+
+/* ============================================
+   Conversation Preview Fixes
+   ============================================ */
+
+/* Ensure last message preview doesn't overflow */
+.conversation-preview {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Fix for groups showing "No messages yet" - ensure proper line height */
+.conversation-item .preview-text {
+  line-height: 1.4;
+  min-height: 1.4em;
+}

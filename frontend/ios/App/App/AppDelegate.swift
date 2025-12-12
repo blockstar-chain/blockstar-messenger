@@ -3,6 +3,7 @@ import Capacitor
 import PushKit
 import CallKit
 import UserNotifications
+import AVFoundation
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate, PKPushRegistryDelegate, UNUserNotificationCenterDelegate {
@@ -186,18 +187,62 @@ class AppDelegate: UIResponder, UIApplicationDelegate, PKPushRegistryDelegate, U
         print("📬 Notification received in foreground")
         let userInfo = notification.request.content.userInfo
         
+        // Check if device is in silent mode - respect user's audio settings
+        let isSilentMode = isSilentModeEnabled()
+        print("📳 Silent mode: \(isSilentMode)")
+        
         // Check if it's a message notification
         if let type = userInfo["type"] as? String, type == "message" {
-            // Show banner and play sound for messages
+            // Show banner and badge, but only play sound if not in silent mode
             if #available(iOS 14.0, *) {
-                completionHandler([.banner, .sound, .badge])
+                if isSilentMode {
+                    completionHandler([.banner, .badge])  // No sound in silent mode
+                } else {
+                    completionHandler([.banner, .sound, .badge])
+                }
             } else {
-                completionHandler([.alert, .sound, .badge])
+                if isSilentMode {
+                    completionHandler([.alert, .badge])  // No sound in silent mode
+                } else {
+                    completionHandler([.alert, .sound, .badge])
+                }
             }
         } else {
             // For calls, CallKit handles the UI
             completionHandler([])
         }
+    }
+    
+    // MARK: - Silent Mode Detection
+    
+    /// Check if the device is in silent mode
+    /// Returns true if silent switch is on or volume is at minimum
+    private func isSilentModeEnabled() -> Bool {
+        // Check the current audio session category
+        let audioSession = AVAudioSession.sharedInstance()
+        
+        // Check if ringer is silent
+        // We can approximate this by checking if system output volume is very low
+        // Note: iOS doesn't provide direct access to silent switch, but we can check volume
+        let outputVolume = audioSession.outputVolume
+        
+        // If volume is essentially 0, treat as silent
+        if outputVolume < 0.01 {
+            return true
+        }
+        
+        // Also check system settings via Audio Session
+        // Ambient category respects the silent switch
+        do {
+            try audioSession.setCategory(.ambient, mode: .default)
+            // If we can hear audio in ambient mode, we're not silent
+            // Reset to default afterwards
+            try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        } catch {
+            print("⚠️ Error checking audio session: \(error)")
+        }
+        
+        return false
     }
     
     // Called when user taps on notification
@@ -268,12 +313,17 @@ class AppDelegate: UIResponder, UIApplicationDelegate, PKPushRegistryDelegate, U
         let content = UNMutableNotificationContent()
         content.title = senderName
         content.body = message
-        content.sound = .default
         content.badge = NSNumber(value: UIApplication.shared.applicationIconBadgeNumber + 1)
         content.userInfo = [
             "type": "message",
             "conversationId": conversationId
         ]
+        
+        // Only add sound if not in silent mode
+        // Note: The system will also respect silent mode, but we explicitly control it
+        if !isSilentModeEnabledStatic() {
+            content.sound = .default
+        }
         
         let request = UNNotificationRequest(
             identifier: "message-\(conversationId)-\(Date().timeIntervalSince1970)",
@@ -286,6 +336,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate, PKPushRegistryDelegate, U
                 print("❌ Error showing notification: \(error)")
             }
         }
+    }
+    
+    /// Static version of silent mode check
+    private static func isSilentModeEnabledStatic() -> Bool {
+        let audioSession = AVAudioSession.sharedInstance()
+        let outputVolume = audioSession.outputVolume
+        return outputVolume < 0.01
     }
     
     // MARK: - Update Badge

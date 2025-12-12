@@ -1999,7 +1999,15 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                     <span className="text-secondary truncate">
                       {getStatus(otherParticipant || '') === 'online' 
                         ? 'Online' 
-                        : 'Offline'}
+                        : (() => {
+                            // Show last seen time if available
+                            const lastSeenTime = getLastSeen(otherParticipant || '');
+                            if (lastSeenTime) {
+                              return `Last seen ${formatLastSeen(lastSeenTime)}`;
+                            }
+                            return 'Offline';
+                          })()
+                      }
                     </span>
                     <span className="text-muted hidden md:inline">•</span>
                   </>
