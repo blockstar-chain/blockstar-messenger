@@ -554,7 +554,15 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
       try {
         // Handle special system messages for group invites (from offline queue)
         if (message.type === 'system:group_invite' && message.groupInfo) {
-          console.log('📢 Processing offline group invite:', message.groupInfo.groupName);
+          const groupName = message.groupInfo.groupName?.trim();
+          
+          // Validate group name before processing
+          if (!groupName || groupName === 'Group Chat') {
+            console.log('⚠️ Ignoring group invite - no valid group name:', message.groupInfo.id);
+            return;
+          }
+          
+          console.log('📢 Processing offline group invite:', groupName);
           
           const { conversations, addConversation } = useAppStore.getState();
           
@@ -570,7 +578,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
             id: message.groupInfo.id,
             type: 'group',
             participants: message.groupInfo.participants || [],
-            groupName: message.groupInfo.groupName,
+            groupName: groupName,
             groupAvatar: message.groupInfo.groupAvatar,
             admins: message.groupInfo.admins || [],
             createdBy: message.groupInfo.createdBy || '',
@@ -582,7 +590,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           await db.conversations.put(newGroup);
           addConversation(newGroup);
           
-          toast.success(`You were added to group "${message.groupInfo.groupName}"`, { duration: 4000 });
+          toast.success(`You were added to group "${groupName}"`, { duration: 4000 });
           return; // Don't process as regular message
         }
         
@@ -647,45 +655,13 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         // For direct messages, check if conversation exists by ID or by participants
         let conv = conversations.find(c => c.id === conversationId);
         
-        // If not found by ID, try to find by participants
+        // If not found by ID, try to find by participants (only for direct messages)
         if (!conv) {
           if (isGroupMessage) {
-            // For group messages, check if we have a group with these participants
-            // The message might reference a group_id we don't have locally
-            const messageParticipants = Array.isArray(message.recipientId) 
-              ? [...message.recipientId, senderId].map(p => p.toLowerCase()).sort()
-              : [senderId, recipientId].map(p => p.toLowerCase()).sort();
-            
-            conv = conversations.find(c => {
-              if (c.type !== 'group') return false;
-              const convParticipants = (c.participants || []).map(p => p.toLowerCase()).sort();
-              return convParticipants.join(',') === messageParticipants.join(',');
-            });
-            
-            if (conv) {
-              console.log(`📨 Found existing group by participants: ${conv.id} (${(conv as any).groupName})`);
-              displayMessage.conversationId = conv.id;
-              // Use the existing conversation ID for further processing
-              const existingConvId = conv.id;
-              
-              // Update the existing conversation
-              const updates: any = {
-                lastMessage: displayMessage,
-                updatedAt: Date.now()
-              };
-              
-              const isActiveConv = currentActiveId === existingConvId;
-              if (!isActiveConv) {
-                updates.unreadCount = (conv.unreadCount || 0) + 1;
-              }
-              
-              useAppStore.getState().updateConversation(existingConvId, updates);
-              await db.conversations.update(existingConvId, updates);
-              
-              addMessage(displayMessage);
-              webSocketService.markDelivered(message.id);
-              return; // Don't continue to create a new conversation
-            }
+            // REMOVED: Participant-based matching for groups
+            // Each group has a unique ID - we should not route messages to wrong groups
+            // If we don't have this group, we'll create it from groupInfo or wait for group:created
+            console.log(`📨 Group ${conversationId} not found locally, will create from groupInfo if available`);
           } else {
             // For direct messages
             const participants = [senderId, recipientId].map(p => p.toLowerCase()).sort();
@@ -731,14 +707,15 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           if (isGroupMessage) {
             // For group messages, try to create the group from groupInfo if available
             // This handles the case where group:created event was missed
-            if (message.groupInfo && message.groupInfo.groupName) {
-              console.log(`📨 Creating group from message groupInfo: ${message.groupInfo.groupName}`);
+            const groupName = message.groupInfo?.groupName?.trim();
+            if (message.groupInfo && groupName && groupName !== 'Group Chat') {
+              console.log(`📨 Creating group from message groupInfo: ${groupName}`);
               
               const newGroup: Conversation = {
                 id: conversationId,
                 type: 'group',
                 participants: message.groupInfo.participants || [],
-                groupName: message.groupInfo.groupName,
+                groupName: groupName,
                 groupAvatar: message.groupInfo.groupAvatar,
                 admins: message.groupInfo.admins || [],
                 createdBy: message.groupInfo.createdBy || '',
@@ -1067,27 +1044,46 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
     if (!activeConversationId) return;
     
     try {
-      // Delete from local database
+      console.log(`🗑️ Deleting message: ${messageId} from conversation: ${activeConversationId}`);
+      
+      // Delete from local database (IndexedDB)
       await db.messages.delete(messageId);
+      console.log(`🗑️ Deleted from IndexedDB`);
       
       // Update UI immediately
       const msgs = messages.get(activeConversationId) || [];
       const updatedMsgs = msgs.filter(m => m.id !== messageId);
       setMessages(activeConversationId, updatedMsgs);
       decryptedContentCache.delete(messageId);
+      console.log(`🗑️ Removed from UI state`);
       
-      // Sync deletion to server
+      // CRITICAL: Also clear the message from the API cache
+      // This prevents the message from reappearing when navigating away and back
+      dbHelpers.removeMessageFromCache(activeConversationId, messageId);
+      console.log(`🗑️ Removed from API cache`);
+      
+      // Sync deletion to server - MUST succeed for persistent deletion
       const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
       try {
-        await fetch(`${API_URL}/api/messages/${messageId}`, {
+        const response = await fetch(`${API_URL}/api/messages/${messageId}`, {
           method: 'DELETE',
         });
+        
+        const result = await response.json();
+        if (response.ok && result.success) {
+          console.log(`✅ Server confirmed message deletion: ${messageId}`);
+        } else {
+          console.warn(`⚠️ Server could not delete message: ${messageId}`, result);
+          // Still show success to user since local delete worked
+        }
       } catch (syncError) {
         console.warn('Could not sync message deletion to server:', syncError);
+        // Still show success to user since local delete worked
       }
       
       toast.success('Message deleted');
     } catch (error) {
+      console.error('Failed to delete message:', error);
       toast.error('Failed to delete message');
     }
     

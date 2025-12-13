@@ -532,7 +532,14 @@ export default function Sidebar({
     const unsubscribe = webSocketService.on('group:created', async (data: { group: any; createdBy: string }) => {
       console.log('📢 Received group:created event:', data);
 
-      // Check if we already have this group by ID
+      // Reject groups without proper names
+      const groupName = data.group?.groupName || data.group?.name || '';
+      if (!groupName || groupName === 'Group Chat' || groupName.trim() === '') {
+        console.log('⚠️ Ignoring group:created event - no valid group name:', data.group?.id);
+        return;
+      }
+
+      // Check if we already have this group by ID only
       const existingById = conversations.find(c => c.id === data.group.id);
       if (existingById) {
         console.log('Group already exists by ID:', data.group.id);
@@ -554,31 +561,8 @@ export default function Sidebar({
         return;
       }
 
-      // Also check by participants to avoid duplicates
-      const newParticipants = (data.group.participants || []).map((p: string) => p.toLowerCase()).sort().join(',');
-      const existingByParticipants = conversations.find(c => {
-        if (c.type !== 'group') return false;
-        const existingParticipants = (c.participants || []).map(p => p.toLowerCase()).sort().join(',');
-        return existingParticipants === newParticipants;
-      });
-
-      if (existingByParticipants) {
-        console.log('Group already exists by participants:', newParticipants);
-        // Update the existing group with the new info - this group has the authoritative name
-        useAppStore.getState().updateConversation(existingByParticipants.id, {
-          groupName: data.group.groupName,
-          groupAvatar: data.group.groupAvatar,
-          admins: data.group.admins,
-          createdBy: data.group.createdBy,
-        });
-        db.conversations.update(existingByParticipants.id, {
-          groupName: data.group.groupName,
-          groupAvatar: data.group.groupAvatar,
-          admins: data.group.admins,
-          createdBy: data.group.createdBy,
-        });
-        return;
-      }
+      // REMOVED: Participant-based matching
+      // Each group has a unique ID - we should not merge groups with same participants
 
       // Add the group to our conversations
       const newGroup: Conversation = {
@@ -786,43 +770,34 @@ export default function Sidebar({
       }
 
       let allConversations = await db.conversations.toArray();
+      
+      // Filter out invalid groups (groups without proper names)
+      // These are phantom groups created by bugs
+      const beforeFilter = allConversations.length;
+      allConversations = allConversations.filter(c => {
+        if (c.type === 'group') {
+          const name = c.groupName || '';
+          if (!name || name === 'Group Chat' || name.trim() === '') {
+            console.log(`⚠️ Filtering out invalid local group: ${c.id} (name: "${name}")`);
+            // Also delete from IndexedDB
+            db.conversations.delete(c.id).catch(() => {});
+            return false;
+          }
+        }
+        return true;
+      });
+      
+      if (beforeFilter !== allConversations.length) {
+        console.log(`🧹 Filtered out ${beforeFilter - allConversations.length} invalid local groups`);
+      }
+      
       const localGroups = allConversations.filter(c => c.type === 'group');
       const localDirects = allConversations.filter(c => c.type === 'direct');
       console.log(`📋 Found ${allConversations.length} in IndexedDB (${localGroups.length} groups, ${localDirects.length} direct)`);
 
-      // CRITICAL: Remove any groups named "Group Chat" that shouldn't exist
-      // These are created by bugs and should never be shown to users
-      const groupChatGroups = allConversations.filter(c =>
-        c.type === 'group' && (c as any).groupName === 'Group Chat'
-      );
-
-      for (const badGroup of groupChatGroups) {
-        // Check if there's a properly named group with the same participants
-        const participants = (badGroup.participants || []).map(p => p.toLowerCase()).sort().join(',');
-        const properGroup = allConversations.find(c =>
-          c.type === 'group' &&
-          c.id !== badGroup.id &&
-          (c as any).groupName !== 'Group Chat' &&
-          (c.participants || []).map(p => p.toLowerCase()).sort().join(',') === participants
-        );
-
-        if (properGroup) {
-          // There's a proper group with same participants, delete the "Group Chat" one
-          console.log(`🗑️ Removing duplicate "Group Chat" group, proper group exists: ${(properGroup as any).groupName}`);
-          await db.conversations.delete(badGroup.id);
-        } else {
-          // No proper group exists - this group shouldn't exist at all
-          // Check if it has any messages
-          const messages = await db.messages.where('conversationId').equals(badGroup.id).count();
-          if (messages === 0) {
-            console.log(`🗑️ Removing empty "Group Chat" group with no proper alternative`);
-            await db.conversations.delete(badGroup.id);
-          }
-        }
-      }
-
-      // Reload after cleanup
-      allConversations = await db.conversations.toArray();
+      // REMOVED: Group deduplication logic
+      // Users should be able to have multiple groups with the same participants
+      // Each group has a unique ID and should be preserved
 
       // Filter out deleted conversations
       allConversations = allConversations.filter(c => !deletedIds.has(c.id));
@@ -830,16 +805,7 @@ export default function Sidebar({
       // Always try to sync from server to catch conversations from other devices
       const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
 
-      // First, cleanup any duplicate groups on the server
-      try {
-        await fetch(`${API_URL}/api/conversations/cleanup-duplicates`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ walletAddress: currentUser.walletAddress }),
-        });
-      } catch (cleanupError) {
-        console.warn('Could not cleanup duplicates:', cleanupError);
-      }
+      // REMOVED: cleanup-duplicates API call - we want to keep all groups
 
       try {
         const response = await fetch(`${API_URL}/api/conversations/${currentUser.walletAddress}`);
@@ -875,21 +841,8 @@ export default function Sidebar({
               // Check if we already have this conversation locally by ID
               let existingLocal = allConversations.find(c => c.id === serverConv.id);
 
-              // For groups, also check if we have a local group with same participants (deduplication)
-              if (!existingLocal && serverConv.type === 'group') {
-                const serverParticipants = (serverConv.participants || []).map((p: string) => p.toLowerCase()).sort().join(',');
-                existingLocal = allConversations.find(c => {
-                  if (c.type !== 'group') return false;
-                  const localParticipants = (c.participants || []).map((p: string) => p.toLowerCase()).sort().join(',');
-                  return localParticipants === serverParticipants;
-                });
-
-                if (existingLocal) {
-                  console.log(`📋 Found duplicate group by participants, using local ID: ${existingLocal.id}`);
-                  // Skip this server conversation - we already have it locally
-                  continue;
-                }
-              }
+              // REMOVED: Group deduplication by participants
+              // We want to allow multiple groups with the same people
 
               const conversation: Conversation = {
                 id: serverConv.id,
@@ -948,51 +901,9 @@ export default function Sidebar({
         console.warn('Could not fetch from server:', fetchError);
       }
 
-      // Deduplicate groups in IndexedDB by participants
-      const seenGroupParticipants = new Map<string, Conversation>();
-      const duplicatesToRemove: string[] = [];
-
-      for (const conv of allConversations) {
-        if (conv.type === 'group') {
-          const participantsKey = (conv.participants || []).map(p => p.toLowerCase()).sort().join(',');
-          const existing = seenGroupParticipants.get(participantsKey);
-
-          if (existing) {
-            // We have a duplicate - keep the one with proper groupName or more recent
-            const existingHasName = (existing as any).groupName && (existing as any).groupName !== 'Group Chat';
-            const convHasName = (conv as any).groupName && (conv as any).groupName !== 'Group Chat';
-
-            if (convHasName && !existingHasName) {
-              // New one has better name, remove old
-              duplicatesToRemove.push(existing.id);
-              seenGroupParticipants.set(participantsKey, conv);
-            } else if (!convHasName && existingHasName) {
-              // Old one has better name, remove new
-              duplicatesToRemove.push(conv.id);
-            } else if (conv.updatedAt > existing.updatedAt) {
-              // New one is more recent
-              duplicatesToRemove.push(existing.id);
-              seenGroupParticipants.set(participantsKey, conv);
-            } else {
-              // Old one is more recent or same
-              duplicatesToRemove.push(conv.id);
-            }
-          } else {
-            seenGroupParticipants.set(participantsKey, conv);
-          }
-        }
-      }
-
-      // Remove duplicates from IndexedDB
-      if (duplicatesToRemove.length > 0) {
-        console.log(`🧹 Removing ${duplicatesToRemove.length} duplicate groups from IndexedDB`);
-        for (const id of duplicatesToRemove) {
-          await db.conversations.delete(id);
-        }
-        // Refresh the list
-        allConversations = await db.conversations.toArray();
-        allConversations = allConversations.filter(c => !deletedIds.has(c.id));
-      }
+      // REMOVED: Group deduplication by participants
+      // We want to allow multiple groups with the same people
+      // Each group has a unique ID and should be preserved
 
       const sorted = allConversations.sort((a, b) => b.updatedAt - a.updatedAt);
 

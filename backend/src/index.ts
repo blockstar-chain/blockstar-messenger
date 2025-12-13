@@ -979,23 +979,13 @@ app.get('/api/conversations/:walletAddress', async (req, res) => {
       console.log(`   [DIRECT] ${d._id}: participants=${JSON.stringify(d.participants)}`);
     });
 
-    // Deduplicate groups by participants (in case of old data without group_id)
-    const seenGroupParticipants = new Set<string>();
-    const deduplicatedConversations = conversations.filter(conv => {
-      if (conv.type === 'group') {
-        const participantsKey = conv.participants.sort().join(',');
-        if (seenGroupParticipants.has(participantsKey)) {
-          console.log(`🔄 Skipping duplicate group with participants: ${participantsKey}`);
-          return false;
-        }
-        seenGroupParticipants.add(participantsKey);
-      }
-      return true;
-    });
+    // REMOVED: Participant-based deduplication
+    // Users should be able to have multiple groups with the same participants
+    // Each group has a unique group_id and should be preserved
 
     // Enrich conversations with last message
     const enrichedConversations = await Promise.all(
-      deduplicatedConversations.map(async (conv) => {
+      conversations.map(async (conv) => {
         // Cast to any to access group-specific fields
         const convAny = conv as any;
 

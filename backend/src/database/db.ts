@@ -363,44 +363,10 @@ export async function createGroupConversation(group: any): Promise<string> {
   // Normalize participants to lowercase
   const participants = (group.participants || []).map((p: string) => p.toLowerCase());
 
-  // Also check if a group with same participants exists (to prevent duplicates)
-  const sortedParticipants = [...participants].sort();
-  existing = await conversationsCollection.findOne({
-    type: 'group',
-    participants: { $all: sortedParticipants, $size: sortedParticipants.length }
-  });
-
-  if (existing) {
-    const existingAny = existing as any;
-    console.log('⚠️ Group already exists by participants:', existingAny.group_id || existing._id);
-    console.log('  Existing created_by:', existingAny.created_by);
-    console.log('  Existing admins:', existingAny.admins);
-
-    // Update the existing group with the new group_id, created_by, and admins if not set
-    const updateFields: any = { updated_at: now };
-
-    if (!existingAny.group_id) {
-      updateFields.group_id = groupId;
-    }
-    if (groupName) {
-      updateFields.name = groupName;
-    }
-    // Always update created_by and admins if they're provided and not already set
-    if (group.createdBy && !existingAny.created_by) {
-      updateFields.created_by = group.createdBy.toLowerCase();
-    }
-    if (group.admins && group.admins.length > 0 && (!existingAny.admins || existingAny.admins.length === 0)) {
-      updateFields.admins = group.admins.map((a: string) => a.toLowerCase());
-    }
-
-    await conversationsCollection.updateOne(
-      { _id: existing._id },
-      { $set: updateFields }
-    );
-    console.log('🔧 Updated existing group with fields:', Object.keys(updateFields));
-
-    return existingAny.group_id || existing._id!.toString();
-  }
+  // REMOVED: Check for existing group with same participants
+  // This was causing groups to be overwritten/renamed instead of creating new ones
+  // Users should be able to create unlimited groups with the same people
+  // Each group has a unique group_id from the frontend, so they won't collide
 
   // Create new group - prepare the document
   const createdBy = (group.createdBy || '').toLowerCase();
@@ -1619,68 +1585,12 @@ export async function isConversationHiddenForUser(
 export async function cleanupDuplicateGroups(
   walletAddress: string
 ): Promise<{ removed: number; kept: number }> {
-  const normalizedAddress = walletAddress.toLowerCase();
-
-  // Get all groups the user is a participant in
-  const groups = await conversationsCollection.find({
-    type: 'group',
-    participants: normalizedAddress
-  }).toArray();
-
-  // Group by participants (sorted)
-  const groupsByParticipants = new Map<string, any[]>();
-
-  for (const group of groups) {
-    const participantsKey = group.participants.sort().join(',');
-    if (!groupsByParticipants.has(participantsKey)) {
-      groupsByParticipants.set(participantsKey, []);
-    }
-    groupsByParticipants.get(participantsKey)!.push(group);
-  }
-
-  let removed = 0;
-  let kept = 0;
-
-  // For each set of duplicates, keep the best one and remove the rest
-  for (const [participantsKey, duplicates] of groupsByParticipants) {
-    if (duplicates.length <= 1) {
-      kept++;
-      continue;
-    }
-
-    // Sort to find the best one to keep:
-    // 1. Prefer ones with group_id set (frontend-generated)
-    // 2. Prefer ones with a proper name (not null or "Group Chat")
-    // 3. Prefer most recently updated
-    duplicates.sort((a, b) => {
-      // Prefer ones with group_id
-      const aHasGroupId = !!a.group_id;
-      const bHasGroupId = !!b.group_id;
-      if (aHasGroupId && !bHasGroupId) return -1;
-      if (!aHasGroupId && bHasGroupId) return 1;
-
-      // Prefer ones with a proper name
-      const aHasName = a.name && a.name !== 'Group Chat';
-      const bHasName = b.name && b.name !== 'Group Chat';
-      if (aHasName && !bHasName) return -1;
-      if (!aHasName && bHasName) return 1;
-
-      // Prefer most recently updated
-      return (b.updated_at?.getTime() || 0) - (a.updated_at?.getTime() || 0);
-    });
-
-    // Keep the first one, delete the rest
-    const [toKeep, ...toRemove] = duplicates;
-    console.log(`🧹 Keeping group "${toKeep.name}" (${toKeep.group_id || toKeep._id}), removing ${toRemove.length} duplicates`);
-
-    for (const dup of toRemove) {
-      await conversationsCollection.deleteOne({ _id: dup._id });
-      removed++;
-    }
-    kept++;
-  }
-
-  return { removed, kept };
+  // DISABLED: We now allow multiple groups with the same participants
+  // Each group has a unique ID and should be preserved
+  // This function was removing groups that users intentionally created
+  console.log('🧹 cleanupDuplicateGroups called but DISABLED - keeping all groups');
+  
+  return { removed: 0, kept: 0 };
 }
 
 // ============================================

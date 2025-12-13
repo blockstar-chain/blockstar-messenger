@@ -27,6 +27,19 @@ export function useIncomingCallFromNotification(options: UseIncomingCallFromNoti
   const { onIncomingCall, onAnswerCall, onDeclineCall, enabled = true } = options;
   const { setIncomingCall, currentUser } = useAppStore();
   const processedCallIds = useRef<Set<string>>(new Set());
+  
+  // Use refs for callbacks to avoid re-running the effect when callbacks change
+  // This prevents the excessive re-render issue
+  const onIncomingCallRef = useRef(onIncomingCall);
+  const onAnswerCallRef = useRef(onAnswerCall);
+  const onDeclineCallRef = useRef(onDeclineCall);
+  
+  // Keep refs updated
+  useEffect(() => {
+    onIncomingCallRef.current = onIncomingCall;
+    onAnswerCallRef.current = onAnswerCall;
+    onDeclineCallRef.current = onDeclineCall;
+  });
 
   // Notify that a call was answered (to stop ringtone on other devices, etc.)
   const notifyAnswered = useCallback(async (callId: string) => {
@@ -43,7 +56,7 @@ export function useIncomingCallFromNotification(options: UseIncomingCallFromNoti
 
   useEffect(() => {
     if (!enabled || !currentUser?.walletAddress) {
-      console.log('📞 useIncomingCallFromNotification: Not enabled or no user');
+      // Only log once when not enabled
       return;
     }
 
@@ -95,12 +108,12 @@ export function useIncomingCallFromNotification(options: UseIncomingCallFromNoti
           autoAnswer: true, // Signal to auto-answer
         }));
 
-        onAnswerCall?.(data);
+        onAnswerCallRef.current?.(data);
 
       } else if (data.action === 'decline') {
         console.log('📞 User tapped DECLINE from notification');
-        notifyDeclined(data.callId);
-        onDeclineCall?.(data);
+        webSocketService.emit('call:decline', { callId: data.callId });
+        onDeclineCallRef.current?.(data);
 
       } else {
         // Just opened from notification tap (not answer/decline button)
@@ -121,7 +134,7 @@ export function useIncomingCallFromNotification(options: UseIncomingCallFromNoti
           autoAnswer: false,
         }));
 
-        onIncomingCall?.(data);
+        onIncomingCallRef.current?.(data);
       }
     };
 
@@ -136,7 +149,9 @@ export function useIncomingCallFromNotification(options: UseIncomingCallFromNoti
     return () => {
       window.removeEventListener('incomingCallFromNotification', handleNativeCallEvent as EventListener);
     };
-  }, [enabled, currentUser?.walletAddress, setIncomingCall, onIncomingCall, onAnswerCall, onDeclineCall, notifyDeclined]);
+  }, [enabled, currentUser?.walletAddress, setIncomingCall]);
+  // REMOVED: onIncomingCall, onAnswerCall, onDeclineCall, notifyDeclined from deps
+  // These are now accessed via refs to prevent re-running the effect
 
   return { notifyAnswered, notifyDeclined };
 }
@@ -170,6 +185,12 @@ export function useMessageFromNotification(options: {
 } = {}) {
   const { onOpenConversation, enabled = true } = options;
   const { setActiveConversation } = useAppStore();
+  
+  // Use ref to avoid re-running effect when callback changes
+  const onOpenConversationRef = useRef(onOpenConversation);
+  useEffect(() => {
+    onOpenConversationRef.current = onOpenConversation;
+  });
 
   useEffect(() => {
     if (!enabled) return;
@@ -180,7 +201,7 @@ export function useMessageFromNotification(options: {
       console.log('💬 Opening conversation from notification:', conversationId);
       
       setActiveConversation(conversationId);
-      onOpenConversation?.(conversationId);
+      onOpenConversationRef.current?.(conversationId);
     };
 
     window.addEventListener('openConversationFromNotification', handleMessageEvent as EventListener);
@@ -188,5 +209,6 @@ export function useMessageFromNotification(options: {
     return () => {
       window.removeEventListener('openConversationFromNotification', handleMessageEvent as EventListener);
     };
-  }, [enabled, setActiveConversation, onOpenConversation]);
+  }, [enabled, setActiveConversation]);
+  // REMOVED: onOpenConversation from deps - accessed via ref
 }

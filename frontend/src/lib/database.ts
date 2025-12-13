@@ -125,6 +125,16 @@ export const dbHelpers = {
     }
   },
 
+  // Remove a message from the cache (used when deleting messages)
+  removeMessageFromCache(conversationId: string, messageId: string): void {
+    if (messageCache.has(conversationId)) {
+      const messages = messageCache.get(conversationId) || [];
+      const filtered = messages.filter(m => m.id !== messageId);
+      messageCache.set(conversationId, filtered);
+      console.log(`🗑️ Removed message ${messageId} from cache for conversation ${conversationId}`);
+    }
+  },
+
   // User data - not storing locally
   async getUser(_walletAddress: string): Promise<User | undefined> {
     return undefined;
