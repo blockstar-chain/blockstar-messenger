@@ -510,6 +510,44 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
     return () => unsubscribe();
   }, [userStatuses, otherParticipant, encryptionStatus]);
 
+  // iOS keyboard handling - scroll input into view when keyboard opens
+  useEffect(() => {
+    // Only run on iOS/mobile
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    if (!isIOS && !('visualViewport' in window)) return;
+
+    const inputEl = inputRef.current;
+    if (!inputEl) return;
+
+    // Handle focus - scroll input into view
+    const handleFocus = () => {
+      // Small delay to let keyboard animate open
+      setTimeout(() => {
+        inputEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 300);
+    };
+
+    // Visual viewport resize handler for iOS keyboard
+    const handleViewportResize = () => {
+      if (document.activeElement === inputEl) {
+        inputEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    };
+
+    inputEl.addEventListener('focus', handleFocus);
+    
+    if ('visualViewport' in window && window.visualViewport) {
+      window.visualViewport.addEventListener('resize', handleViewportResize);
+    }
+
+    return () => {
+      inputEl.removeEventListener('focus', handleFocus);
+      if ('visualViewport' in window && window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', handleViewportResize);
+      }
+    };
+  }, []);
+
   // Listen for incoming messages
   useEffect(() => {
     const unsubscribe = webSocketService.onMessage(async (message) => {
@@ -2187,7 +2225,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
       )}
 
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-3 md:p-6 space-y-3 md:space-y-4 bg-midnight">
+      <div className="flex-1 overflow-y-auto p-3 md:p-6 space-y-3 md:space-y-4 bg-midnight chat-messages-container">
         {/* Encryption notice */}
         <div className="flex justify-center mb-2 md:mb-4">
           {encryptionStatus === 'encrypted' ? (
@@ -2727,7 +2765,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
       )}
 
       {/* Message Input */}
-      <div className="bg-midnight-light border-t border-midnight p-3 md:p-4 pb-safe flex-shrink-0">
+      <div className="bg-midnight-light border-t border-midnight p-3 md:p-4 pb-safe flex-shrink-0 chat-input-container">
         <input
           type="file"
           ref={fileInputRef}

@@ -15,6 +15,7 @@ import {
   initializePushNotifications,
 } from '@/lib/pushNotifications';
 import { useAuthSession } from '@/hooks/useAutoLogin';
+import { useEncryptionInit } from '@/hooks/useEncryptionInit';
 import {
   setUnreadMessageCount,
   requestNotificationPermission,
@@ -51,6 +52,11 @@ export default function MainLayout() {
   // AUTO-LOGIN: This MUST run first!
   // ========================================
   const { isChecking: isCheckingAuth, isRestored } = useAuthSession();
+
+  // ========================================
+  // ENCRYPTION: Initialize when wallet is connected
+  // ========================================
+  const { isReady: isEncryptionReady, isInitializing: isInitializingEncryption, needsSignature } = useEncryptionInit();
 
   // ========================================
   // HANDLE CALLS/MESSAGES FROM NOTIFICATIONS
