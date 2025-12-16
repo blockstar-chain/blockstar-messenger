@@ -163,6 +163,8 @@ export default function Sidebar({
     viaMesh?: boolean;
   } | null>(null);
 
+  // NOTE: useIncomingCallFromNotification is already used in MainLayout
+  // We just get the utility functions here without setting up duplicate listeners
   const { notifyAnswered, notifyDeclined } = useIncomingCallFromNotification({
     onIncomingCall: (data: PendingCallData) => {
       console.log('📞 Incoming call from notification:', data);
@@ -170,12 +172,13 @@ export default function Sidebar({
         setIncomingCallData({
           callId: data.callId,
           callerId: data.callerId || '',
-          callerName: data.caller || 'Unknown',
+          callerName: data.callerName || data.caller || 'Unknown',
           callType: data.callType || 'audio',
         });
         setShowIncomingCall(true);
       }
     },
+    // This instance shares listeners with MainLayout due to global flag
     enabled: !!currentUser?.walletAddress
   });
 
@@ -872,6 +875,27 @@ export default function Sidebar({
 
               // Update or add conversation
               if (existingLocal) {
+                // Build lastMessage from server if available
+                const serverLastMessage = serverConv.lastMessage ? {
+                  id: serverConv.lastMessage.id,
+                  conversationId: serverConv.id,
+                  senderId: serverConv.lastMessage.senderWallet,
+                  recipientId: serverConv.participants.find((p: string) => p !== serverConv.lastMessage.senderWallet) || '',
+                  content: serverConv.lastMessage.content,
+                  timestamp: serverConv.lastMessage.timestamp,
+                  type: serverConv.lastMessage.type || 'text',
+                  delivered: true,
+                  read: false,
+                } : null;
+                
+                // Determine which lastMessage to use (prefer more recent)
+                let finalLastMessage = existingLocal.lastMessage;
+                if (serverLastMessage) {
+                  if (!existingLocal.lastMessage || serverLastMessage.timestamp > existingLocal.lastMessage.timestamp) {
+                    finalLastMessage = serverLastMessage;
+                  }
+                }
+                
                 // Update existing local conversation with server data (especially admin/creator info)
                 const updatedConv = {
                   ...existingLocal,
@@ -881,6 +905,8 @@ export default function Sidebar({
                   groupName: serverConv.groupName || serverConv.name || existingLocal.groupName,
                   groupAvatar: serverConv.groupAvatar || serverConv.avatarUrl || existingLocal.groupAvatar,
                   updatedAt: Math.max(serverConv.updatedAt || 0, existingLocal.updatedAt || 0),
+                  // Update lastMessage if server has a more recent one
+                  lastMessage: finalLastMessage,
                 };
                 await db.conversations.put(updatedConv);
                 if (serverConv.type === 'group') {
@@ -1529,6 +1555,15 @@ export default function Sidebar({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2.5 bg-card border border-midnight rounded-xl text-white placeholder-muted focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500/50 transition"
+              onFocus={(e) => {
+                // iOS keyboard scroll fix
+                setTimeout(() => {
+                  e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 100);
+                setTimeout(() => {
+                  e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 300);
+              }}
             />
           </div>
 
@@ -1693,6 +1728,22 @@ export default function Sidebar({
                                 // Handle encrypted group message marker
                                 if (content === '__ENCRYPTED_GROUP__') {
                                   return '🔒 Encrypted message';
+                                }
+                                // Check if it's a system message JSON
+                                if (content.startsWith('{"isSystemMessage"')) {
+                                  try {
+                                    const parsed = JSON.parse(content);
+                                    if (parsed.systemMessageType === 'missed_call') {
+                                      const callType = parsed.callType === 'video' ? '📹' : '📞';
+                                      return `${callType} Missed ${parsed.callType || 'audio'} call`;
+                                    }
+                                    if (parsed.systemMessageType === 'call_ended') {
+                                      return '📞 Call ended';
+                                    }
+                                    return '📋 System message';
+                                  } catch {
+                                    return '📋 System message';
+                                  }
                                 }
                                 // Check if it's a JSON voice/file message
                                 if (content.startsWith('{"type":"voice"')) {
@@ -1899,6 +1950,15 @@ export default function Sidebar({
                       onChange={(e) => setNewChatAddress(e.target.value)}
                       className="w-full px-4 py-3 bg-dark-200 border-2 border-gray-600 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/50 focus:shadow-[0_0_15px_rgba(0,102,255,0.3)] transition mb-4"
                       onKeyDown={(e) => e.key === 'Enter' && handleStartNewChat()}
+                      onFocus={(e) => {
+                        // iOS keyboard scroll fix
+                        setTimeout(() => {
+                          e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }, 100);
+                        setTimeout(() => {
+                          e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }, 300);
+                      }}
                       autoComplete="off"
                       autoCapitalize="off"
                     />
@@ -1983,6 +2043,15 @@ export default function Sidebar({
                     value={groupName}
                     onChange={(e) => setGroupName(e.target.value)}
                     className="w-full px-4 py-3 bg-dark-200 border-2 border-gray-600 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/50 focus:shadow-[0_0_15px_rgba(0,102,255,0.3)] transition"
+                    onFocus={(e) => {
+                      // iOS keyboard scroll fix
+                      setTimeout(() => {
+                        e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      }, 100);
+                      setTimeout(() => {
+                        e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      }, 300);
+                    }}
                     autoComplete="off"
                   />
                 </div>
@@ -2004,6 +2073,15 @@ export default function Sidebar({
                       value={groupAvatar}
                       onChange={(e) => setGroupAvatar(e.target.value)}
                       className="flex-1 px-4 py-3 bg-dark-200 border-2 border-gray-600 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/50 focus:shadow-[0_0_15px_rgba(0,102,255,0.3)] transition text-sm"
+                      onFocus={(e) => {
+                        // iOS keyboard scroll fix
+                        setTimeout(() => {
+                          e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }, 100);
+                        setTimeout(() => {
+                          e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }, 300);
+                      }}
                       autoComplete="off"
                     />
                   </div>
@@ -2046,6 +2124,15 @@ export default function Sidebar({
                         onChange={(e) => setMemberInput(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && handleAddMember()}
                         className="flex-1 px-4 py-3 bg-dark-200 border-2 border-gray-600 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/50 focus:shadow-[0_0_15px_rgba(0,102,255,0.3)] transition"
+                        onFocus={(e) => {
+                          // iOS keyboard scroll fix
+                          setTimeout(() => {
+                            e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                          }, 100);
+                          setTimeout(() => {
+                            e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                          }, 300);
+                        }}
                         autoComplete="off"
                         autoCapitalize="off"
                       />

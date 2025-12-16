@@ -11,6 +11,7 @@ export interface PendingCallData {
   callId: string;
   callerId: string;
   callerName: string;
+  caller?: string; // Alias for callerName
   callType: 'audio' | 'video';
   action?: 'answer' | 'decline' | null;
   fromNotification: boolean;
@@ -23,22 +24,30 @@ interface UseIncomingCallFromNotificationOptions {
   enabled?: boolean;
 }
 
+// Global flag to prevent multiple instances from setting up listeners
+let globalListenersSetUp = false;
+
 export function useIncomingCallFromNotification(options: UseIncomingCallFromNotificationOptions = {}) {
   const { onIncomingCall, onAnswerCall, onDeclineCall, enabled = true } = options;
   const { setIncomingCall, currentUser } = useAppStore();
   const processedCallIds = useRef<Set<string>>(new Set());
+  const hasSetupRef = useRef(false);
   
   // Use refs for callbacks to avoid re-running the effect when callbacks change
   // This prevents the excessive re-render issue
   const onIncomingCallRef = useRef(onIncomingCall);
   const onAnswerCallRef = useRef(onAnswerCall);
   const onDeclineCallRef = useRef(onDeclineCall);
+  const setIncomingCallRef = useRef(setIncomingCall);
+  const currentUserRef = useRef(currentUser);
   
-  // Keep refs updated
+  // Keep refs updated without triggering effect re-runs
   useEffect(() => {
     onIncomingCallRef.current = onIncomingCall;
     onAnswerCallRef.current = onAnswerCall;
     onDeclineCallRef.current = onDeclineCall;
+    setIncomingCallRef.current = setIncomingCall;
+    currentUserRef.current = currentUser;
   });
 
   // Notify that a call was answered (to stop ringtone on other devices, etc.)
@@ -55,21 +64,42 @@ export function useIncomingCallFromNotification(options: UseIncomingCallFromNoti
   }, []);
 
   useEffect(() => {
+    // Only setup if enabled and has wallet
     if (!enabled || !currentUser?.walletAddress) {
-      // Only log once when not enabled
       return;
     }
 
+    // Prevent duplicate setups - only log once per component instance
+    if (hasSetupRef.current) {
+      return;
+    }
+    
+    // Check if global listeners are already set up by another instance
+    if (globalListenersSetUp) {
+      // Still mark this instance as set up to prevent future re-runs
+      hasSetupRef.current = true;
+      return;
+    }
+
+    hasSetupRef.current = true;
+    globalListenersSetUp = true;
+    
     console.log('📞 useIncomingCallFromNotification: Setting up listeners');
 
     // Handler for native events
     const handleNativeCallEvent = (event: CustomEvent<PendingCallData>) => {
       const data = event.detail;
+      const user = currentUserRef.current;
+      
+      if (!user?.walletAddress) {
+        console.log('📞 No current user, ignoring call event');
+        return;
+      }
       
       console.log('═══════════════════════════════════════');
       console.log('📞 INCOMING CALL FROM NOTIFICATION');
       console.log('  Call ID:', data.callId);
-      console.log('  Caller:', data.callerName);
+      console.log('  Caller:', data.callerName || data.caller);
       console.log('  Type:', data.callType);
       console.log('  Action:', data.action);
       console.log('═══════════════════════════════════════');
@@ -87,15 +117,18 @@ export function useIncomingCallFromNotification(options: UseIncomingCallFromNoti
         ids.slice(0, ids.length - 10).forEach(id => processedCallIds.current.delete(id));
       }
 
+      // Normalize caller name
+      const callerName = data.callerName || data.caller || 'Unknown';
+
       // Handle based on action
       if (data.action === 'answer') {
         console.log('📞 User tapped ANSWER from notification');
         
         // Set incoming call state so the modal shows
-        setIncomingCall({
+        setIncomingCallRef.current({
           id: data.callId,
           callerId: data.callerId,
-          recipientId: currentUser.walletAddress,
+          recipientId: user.walletAddress,
           type: data.callType,
           status: 'ringing',
           startTime: Date.now(),
@@ -103,7 +136,7 @@ export function useIncomingCallFromNotification(options: UseIncomingCallFromNoti
 
         // Store caller info
         sessionStorage.setItem('incomingCallInfo', JSON.stringify({
-          callerName: data.callerName,
+          callerName,
           callType: data.callType,
           autoAnswer: true, // Signal to auto-answer
         }));
@@ -119,17 +152,17 @@ export function useIncomingCallFromNotification(options: UseIncomingCallFromNoti
         // Just opened from notification tap (not answer/decline button)
         console.log('📞 User tapped notification (showing call modal)');
         
-        setIncomingCall({
+        setIncomingCallRef.current({
           id: data.callId,
           callerId: data.callerId,
-          recipientId: currentUser.walletAddress,
+          recipientId: user.walletAddress,
           type: data.callType,
           status: 'ringing',
           startTime: Date.now(),
         });
 
         sessionStorage.setItem('incomingCallInfo', JSON.stringify({
-          callerName: data.callerName,
+          callerName,
           callType: data.callType,
           autoAnswer: false,
         }));
@@ -148,10 +181,11 @@ export function useIncomingCallFromNotification(options: UseIncomingCallFromNoti
 
     return () => {
       window.removeEventListener('incomingCallFromNotification', handleNativeCallEvent as EventListener);
+      globalListenersSetUp = false;
+      hasSetupRef.current = false;
     };
-  }, [enabled, currentUser?.walletAddress, setIncomingCall]);
-  // REMOVED: onIncomingCall, onAnswerCall, onDeclineCall, notifyDeclined from deps
-  // These are now accessed via refs to prevent re-running the effect
+  }, [enabled, currentUser?.walletAddress]);
+  // Dependencies kept minimal - refs handle the rest
 
   return { notifyAnswered, notifyDeclined };
 }
@@ -172,35 +206,50 @@ async function checkForPendingCallData() {
       console.log('📞 Launch URL:', launchUrl);
     }
   } catch (error) {
-    console.log('📞 No pending call data from native');
+    // Silently handle - no pending call data
   }
 }
 
 /**
  * Hook for handling message notifications
  */
+let globalMessageListenersSetUp = false;
+
 export function useMessageFromNotification(options: { 
   onOpenConversation?: (conversationId: string) => void;
   enabled?: boolean;
 } = {}) {
   const { onOpenConversation, enabled = true } = options;
   const { setActiveConversation } = useAppStore();
+  const hasSetupRef = useRef(false);
   
   // Use ref to avoid re-running effect when callback changes
   const onOpenConversationRef = useRef(onOpenConversation);
+  const setActiveConversationRef = useRef(setActiveConversation);
+  
   useEffect(() => {
     onOpenConversationRef.current = onOpenConversation;
+    setActiveConversationRef.current = setActiveConversation;
   });
 
   useEffect(() => {
     if (!enabled) return;
+    
+    // Prevent duplicate setups
+    if (hasSetupRef.current || globalMessageListenersSetUp) {
+      hasSetupRef.current = true;
+      return;
+    }
+    
+    hasSetupRef.current = true;
+    globalMessageListenersSetUp = true;
 
     const handleMessageEvent = (event: CustomEvent<{ conversationId: string }>) => {
       const { conversationId } = event.detail;
       
       console.log('💬 Opening conversation from notification:', conversationId);
       
-      setActiveConversation(conversationId);
+      setActiveConversationRef.current(conversationId);
       onOpenConversationRef.current?.(conversationId);
     };
 
@@ -208,7 +257,8 @@ export function useMessageFromNotification(options: {
 
     return () => {
       window.removeEventListener('openConversationFromNotification', handleMessageEvent as EventListener);
+      globalMessageListenersSetUp = false;
+      hasSetupRef.current = false;
     };
-  }, [enabled, setActiveConversation]);
-  // REMOVED: onOpenConversation from deps - accessed via ref
+  }, [enabled]);
 }

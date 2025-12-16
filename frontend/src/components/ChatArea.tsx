@@ -519,9 +519,17 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
     const inputEl = inputRef.current;
     if (!inputEl) return;
 
-    // Handle focus - scroll input into view
+    // Handle focus - scroll input into view IMMEDIATELY and again after keyboard animates
     const handleFocus = () => {
-      // Small delay to let keyboard animate open
+      // Immediate scroll attempt
+      inputEl.scrollIntoView({ behavior: 'instant', block: 'center' });
+      
+      // Also scroll after keyboard starts animating (100ms)
+      setTimeout(() => {
+        inputEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 100);
+      
+      // And again after keyboard is fully open (300ms)
       setTimeout(() => {
         inputEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }, 300);
@@ -530,6 +538,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
     // Visual viewport resize handler for iOS keyboard
     const handleViewportResize = () => {
       if (document.activeElement === inputEl) {
+        // Scroll immediately when viewport changes
         inputEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
     };

@@ -609,10 +609,16 @@ app.get('/api/keys/:walletAddress', async (req, res) => {
     const user = await db.getUserByWallet(walletAddress);
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        error: 'User not found',
-        walletAddress
+      // Return 200 with null publicKey instead of 404
+      // This prevents console errors for users who haven't registered yet
+      return res.json({
+        success: true,
+        walletAddress: walletAddress.toLowerCase(),
+        publicKey: null,
+        username: null,
+        isOnline: false,
+        status: 'unknown',
+        registered: false
       });
     }
 
@@ -623,6 +629,7 @@ app.get('/api/keys/:walletAddress', async (req, res) => {
       username: user.username,
       isOnline: activeConnections.has(walletAddress.toLowerCase()),
       status: userStatuses.get(walletAddress.toLowerCase()) || user.status || 'offline',
+      registered: true
     });
   } catch (error) {
     console.error('Error fetching key:', error);
@@ -965,7 +972,50 @@ app.get('/api/conversations/:walletAddress', async (req, res) => {
     const { walletAddress } = req.params;
     const address = walletAddress.toLowerCase();
 
-    const conversations = await db.getUserConversations(address);
+    let conversations = await db.getUserConversations(address);
+
+    // Filter out invalid groups (groups without proper names)
+    // These are phantom groups created by bugs - they should not be returned
+    const beforeFilter = conversations.length;
+    const invalidGroupIds: string[] = [];
+    
+    conversations = conversations.filter(c => {
+      if (c.type === 'group') {
+        const name = c.name || '';
+        // Skip groups with no name or default "Group Chat" name
+        if (!name || name === 'Group Chat' || name.trim() === '') {
+          const groupId = (c as any).group_id || c._id?.toString();
+          console.log(`⚠️ Filtering out invalid group: ${groupId} (name: "${name}")`);
+          if (groupId) {
+            invalidGroupIds.push(groupId);
+          }
+          return false;
+        }
+      }
+      return true;
+    });
+    
+    if (beforeFilter !== conversations.length) {
+      console.log(`🧹 Filtered out ${beforeFilter - conversations.length} invalid groups`);
+      
+      // PERMANENTLY DELETE invalid groups from database to stop them from appearing
+      // This runs async in background - don't await to not slow down response
+      if (invalidGroupIds.length > 0) {
+        console.log(`🗑️ Scheduling deletion of ${invalidGroupIds.length} invalid groups: ${invalidGroupIds.join(', ')}`);
+        
+        // Delete in background
+        (async () => {
+          for (const groupId of invalidGroupIds) {
+            try {
+              await db.deleteConversation(groupId);
+              console.log(`🗑️ Deleted invalid group: ${groupId}`);
+            } catch (err) {
+              console.error(`❌ Failed to delete invalid group ${groupId}:`, err);
+            }
+          }
+        })();
+      }
+    }
 
     // Log all conversations to debug
     const groups = conversations.filter(c => c.type === 'group');

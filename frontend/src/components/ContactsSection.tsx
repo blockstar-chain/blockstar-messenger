@@ -514,6 +514,15 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2.5 bg-card border border-midnight rounded-xl text-white placeholder-muted focus:outline-none focus:border-primary-500 transition text-base"
               style={{ fontSize: '16px' }}
+              onFocus={(e) => {
+                // iOS keyboard scroll fix
+                setTimeout(() => {
+                  e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 100);
+                setTimeout(() => {
+                  e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 300);
+              }}
             />
           </div>
         </div>
@@ -666,6 +675,15 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
                   onChange={(e) => setNewContactAddress(e.target.value)}
                   placeholder="@name or 0x..."
                   className="w-full px-4 py-3 bg-dark-200 border border-midnight rounded-xl text-white placeholder-muted focus:outline-none focus:border-primary-500"
+                  onFocus={(e) => {
+                    // iOS keyboard scroll fix
+                    setTimeout(() => {
+                      e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }, 100);
+                    setTimeout(() => {
+                      e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }, 300);
+                  }}
                 />
               </div>
 
@@ -679,6 +697,15 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
                   onChange={(e) => setNewContactNickname(e.target.value)}
                   placeholder="Enter a nickname..."
                   className="w-full px-4 py-3 bg-dark-200 border border-midnight rounded-xl text-white placeholder-muted focus:outline-none focus:border-primary-500"
+                  onFocus={(e) => {
+                    // iOS keyboard scroll fix
+                    setTimeout(() => {
+                      e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }, 100);
+                    setTimeout(() => {
+                      e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }, 300);
+                  }}
                 />
               </div>
 
@@ -753,6 +780,15 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
                   onChange={(e) => setEditNickname(e.target.value)}
                   placeholder="Enter a nickname..."
                   className="w-full px-4 py-3 bg-dark-200 border border-midnight rounded-xl text-white placeholder-muted focus:outline-none focus:border-primary-500"
+                  onFocus={(e) => {
+                    // iOS keyboard scroll fix
+                    setTimeout(() => {
+                      e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }, 100);
+                    setTimeout(() => {
+                      e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }, 300);
+                  }}
                 />
                 <p className="text-xs text-muted mt-2">
                   A nickname helps you identify this contact. Leave blank to show only their @name or address.

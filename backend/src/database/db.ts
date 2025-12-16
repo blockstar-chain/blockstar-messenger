@@ -850,11 +850,34 @@ export async function getUser(walletAddress: string): Promise<any> {
 
 export async function softDeleteMessage(messageId: string): Promise<boolean> {
   try {
-    const result = await messagesCollection.updateOne(
-      { _id: new ObjectId(messageId) },
+    // Try to find message by client_id first (frontend-generated ID)
+    let result = await messagesCollection.updateOne(
+      { client_id: messageId },
       { $set: { deleted_at: new Date(), updated_at: new Date() } }
     );
-    return result.modifiedCount > 0;
+    
+    if (result.modifiedCount > 0) {
+      console.log(`✅ Soft deleted message by client_id: ${messageId}`);
+      return true;
+    }
+    
+    // If not found by client_id, try by ObjectId
+    try {
+      result = await messagesCollection.updateOne(
+        { _id: new ObjectId(messageId) },
+        { $set: { deleted_at: new Date(), updated_at: new Date() } }
+      );
+      
+      if (result.modifiedCount > 0) {
+        console.log(`✅ Soft deleted message by ObjectId: ${messageId}`);
+        return true;
+      }
+    } catch {
+      // Invalid ObjectId format, that's ok
+    }
+    
+    console.log(`⚠️ Message not found for deletion: ${messageId}`);
+    return false;
   } catch (error) {
     console.error('Error soft deleting message:', error);
     return false;

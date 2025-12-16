@@ -37,8 +37,6 @@ export default function GroupCallModal() {
     const domainName = currentUser?.username ? currentUser.username.includes('@') ? currentUser.username.split('@')[0] : currentUser.username : "";
     const stats = useSettingReslover(domainName || '');
 
-    console.log(stats);
-
     // Check if this is a group call - with null safety
     const isGroupCall = !!(activeCall?.isGroupCall ||
         (Array.isArray(activeCall?.recipientId) && activeCall.recipientId.length > 1) ||

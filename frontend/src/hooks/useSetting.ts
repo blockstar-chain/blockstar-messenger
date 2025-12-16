@@ -138,8 +138,6 @@ export const useSettingReslover = (name = '', filter = true) => {
 
                 }
 
-                console.log(banner)
-
                 setStats({
                     loading: false,
                     error: false,
