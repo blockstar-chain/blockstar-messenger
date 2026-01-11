@@ -3,7 +3,7 @@
 // Opens when user taps on incoming call notification
 'use client';
 
-import React, { useEffect, useState, useCallback, Suspense } from 'react';
+import React, { useEffect, useState, useCallback, Suspense, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Phone, PhoneOff, Video, Wifi, WifiOff } from 'lucide-react';
 import { useAppStore } from '@/store';
@@ -36,15 +36,15 @@ function LoadingScreen() {
 function MobileCallContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  
-  const { 
-    setIncomingCall, 
-    setActiveCall, 
+
+  const {
+    setIncomingCall,
+    setActiveCall,
     setCallModalOpen,
     currentUser,
     setCurrentUser
   } = useAppStore();
-  
+
   const [pulseRing, setPulseRing] = useState(true);
   const [callerProfile, setCallerProfile] = useState<{ name?: string; avatar?: string } | null>(null);
   const [isAnswering, setIsAnswering] = useState(false);
@@ -61,6 +61,8 @@ function MobileCallContent() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
   const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
+  const profileFetchedRef = useRef(false);
+
 
   // Extract data from URL params and verify token
   useEffect(() => {
@@ -84,7 +86,7 @@ function MobileCallContent() {
       return;
     }
 
-    // Set basic call data immediately for display
+    // Set basic call data immediately for display (only once)
     setCallData({
       id: callId,
       callerId: callerId.toLowerCase(),
@@ -106,13 +108,14 @@ function MobileCallContent() {
       }
       setIsLoading(false);
     }
-  }, [searchParams, currentUser]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty array - only run on mount, searchParams is stable
 
   // Authenticate user with token from notification
   const authenticateWithToken = async (token: string, callId: string) => {
     try {
       console.log('🔐 Verifying call token...');
-      
+
       const response = await fetch(`${API_BASE}/api/calls/verify-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -120,20 +123,32 @@ function MobileCallContent() {
       });
 
       const data = await response.json();
-      
+
       if (!response.ok || !data.success) {
         throw new Error(data.error || 'Invalid authentication token');
       }
 
       console.log('✅ Token verified:', data);
-      
-      // Update call data with verified info
-      setCallData(prev => prev ? {
-        ...prev,
-        callerId: data.callerId,
-        callerName: data.callerName || prev.callerName,
-        type: data.callType,
-      } : null);
+
+      // FIX: Only update callData if the verified data is different
+      setCallData(prev => {
+        if (!prev) return null;
+
+        // Don't update if nothing changed (prevents loop)
+        const needsUpdate =
+          prev.callerId !== data.callerId ||
+          (!prev.callerName && data.callerName) ||
+          prev.type !== data.callType;
+
+        if (!needsUpdate) return prev;
+
+        return {
+          ...prev,
+          callerId: data.callerId,
+          callerName: data.callerName || prev.callerName,
+          type: data.callType,
+        };
+      });
 
       // Set user if returned
       if (data.user) {
@@ -144,14 +159,14 @@ function MobileCallContent() {
       }
 
       setIsAuthenticated(true);
-      
+
       // Connect WebSocket
       if (data.user?.walletAddress || data.recipientWallet) {
         connectWebSocket(data.user?.walletAddress || data.recipientWallet);
       }
-      
+
       setIsLoading(false);
-      
+
     } catch (error: any) {
       console.error('❌ Authentication failed:', error);
       setError(error.message || 'Authentication failed. The call may have ended.');
@@ -162,9 +177,9 @@ function MobileCallContent() {
   // Connect WebSocket for signaling
   const connectWebSocket = (walletAddress: string) => {
     console.log('🔌 Connecting WebSocket for:', walletAddress);
-    
+
     webSocketService.connect(walletAddress);
-    
+
     // Listen for connection status
     const checkConnection = setInterval(() => {
       if (webSocketService.isConnected()) {
@@ -173,7 +188,7 @@ function MobileCallContent() {
         console.log('✅ WebSocket connected');
       }
     }, 500);
-    
+
     // Timeout after 10 seconds
     setTimeout(() => {
       clearInterval(checkConnection);
@@ -185,20 +200,21 @@ function MobileCallContent() {
 
   // Fetch caller profile
   useEffect(() => {
-    if (!callData?.callerId) return;
+    if (!callData?.callerId || profileFetchedRef.current) return;
 
     const fetchProfile = async () => {
       try {
+        profileFetchedRef.current = true; // Mark as fetched BEFORE the call
+
         // Use the callerName from params first
         if (callData.callerName) {
           setCallerProfile({ name: callData.callerName });
         }
 
         // Try to get full profile from API
-        const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
-        const response = await fetch(`${API_URL}/api/keys/${callData.callerId}`);
+        const response = await fetch(`${API_BASE}/api/keys/${callData.callerId}`);
         const data = await response.json();
-        
+
         if (data.success && data.username) {
           setCallerProfile({
             name: data.username,
@@ -211,7 +227,7 @@ function MobileCallContent() {
     };
 
     fetchProfile();
-  }, [callData]);
+  }, [callData?.callerId, callData?.callerName]); // Only depend on callerId and callerName
 
   // Pulse animation
   useEffect(() => {
@@ -227,7 +243,7 @@ function MobileCallContent() {
     if (!callData || error || isLoading) return;
 
     let audio: HTMLAudioElement | null = null;
-    
+
     try {
       audio = new Audio('/sounds/incoming.mp3');
       audio.loop = true;
@@ -259,7 +275,7 @@ function MobileCallContent() {
   // Handle answer
   const handleAnswer = useCallback(async () => {
     if (!callData || isAnswering) return;
-    
+
     setIsAnswering(true);
     stopRingtone();
     console.log('📞 Answering call from mobile:', callData.id);
@@ -267,16 +283,16 @@ function MobileCallContent() {
     try {
       // 1. Get the call offer from server
       console.log('📞 Fetching call offer from server...');
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
+
       const offerResponse = await fetch(
-        `${API_URL}/api/calls/${callData.id}/offer${callData.authToken ? `?token=${callData.authToken}` : ''}`
+        `${API_BASE}/api/calls/${callData.id}/offer${callData.authToken ? `?token=${callData.authToken}` : ''}`
       );
-      
+
       if (!offerResponse.ok) {
         const errorData = await offerResponse.json();
         throw new Error(errorData.error || 'Call offer not found. The call may have ended.');
       }
-      
+
       const { offer } = await offerResponse.json();
       console.log('📞 Retrieved offer:', { type: offer?.type, hasSdp: !!offer?.sdp });
 
@@ -296,7 +312,7 @@ function MobileCallContent() {
         // onSignal - send answer back to caller
         (signal) => {
           console.log('📤 SIGNAL from answerer:', signal.type || 'candidate');
-          
+
           if (signal.type === 'answer') {
             console.log('📤 Sending ANSWER to caller');
             webSocketService.answerCall(callData.id, signal);
@@ -337,22 +353,22 @@ function MobileCallContent() {
       setCallModalOpen(true);
 
       console.log('✅ Call answered successfully, redirecting to app...');
-      
+
       // Small delay to let WebRTC stabilize
-      setTimeout(() => {
-        router.push('/');
-      }, 500);
+      // setTimeout(() => {
+      //   router.push('/');
+      // }, 500);
 
     } catch (error: any) {
       console.error('❌ Error answering call:', error);
       toast.error('Failed to answer call: ' + error.message);
-      
+
       // Cleanup on error
       webRTCService.cleanup();
       sessionStorage.removeItem('activeCallData');
-      
+
       setIsAnswering(false);
-      
+
       // Go back to app after error
       setTimeout(() => router.push('/'), 2000);
     }
@@ -361,21 +377,21 @@ function MobileCallContent() {
   // Handle decline
   const handleDecline = useCallback(() => {
     if (!callData || isDeclining) return;
-    
+
     setIsDeclining(true);
     stopRingtone();
     console.log('📞 DECLINING CALL from mobile');
     console.log('  Call ID:', callData.id);
     console.log('  Caller ID:', callData.callerId);
-    
+
     // Notify caller that call was declined via WebSocket
     if (wsConnected) {
       webSocketService.endCall(callData.id);
     }
 
     // Also notify via API (in case WebSocket isn't connected)
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
-    fetch(`${API_URL}/api/calls/${callData.id}/decline`, {
+
+    fetch(`${API_BASE}/api/calls/${callData.id}/decline`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -383,9 +399,9 @@ function MobileCallContent() {
         reason: 'declined'
       })
     }).catch(err => console.warn('Could not notify decline via API:', err));
-    
+
     toast('Call declined', { icon: '🔵' });
-    
+
     // Return to app
     setTimeout(() => router.push('/'), 500);
   }, [callData, isDeclining, wsConnected, router, stopRingtone]);
@@ -396,10 +412,10 @@ function MobileCallContent() {
 
     const checkCallStatus = async () => {
       try {
-        const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
-        const response = await fetch(`${API_URL}/api/calls/${callData.id}/status`);
+
+        const response = await fetch(`${API_BASE}/api/calls/${callData.id}/status`);
         const data = await response.json();
-        
+
         if (data.success && !data.active) {
           console.log('📞 Call is no longer active');
           stopRingtone();
@@ -412,7 +428,7 @@ function MobileCallContent() {
 
     // Check every 5 seconds
     const interval = setInterval(checkCallStatus, 5000);
-    
+
     return () => clearInterval(interval);
   }, [callData?.id, error, isLoading, stopRingtone]);
 
@@ -475,7 +491,7 @@ function MobileCallContent() {
             Incoming {callType === 'video' ? 'Video' : 'Voice'} Call
           </span>
         </div>
-        
+
         {/* Connection status */}
         <div className="flex items-center justify-center gap-1.5 mt-3">
           {wsConnected ? (
@@ -497,23 +513,23 @@ function MobileCallContent() {
         {/* Avatar with pulse rings */}
         <div className="relative mb-8">
           {/* Outer pulse rings */}
-          <div 
+          <div
             className="absolute -inset-8 rounded-full border border-primary-500/20 animate-ping"
             style={{ animationDuration: '2s' }}
           />
-          <div 
+          <div
             className={`absolute -inset-4 rounded-full border border-primary-500/30 transition-all duration-1000 ${pulseRing ? 'scale-110 opacity-0' : 'scale-100 opacity-100'}`}
           />
-          <div 
+          <div
             className={`absolute -inset-2 rounded-full border border-primary-500/40 transition-all duration-1000 ${!pulseRing ? 'scale-105 opacity-0' : 'scale-100 opacity-100'}`}
           />
-          
+
           {/* Avatar container */}
           <div className={`relative w-32 h-32 rounded-full flex items-center justify-center overflow-hidden border-4 border-primary-500/50 shadow-2xl shadow-primary-500/20 ${avatarBg}`}>
             {callerAvatar ? (
-              <img 
-                src={callerAvatar} 
-                alt={displayName} 
+              <img
+                src={callerAvatar}
+                alt={displayName}
                 className="w-full h-full object-cover"
               />
             ) : (
@@ -528,13 +544,13 @@ function MobileCallContent() {
         <h2 className="text-3xl font-bold text-white mb-2 text-center">
           {displayName}
         </h2>
-        
+
         {callerProfile?.name && callData.callerId && (
           <p className="text-gray-400 text-sm font-mono">
             {truncateAddress(callData.callerId)}
           </p>
         )}
-        
+
         <p className="text-primary-400 text-sm mt-3 animate-pulse">
           is calling you...
         </p>
@@ -568,8 +584,8 @@ function MobileCallContent() {
               onClick={handleAnswer}
               disabled={isAnswering || isDeclining || !isAuthenticated}
               className="w-18 h-18 bg-green-500 hover:bg-green-600 disabled:opacity-50 disabled:hover:bg-green-500 rounded-full flex items-center justify-center transition-all active:scale-95 shadow-xl shadow-green-500/30"
-              style={{ 
-                width: '72px', 
+              style={{
+                width: '72px',
                 height: '72px',
                 animation: !isAnswering && isAuthenticated ? 'bounce 1s infinite' : 'none'
               }}
@@ -594,7 +610,7 @@ function MobileCallContent() {
             ⚠️ Authenticating...
           </p>
         )}
-        
+
         {isAuthenticated && !wsConnected && (
           <p className="mt-8 text-yellow-500 text-sm text-center">
             ⚠️ Establishing connection...
