@@ -1,19 +1,16 @@
 // frontend/src/app/call/page.tsx
-// Mobile-specific incoming call page for push notifications
-// Opens when user taps on incoming call notification
+// Mobile incoming call page - stays on page during active call (no redirect)
 'use client';
 
 import React, { useEffect, useState, useCallback, Suspense, useRef } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { Phone, PhoneOff, Video, Wifi, WifiOff } from 'lucide-react';
+import { useSearchParams } from 'next/navigation';
+import { Phone, PhoneOff, Video, Wifi, WifiOff, Mic, MicOff, Volume2 } from 'lucide-react';
 import { useAppStore } from '@/store';
-import { webRTCService } from '@/lib/webrtc';
 import { webSocketService } from '@/lib/websocket';
 import { getAvatarColor, getInitials, truncateAddress } from '@/utils/helpers';
 import toast from 'react-hot-toast';
 import { API_BASE } from '@/lib/profileResolver';
 
-// Wrap the main component with Suspense for useSearchParams
 export default function MobileCallPage() {
   return (
     <Suspense fallback={<LoadingScreen />}>
@@ -34,21 +31,20 @@ function LoadingScreen() {
 }
 
 function MobileCallContent() {
-  const router = useRouter();
   const searchParams = useSearchParams();
+  const { currentUser, setCurrentUser, setActiveCall } = useAppStore();
 
-  const {
-    setIncomingCall,
-    setActiveCall,
-    setCallModalOpen,
-    currentUser,
-    setCurrentUser
-  } = useAppStore();
-
-  const [pulseRing, setPulseRing] = useState(true);
+  // Call states
+  const [callState, setCallState] = useState<'incoming' | 'connecting' | 'active' | 'ended'>('incoming');
+  const [callDuration, setCallDuration] = useState(0);
+  
+  // UI states
   const [callerProfile, setCallerProfile] = useState<{ name?: string; avatar?: string } | null>(null);
-  const [isAnswering, setIsAnswering] = useState(false);
-  const [isDeclining, setIsDeclining] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isSpeaker, setIsSpeaker] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('');
+  
+  // Call data
   const [callData, setCallData] = useState<{
     id: string;
     callerId: string;
@@ -56,15 +52,26 @@ function MobileCallContent() {
     type: 'audio' | 'video';
     authToken?: string;
   } | null>(null);
+  
+  // Loading/error states
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
-  const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
-  const profileFetchedRef = useRef(false);
+  
+  // Refs
+  const ringtoneRef = useRef<HTMLAudioElement>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const callStartTimeRef = useRef<number>(0);
+  const answerInProgressRef = useRef(false);
+  const iceCandidateHandlerRef = useRef<((data: any) => void) | null>(null);
 
-
-  // Extract data from URL params and verify token
+  // ═══════════════════════════════════════════════════════════════
+  // INITIALIZATION
+  // ═══════════════════════════════════════════════════════════════
+  
   useEffect(() => {
     const callId = searchParams.get('callId');
     const callerId = searchParams.get('callerId');
@@ -72,13 +79,7 @@ function MobileCallContent() {
     const callType = searchParams.get('callType') || 'audio';
     const authToken = searchParams.get('token');
 
-    console.log('📱 Mobile call page loaded with params:', {
-      callId,
-      callerId,
-      callerName,
-      callType,
-      hasToken: !!authToken
-    });
+    console.log('📱 Mobile call page loaded:', { callId, callerId, hasToken: !!authToken });
 
     if (!callId || !callerId) {
       setError('Invalid call parameters');
@@ -86,7 +87,6 @@ function MobileCallContent() {
       return;
     }
 
-    // Set basic call data immediately for display (only once)
     setCallData({
       id: callId,
       callerId: callerId.toLowerCase(),
@@ -95,27 +95,31 @@ function MobileCallContent() {
       authToken: authToken || undefined,
     });
 
-    // Authenticate with token if provided
+    // Authenticate
     if (authToken) {
-      authenticateWithToken(authToken, callId);
+      verifyToken(authToken, callId);
+    } else if (currentUser?.walletAddress) {
+      setIsAuthenticated(true);
+      connectWebSocket(currentUser.walletAddress);
+      setIsLoading(false);
     } else {
-      // No token - check if user is already logged in
-      if (currentUser?.walletAddress) {
-        setIsAuthenticated(true);
-        connectWebSocket(currentUser.walletAddress);
-      } else {
-        setError('Please open the app to answer this call');
-      }
+      setError('Please open the app to answer this call');
       setIsLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Empty array - only run on mount, searchParams is stable
 
-  // Authenticate user with token from notification
-  const authenticateWithToken = async (token: string, callId: string) => {
+    // Fetch caller profile
+    fetchCallerProfile(callerId, callerName);
+
+    // Cleanup on unmount
+    return () => {
+      stopRingtone();
+      cleanupCall();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const verifyToken = async (token: string, callId: string) => {
     try {
-      console.log('🔐 Verifying call token...');
-
       const response = await fetch(`${API_BASE}/api/calls/verify-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -123,224 +127,251 @@ function MobileCallContent() {
       });
 
       const data = await response.json();
-
       if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Invalid authentication token');
+        throw new Error(data.error || 'Invalid token');
       }
 
-      console.log('✅ Token verified:', data);
-
-      // FIX: Only update callData if the verified data is different
-      setCallData(prev => {
-        if (!prev) return null;
-
-        // Don't update if nothing changed (prevents loop)
-        const needsUpdate =
-          prev.callerId !== data.callerId ||
-          (!prev.callerName && data.callerName) ||
-          prev.type !== data.callType;
-
-        if (!needsUpdate) return prev;
-
-        return {
-          ...prev,
-          callerId: data.callerId,
-          callerName: data.callerName || prev.callerName,
-          type: data.callType,
-        };
-      });
-
-      // Set user if returned
       if (data.user) {
-        setCurrentUser({
-          walletAddress: data.user.walletAddress,
-          username: data.user.username,
-        });
+        setCurrentUser({ walletAddress: data.user.walletAddress, username: data.user.username });
       }
 
       setIsAuthenticated(true);
-
-      // Connect WebSocket
-      if (data.user?.walletAddress || data.recipientWallet) {
-        connectWebSocket(data.user?.walletAddress || data.recipientWallet);
-      }
-
+      connectWebSocket(data.user?.walletAddress || data.recipientWallet);
       setIsLoading(false);
-
-    } catch (error: any) {
-      console.error('❌ Authentication failed:', error);
-      setError(error.message || 'Authentication failed. The call may have ended.');
+    } catch (err: any) {
+      setError(err.message || 'Authentication failed');
       setIsLoading(false);
     }
   };
 
-  // Connect WebSocket for signaling
   const connectWebSocket = (walletAddress: string) => {
-    console.log('🔌 Connecting WebSocket for:', walletAddress);
-
     webSocketService.connect(walletAddress);
-
-    // Listen for connection status
-    const checkConnection = setInterval(() => {
+    
+    const checkInterval = setInterval(() => {
       if (webSocketService.isConnected()) {
         setWsConnected(true);
-        clearInterval(checkConnection);
-        console.log('✅ WebSocket connected');
+        clearInterval(checkInterval);
       }
     }, 500);
 
-    // Timeout after 10 seconds
-    setTimeout(() => {
-      clearInterval(checkConnection);
-      if (!webSocketService.isConnected()) {
-        console.warn('⚠️ WebSocket connection timeout');
-      }
-    }, 10000);
+    setTimeout(() => clearInterval(checkInterval), 10000);
   };
 
-  // Fetch caller profile
-  useEffect(() => {
-    if (!callData?.callerId || profileFetchedRef.current) return;
-
-    const fetchProfile = async () => {
-      try {
-        profileFetchedRef.current = true; // Mark as fetched BEFORE the call
-
-        // Use the callerName from params first
-        if (callData.callerName) {
-          setCallerProfile({ name: callData.callerName });
-        }
-
-        // Try to get full profile from API
-        const response = await fetch(`${API_BASE}/api/keys/${callData.callerId}`);
-        const data = await response.json();
-
-        if (data.success && data.username) {
-          setCallerProfile({
-            name: data.username,
-            avatar: data.avatar
-          });
-        }
-      } catch (error) {
-        console.error('Error fetching caller profile:', error);
-      }
-    };
-
-    fetchProfile();
-  }, [callData?.callerId, callData?.callerName]); // Only depend on callerId and callerName
-
-  // Pulse animation
-  useEffect(() => {
-    if (!callData || error) return;
-    const interval = setInterval(() => {
-      setPulseRing(prev => !prev);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [callData, error]);
-
-  // Play ringtone
-  useEffect(() => {
-    if (!callData || error || isLoading) return;
-
-    let audio: HTMLAudioElement | null = null;
-
+  const fetchCallerProfile = async (callerId: string, callerName?: string | null) => {
+    if (callerName) setCallerProfile({ name: callerName });
+    
     try {
-      audio = new Audio('/sounds/incoming.mp3');
+      const response = await fetch(`${API_BASE}/api/keys/${callerId}`);
+      const data = await response.json();
+      if (data.success && data.username) {
+        setCallerProfile({ name: data.username, avatar: data.avatar });
+      }
+    } catch (err) {}
+  };
+
+  // ═══════════════════════════════════════════════════════════════
+  // RINGTONE
+  // ═══════════════════════════════════════════════════════════════
+
+  useEffect(() => {
+    if (callState !== 'incoming' || isLoading || error) return;
+
+    const audio = ringtoneRef.current;
+    if (audio) {
       audio.loop = true;
-      audio.play().catch(e => {
-        console.warn('Could not play ringtone:', e);
-        // Try again on user interaction
-      });
-      setAudioElement(audio);
-    } catch (e) {
-      console.warn('Ringtone not available');
+      audio.play().catch(() => {});
     }
 
-    return () => {
-      if (audio) {
-        audio.pause();
-        audio.currentTime = 0;
+    return () => stopRingtone();
+  }, [callState, isLoading, error]);
+
+  const stopRingtone = () => {
+    if (ringtoneRef.current) {
+      ringtoneRef.current.pause();
+      ringtoneRef.current.currentTime = 0;
+    }
+  };
+
+  // ═══════════════════════════════════════════════════════════════
+  // CALL DURATION TIMER
+  // ═══════════════════════════════════════════════════════════════
+
+  useEffect(() => {
+    if (callState !== 'active') return;
+    
+    const interval = setInterval(() => {
+      if (callStartTimeRef.current) {
+        setCallDuration(Math.floor((Date.now() - callStartTimeRef.current) / 1000));
       }
-    };
-  }, [callData, error, isLoading]);
+    }, 1000);
 
-  // Stop ringtone helper
-  const stopRingtone = useCallback(() => {
-    if (audioElement) {
-      audioElement.pause();
-      audioElement.currentTime = 0;
-    }
-  }, [audioElement]);
+    return () => clearInterval(interval);
+  }, [callState]);
 
-  // Handle answer
-  const handleAnswer = useCallback(async () => {
-    if (!callData || isAnswering) return;
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
-    setIsAnswering(true);
+  // ═══════════════════════════════════════════════════════════════
+  // ANSWER CALL - Direct RTCPeerConnection (no webRTCService wrapper)
+  // ═══════════════════════════════════════════════════════════════
+
+  const handleAnswer = async () => {
+    if (!callData || answerInProgressRef.current) return;
+    answerInProgressRef.current = true;
+
     stopRingtone();
-    console.log('📞 Answering call from mobile:', callData.id);
+    setCallState('connecting');
+    console.log('📞 Answering call:', callData.id);
 
     try {
-      // 1. Get the call offer from server
-      console.log('📞 Fetching call offer from server...');
-
-      const offerResponse = await fetch(
+      // Step 1: Fetch offer from server
+      setConnectionStatus('Getting call data...');
+      console.log('📞 Step 1: Fetching offer...');
+      
+      const offerRes = await fetch(
         `${API_BASE}/api/calls/${callData.id}/offer${callData.authToken ? `?token=${callData.authToken}` : ''}`
       );
-
-      if (!offerResponse.ok) {
-        const errorData = await offerResponse.json();
-        throw new Error(errorData.error || 'Call offer not found. The call may have ended.');
+      
+      if (!offerRes.ok) {
+        const errData = await offerRes.json().catch(() => ({}));
+        throw new Error(errData.error || 'Call not found or expired');
       }
+      
+      const { offer } = await offerRes.json();
+      if (!offer?.sdp) throw new Error('Invalid call data');
+      console.log('📞 Got offer:', offer.type);
 
-      const { offer } = await offerResponse.json();
-      console.log('📞 Retrieved offer:', { type: offer?.type, hasSdp: !!offer?.sdp });
+      // Step 2: Get microphone access
+      setConnectionStatus('Accessing microphone...');
+      console.log('📞 Step 2: Getting microphone...');
+      
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: true, 
+        video: callData.type === 'video' 
+      });
+      localStreamRef.current = stream;
+      console.log('📞 Got local stream, tracks:', stream.getTracks().length);
 
-      if (!offer || !offer.sdp) {
-        throw new Error('Invalid call offer received');
-      }
+      // Step 3: Create RTCPeerConnection
+      setConnectionStatus('Setting up connection...');
+      console.log('📞 Step 3: Creating peer connection...');
+      
+      const pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+        ]
+      });
+      peerConnectionRef.current = pc;
 
-      // 2. Initialize local media stream
-      const isVideoCall = callData.type === 'video';
-      console.log('📞 Initializing local stream, video:', isVideoCall);
-      await webRTCService.initializeLocalStream(!isVideoCall);
+      // Add local tracks to connection
+      stream.getTracks().forEach(track => {
+        console.log('📞 Adding track:', track.kind);
+        pc.addTrack(track, stream);
+      });
 
-      // 3. Create the answering peer connection
-      webRTCService.answerCall(
-        callData.id,
-        !isVideoCall, // audioOnly
-        // onSignal - send answer back to caller
-        (signal) => {
-          console.log('📤 SIGNAL from answerer:', signal.type || 'candidate');
+      // Track if we've already transitioned to active (declare early so all handlers can use it)
+      let hasConnected = false;
+      
+      const checkAndTransitionToActive = (source: string) => {
+        if (hasConnected) return;
+        
+        const connState = pc.connectionState;
+        const iceState = pc.iceConnectionState;
+        
+        console.log(`📞 ${source} - Connection: ${connState}, ICE: ${iceState}`);
+        
+        // Check if connected via either state
+        if (connState === 'connected' || iceState === 'connected' || iceState === 'completed') {
+          hasConnected = true;
+          console.log('✅ Call connected!');
+          setCallState('active');
+          callStartTimeRef.current = Date.now();
+          setConnectionStatus('');
+          toast.success('Call connected!');
+        } else if (connState === 'failed' || iceState === 'failed') {
+          console.log('❌ Connection failed');
+          endCall('Connection failed');
+        }
+      };
 
-          if (signal.type === 'answer') {
-            console.log('📤 Sending ANSWER to caller');
-            webSocketService.answerCall(callData.id, signal);
-          } else if (signal.candidate) {
-            console.log('📤 Sending ICE candidate to caller');
-            webSocketService.sendIceCandidate(
-              callData.callerId,
-              signal,
-              callData.id
-            );
+      // Handle incoming remote stream - THIS IS A STRONG SIGNAL WE'RE CONNECTED
+      pc.ontrack = (event) => {
+        console.log('🔊 Remote track received:', event.track.kind);
+        if (remoteAudioRef.current && event.streams[0]) {
+          remoteAudioRef.current.srcObject = event.streams[0];
+          remoteAudioRef.current.play().catch(e => console.warn('Audio play error:', e));
+          
+          // If we got a remote track, we're definitely connected!
+          if (!hasConnected) {
+            hasConnected = true;
+            console.log('✅ Connected (detected via remote track)');
+            setCallState('active');
+            callStartTimeRef.current = Date.now();
+            setConnectionStatus('');
+            toast.success('Call connected!');
           }
         }
-      );
+      };
 
-      // 4. Process the offer to generate answer
-      console.log('📞 Processing offer signal...');
-      webRTCService.processSignal(callData.id, offer);
+      // Handle ICE candidates - send to caller
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log('📤 Sending ICE candidate to caller');
+          webSocketService.sendIceCandidate(callData.callerId, event.candidate, callData.id);
+        }
+      };
 
-      // 5. Store call info for the main app
-      sessionStorage.setItem('activeCallData', JSON.stringify({
-        callId: callData.id,
-        callerId: callData.callerId,
-        callerName: callerProfile?.name || callData.callerName,
-        callType: callData.type,
-        answeredAt: Date.now(),
-      }));
+      // Handle connection state changes
+      pc.onconnectionstatechange = () => {
+        checkAndTransitionToActive('connectionState');
+        
+        if (pc.connectionState === 'disconnected') {
+          console.log('⚠️ Connection disconnected');
+          setTimeout(() => {
+            if (pc.connectionState === 'disconnected') {
+              endCall('Connection lost');
+            }
+          }, 5000);
+        }
+      };
 
-      // 6. Transition to active call
+      // IMPORTANT: Also check ICE connection state - this often updates first on mobile!
+      pc.oniceconnectionstatechange = () => {
+        checkAndTransitionToActive('iceConnectionState');
+      };
+
+      // Step 4: Listen for ICE candidates from caller
+      console.log('📞 Step 4: Setting up ICE candidate listener...');
+      
+      iceCandidateHandlerRef.current = (data: any) => {
+        if (data.callId === callData.id && data.candidate && peerConnectionRef.current) {
+          console.log('📥 Received ICE candidate from caller');
+          peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(data.candidate))
+            .catch(e => console.warn('Error adding ICE candidate:', e));
+        }
+      };
+      webSocketService.on('ice-candidate', iceCandidateHandlerRef.current);
+
+      // Step 5: Set remote description (the offer)
+      setConnectionStatus('Connecting to caller...');
+      console.log('📞 Step 5: Setting remote description...');
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+
+      // Step 6: Create and set local description (the answer)
+      console.log('📞 Step 6: Creating answer...');
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      // Step 7: Send answer to caller via WebSocket
+      console.log('📤 Step 7: Sending answer to caller...');
+      webSocketService.answerCall(callData.id, answer);
+
+      // Update store
       setActiveCall({
         id: callData.id,
         recipientId: callData.callerId,
@@ -350,114 +381,172 @@ function MobileCallContent() {
         startTime: Date.now(),
       });
 
-      setCallModalOpen(true);
+      console.log('📞 Answer sent, waiting for connection...');
+      setConnectionStatus('Establishing connection...');
 
-      console.log('✅ Call answered successfully, redirecting to app...');
+      // Shorter timeout - if not connected in 10s, force transition
+      // (the audio might already be working even if state didn't update)
+      setTimeout(() => {
+        if (!hasConnected && peerConnectionRef.current) {
+          const state = peerConnectionRef.current.connectionState;
+          const iceState = peerConnectionRef.current.iceConnectionState;
+          console.log(`⚠️ Timeout check - Connection: ${state}, ICE: ${iceState}`);
+          
+          // If we have any indication of connectivity, show as active
+          if (state !== 'failed' && iceState !== 'failed') {
+            console.log('📞 Forcing transition to active state');
+            hasConnected = true;
+            setCallState('active');
+            callStartTimeRef.current = Date.now();
+            setConnectionStatus('');
+          }
+        }
+      }, 10000);
 
-      // Small delay to let WebRTC stabilize
-      // setTimeout(() => {
-      //   router.push('/');
-      // }, 500);
-
-    } catch (error: any) {
-      console.error('❌ Error answering call:', error);
-      toast.error('Failed to answer call: ' + error.message);
-
-      // Cleanup on error
-      webRTCService.cleanup();
-      sessionStorage.removeItem('activeCallData');
-
-      setIsAnswering(false);
-
-      // Go back to app after error
-      setTimeout(() => router.push('/'), 2000);
+    } catch (err: any) {
+      console.error('❌ Answer error:', err);
+      toast.error(err.message || 'Failed to connect');
+      cleanupCall();
+      setCallState('incoming');
+      setConnectionStatus('');
+      answerInProgressRef.current = false;
     }
-  }, [callData, currentUser, isAnswering, callerProfile, setActiveCall, setCallModalOpen, router, stopRingtone]);
+  };
 
-  // Handle decline
-  const handleDecline = useCallback(() => {
-    if (!callData || isDeclining) return;
+  // ═══════════════════════════════════════════════════════════════
+  // DECLINE / END CALL
+  // ═══════════════════════════════════════════════════════════════
 
-    setIsDeclining(true);
+  const handleDecline = () => {
+    if (!callData) return;
+    
     stopRingtone();
-    console.log('📞 DECLINING CALL from mobile');
-    console.log('  Call ID:', callData.id);
-    console.log('  Caller ID:', callData.callerId);
-
-    // Notify caller that call was declined via WebSocket
-    if (wsConnected) {
-      webSocketService.endCall(callData.id);
-    }
-
-    // Also notify via API (in case WebSocket isn't connected)
-
+    console.log('📞 Declining call');
+    
+    webSocketService.endCall(callData.id);
+    
     fetch(`${API_BASE}/api/calls/${callData.id}/decline`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        callerId: callData.callerId,
-        reason: 'declined'
-      })
-    }).catch(err => console.warn('Could not notify decline via API:', err));
+      body: JSON.stringify({ callerId: callData.callerId })
+    }).catch(() => {});
 
-    toast('Call declined', { icon: '🔵' });
+    endCall('Call declined');
+  };
 
-    // Return to app
-    setTimeout(() => router.push('/'), 500);
-  }, [callData, isDeclining, wsConnected, router, stopRingtone]);
+  const handleEndCall = () => {
+    if (!callData) return;
+    
+    console.log('📞 Ending call');
+    webSocketService.endCall(callData.id);
+    endCall('Call ended');
+  };
 
-  // Check if call is still active periodically
+  const endCall = useCallback((reason?: string) => {
+    cleanupCall();
+    setCallState('ended');
+    if (reason) setError(reason);
+    
+    setTimeout(() => {
+      window.location.href = '/';
+    }, 2000);
+  }, []);
+
+  const cleanupCall = () => {
+    // Stop local stream
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => {
+        track.stop();
+        console.log('📞 Stopped track:', track.kind);
+      });
+      localStreamRef.current = null;
+    }
+    
+    // Close peer connection
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+      console.log('📞 Closed peer connection');
+    }
+
+    // Note: Can't easily remove the ICE candidate listener without .off()
+    // It will be cleaned up when socket disconnects
+  };
+
+  // ═══════════════════════════════════════════════════════════════
+  // CALL CONTROLS
+  // ═══════════════════════════════════════════════════════════════
+
+  const toggleMute = () => {
+    if (localStreamRef.current) {
+      const audioTracks = localStreamRef.current.getAudioTracks();
+      audioTracks.forEach(track => {
+        track.enabled = !track.enabled;
+        console.log('📞 Mic:', track.enabled ? 'ON' : 'OFF');
+      });
+      setIsMuted(!isMuted);
+    }
+  };
+
+  const toggleSpeaker = () => {
+    setIsSpeaker(!isSpeaker);
+    // True speaker toggle requires native mobile code
+    // This is just a visual toggle for now
+  };
+
+  // ═══════════════════════════════════════════════════════════════
+  // CHECK IF CALL IS STILL ACTIVE
+  // ═══════════════════════════════════════════════════════════════
+
   useEffect(() => {
-    if (!callData?.id || error || isLoading) return;
+    if (!callData?.id || callState !== 'incoming') return;
 
-    const checkCallStatus = async () => {
+    const checkStatus = async () => {
       try {
-
-        const response = await fetch(`${API_BASE}/api/calls/${callData.id}/status`);
-        const data = await response.json();
-
+        const res = await fetch(`${API_BASE}/api/calls/${callData.id}/status`);
+        const data = await res.json();
         if (data.success && !data.active) {
           console.log('📞 Call is no longer active');
           stopRingtone();
-          setError('This call has ended');
+          setError('Call ended');
+          setCallState('ended');
         }
-      } catch (err) {
-        // Ignore errors
-      }
+      } catch (err) {}
     };
 
-    // Check every 5 seconds
-    const interval = setInterval(checkCallStatus, 5000);
-
+    const interval = setInterval(checkStatus, 5000);
     return () => clearInterval(interval);
-  }, [callData?.id, error, isLoading, stopRingtone]);
+  }, [callData?.id, callState]);
 
-  // Loading state
+  // ═══════════════════════════════════════════════════════════════
+  // RENDER
+  // ═══════════════════════════════════════════════════════════════
+
+  // Loading
   if (isLoading) {
     return (
       <div className="fixed inset-0 bg-black flex items-center justify-center">
         <div className="text-white text-center">
           <div className="w-12 h-12 border-4 border-primary-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-lg">Connecting...</p>
-          <p className="text-sm text-gray-500 mt-2">Verifying call details</p>
+          <p>Connecting...</p>
         </div>
       </div>
     );
   }
 
-  // Error state
-  if (error || !callData) {
+  // Ended / Error
+  if (callState === 'ended' || (error && callState !== 'incoming')) {
     return (
       <div className="fixed inset-0 bg-black flex items-center justify-center p-4">
-        <div className="text-center max-w-sm">
+        <div className="text-center">
           <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
             <PhoneOff className="w-8 h-8 text-red-500" />
           </div>
-          <p className="text-red-400 text-lg mb-2">Call Unavailable</p>
-          <p className="text-gray-500 mb-6">{error || 'Invalid call'}</p>
+          <p className="text-white text-lg mb-2">Call Ended</p>
+          <p className="text-gray-500 mb-6">{error || 'Returning to app...'}</p>
           <button
-            onClick={() => router.push('/')}
-            className="px-6 py-3 bg-primary-500 hover:bg-primary-600 text-white rounded-xl font-medium transition-colors"
+            onClick={() => window.location.href = '/'}
+            className="px-6 py-3 bg-primary-500 text-white rounded-xl"
           >
             Return to App
           </button>
@@ -466,38 +555,123 @@ function MobileCallContent() {
     );
   }
 
+  if (!callData) return null;
+
   const displayName = callerProfile?.name || callData.callerName || truncateAddress(callData.callerId);
   const avatarBg = getAvatarColor(callData.callerId);
-  const callerAvatar = callerProfile?.avatar;
-  const callType = callData.type;
 
-  return (
-    <div className="fixed inset-0 bg-gradient-to-b from-gray-900 to-black z-[100] flex flex-col items-center justify-between py-12 px-4 safe-area-inset">
-      {/* Background animation */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-gradient-to-r from-primary-500/10 to-purple-500/10 rounded-full blur-3xl animate-pulse" />
-        <div className="absolute bottom-1/4 left-1/4 w-[300px] h-[300px] bg-green-500/5 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '0.5s' }} />
+  // ═══════════════════════════════════════════════════════════════
+  // ACTIVE CALL UI
+  // ═══════════════════════════════════════════════════════════════
+  if (callState === 'active') {
+    return (
+      <div className="fixed inset-0 bg-gradient-to-b from-gray-900 to-black flex flex-col items-center justify-between py-16 px-4">
+        {/* Remote audio */}
+        <audio ref={remoteAudioRef} autoPlay playsInline />
+        
+        {/* Top - Duration */}
+        <div className="text-center">
+          <p className="text-green-400 text-sm mb-1">● Connected</p>
+          <p className="text-white text-3xl font-mono">{formatDuration(callDuration)}</p>
+        </div>
+
+        {/* Middle - Avatar */}
+        <div className="flex flex-col items-center">
+          <div className={`w-32 h-32 rounded-full flex items-center justify-center border-4 border-green-500/50 ${avatarBg}`}>
+            {callerProfile?.avatar ? (
+              <img src={callerProfile.avatar} alt="" className="w-full h-full rounded-full object-cover" />
+            ) : (
+              <span className="text-5xl font-bold text-white">{getInitials(displayName)}</span>
+            )}
+          </div>
+          <h2 className="text-2xl font-bold text-white mt-4">{displayName}</h2>
+          <p className="text-gray-400 text-sm">{callData.type === 'video' ? 'Video Call' : 'Voice Call'}</p>
+        </div>
+
+        {/* Bottom - Controls */}
+        <div className="flex items-center gap-8">
+          <button
+            onClick={toggleMute}
+            className={`w-14 h-14 rounded-full flex items-center justify-center transition-colors ${isMuted ? 'bg-red-500' : 'bg-white/10'}`}
+          >
+            {isMuted ? <MicOff size={24} className="text-white" /> : <Mic size={24} className="text-white" />}
+          </button>
+
+          <button
+            onClick={handleEndCall}
+            className="w-16 h-16 bg-red-500 rounded-full flex items-center justify-center shadow-lg shadow-red-500/30"
+          >
+            <PhoneOff size={28} className="text-white" />
+          </button>
+
+          <button
+            onClick={toggleSpeaker}
+            className={`w-14 h-14 rounded-full flex items-center justify-center transition-colors ${isSpeaker ? 'bg-primary-500' : 'bg-white/10'}`}
+          >
+            <Volume2 size={24} className="text-white" />
+          </button>
+        </div>
       </div>
+    );
+  }
 
-      {/* Top section - Call type and status */}
-      <div className="relative z-10 text-center">
-        <div className="flex items-center justify-center gap-2 mb-2 px-4 py-2 bg-white/5 backdrop-blur-sm rounded-full border border-white/10">
-          {callType === 'video' ? (
+  // ═══════════════════════════════════════════════════════════════
+  // CONNECTING UI
+  // ═══════════════════════════════════════════════════════════════
+  if (callState === 'connecting') {
+    return (
+      <div className="fixed inset-0 bg-gradient-to-b from-gray-900 to-black flex flex-col items-center justify-center px-4">
+        <div className={`w-32 h-32 rounded-full flex items-center justify-center border-4 border-green-500/50 mb-8 ${avatarBg}`}>
+          {callerProfile?.avatar ? (
+            <img src={callerProfile.avatar} alt="" className="w-full h-full rounded-full object-cover" />
+          ) : (
+            <span className="text-5xl font-bold text-white">{getInitials(displayName)}</span>
+          )}
+        </div>
+        
+        <h2 className="text-2xl font-bold text-white mb-2">{displayName}</h2>
+        
+        <div className="flex items-center gap-2 mb-8">
+          <div className="w-5 h-5 border-2 border-green-500 border-t-transparent rounded-full animate-spin" />
+          <p className="text-green-400">{connectionStatus || 'Connecting...'}</p>
+        </div>
+        
+        <button
+          onClick={handleDecline}
+          className="px-6 py-3 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-xl transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // INCOMING CALL UI
+  // ═══════════════════════════════════════════════════════════════
+  return (
+    <div className="fixed inset-0 bg-gradient-to-b from-gray-900 to-black flex flex-col items-center justify-between py-16 px-4">
+      {/* Ringtone */}
+      <audio ref={ringtoneRef} src="/sounds/incoming.mp3" loop preload="auto" />
+      
+      {/* Top - Call type indicator */}
+      <div className="text-center">
+        <div className="inline-flex items-center gap-2 px-4 py-2 bg-white/5 rounded-full border border-white/10">
+          {callData.type === 'video' ? (
             <Video size={18} className="text-primary-400" />
           ) : (
             <Phone size={18} className="text-primary-400" />
           )}
-          <span className="text-white/80 text-sm font-medium">
-            Incoming {callType === 'video' ? 'Video' : 'Voice'} Call
+          <span className="text-white/80 text-sm">
+            Incoming {callData.type === 'video' ? 'Video' : 'Voice'} Call
           </span>
         </div>
-
-        {/* Connection status */}
+        
         <div className="flex items-center justify-center gap-1.5 mt-3">
           {wsConnected ? (
             <>
               <Wifi size={12} className="text-green-500" />
-              <span className="text-green-500 text-xs">Connected</span>
+              <span className="text-green-500 text-xs">Ready</span>
             </>
           ) : (
             <>
@@ -508,132 +682,80 @@ function MobileCallContent() {
         </div>
       </div>
 
-      {/* Middle section - Avatar and caller info */}
-      <div className="relative z-10 flex flex-col items-center">
-        {/* Avatar with pulse rings */}
+      {/* Middle - Avatar with pulse animation */}
+      <div className="flex flex-col items-center">
         <div className="relative mb-8">
-          {/* Outer pulse rings */}
-          <div
-            className="absolute -inset-8 rounded-full border border-primary-500/20 animate-ping"
-            style={{ animationDuration: '2s' }}
+          {/* Pulse rings */}
+          <div 
+            className="absolute -inset-6 rounded-full border border-primary-500/30 animate-ping" 
+            style={{ animationDuration: '2s' }} 
           />
-          <div
-            className={`absolute -inset-4 rounded-full border border-primary-500/30 transition-all duration-1000 ${pulseRing ? 'scale-110 opacity-0' : 'scale-100 opacity-100'}`}
+          <div 
+            className="absolute -inset-4 rounded-full border border-primary-500/20 animate-pulse" 
           />
-          <div
-            className={`absolute -inset-2 rounded-full border border-primary-500/40 transition-all duration-1000 ${!pulseRing ? 'scale-105 opacity-0' : 'scale-100 opacity-100'}`}
-          />
-
-          {/* Avatar container */}
-          <div className={`relative w-32 h-32 rounded-full flex items-center justify-center overflow-hidden border-4 border-primary-500/50 shadow-2xl shadow-primary-500/20 ${avatarBg}`}>
-            {callerAvatar ? (
-              <img
-                src={callerAvatar}
-                alt={displayName}
-                className="w-full h-full object-cover"
-              />
+          
+          {/* Avatar */}
+          <div className={`relative w-32 h-32 rounded-full flex items-center justify-center border-4 border-primary-500/50 shadow-2xl shadow-primary-500/20 ${avatarBg}`}>
+            {callerProfile?.avatar ? (
+              <img src={callerProfile.avatar} alt="" className="w-full h-full rounded-full object-cover" />
             ) : (
-              <span className="text-5xl font-bold text-white">
-                {getInitials(displayName)}
-              </span>
+              <span className="text-5xl font-bold text-white">{getInitials(displayName)}</span>
             )}
           </div>
         </div>
 
-        {/* Caller info */}
-        <h2 className="text-3xl font-bold text-white mb-2 text-center">
-          {displayName}
-        </h2>
-
-        {callerProfile?.name && callData.callerId && (
-          <p className="text-gray-400 text-sm font-mono">
-            {truncateAddress(callData.callerId)}
-          </p>
-        )}
-
-        <p className="text-primary-400 text-sm mt-3 animate-pulse">
-          is calling you...
-        </p>
+        <h2 className="text-3xl font-bold text-white mb-2">{displayName}</h2>
+        <p className="text-primary-400 text-sm animate-pulse">is calling you...</p>
       </div>
 
-      {/* Bottom section - Action buttons */}
-      <div className="relative z-10 w-full max-w-xs">
+      {/* Bottom - Answer/Decline buttons */}
+      <div className="w-full max-w-xs">
         <div className="flex items-center justify-center gap-16">
-          {/* Decline button */}
-          <div className="flex flex-col items-center gap-3">
+          {/* Decline */}
+          <div className="flex flex-col items-center gap-2">
             <button
               onClick={handleDecline}
-              disabled={isAnswering || isDeclining}
-              className="w-18 h-18 bg-red-500 hover:bg-red-600 disabled:opacity-50 disabled:hover:bg-red-500 rounded-full flex items-center justify-center transition-all active:scale-95 shadow-xl shadow-red-500/30"
-              style={{ width: '72px', height: '72px' }}
+              className="w-[72px] h-[72px] bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-xl shadow-red-500/30 transition-colors active:scale-95"
             >
-              {isDeclining ? (
-                <div className="w-7 h-7 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              ) : (
-                <PhoneOff size={30} className="text-white" />
-              )}
+              <PhoneOff size={30} className="text-white" />
             </button>
-            <span className="text-gray-400 text-sm font-medium">
-              {isDeclining ? 'Ending...' : 'Decline'}
-            </span>
+            <span className="text-gray-400 text-sm">Decline</span>
           </div>
 
-          {/* Answer button */}
-          <div className="flex flex-col items-center gap-3">
+          {/* Answer */}
+          <div className="flex flex-col items-center gap-2">
             <button
               onClick={handleAnswer}
-              disabled={isAnswering || isDeclining || !isAuthenticated}
-              className="w-18 h-18 bg-green-500 hover:bg-green-600 disabled:opacity-50 disabled:hover:bg-green-500 rounded-full flex items-center justify-center transition-all active:scale-95 shadow-xl shadow-green-500/30"
-              style={{
-                width: '72px',
-                height: '72px',
-                animation: !isAnswering && isAuthenticated ? 'bounce 1s infinite' : 'none'
+              disabled={!isAuthenticated || !wsConnected}
+              className="w-[72px] h-[72px] bg-green-500 hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-full flex items-center justify-center shadow-xl shadow-green-500/30 transition-colors active:scale-95"
+              style={{ 
+                animation: isAuthenticated && wsConnected ? 'bounce 1s infinite' : 'none' 
               }}
             >
-              {isAnswering ? (
-                <div className="w-7 h-7 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              ) : callType === 'video' ? (
+              {callData.type === 'video' ? (
                 <Video size={30} className="text-white" />
               ) : (
                 <Phone size={30} className="text-white" />
               )}
             </button>
-            <span className="text-gray-400 text-sm font-medium">
-              {isAnswering ? 'Connecting...' : 'Answer'}
-            </span>
+            <span className="text-gray-400 text-sm">Answer</span>
           </div>
         </div>
 
-        {/* Status message */}
+        {/* Status messages */}
         {!isAuthenticated && (
-          <p className="mt-8 text-yellow-500 text-sm text-center">
-            ⚠️ Authenticating...
-          </p>
+          <p className="mt-8 text-yellow-500 text-sm text-center">⚠️ Authenticating...</p>
         )}
-
         {isAuthenticated && !wsConnected && (
-          <p className="mt-8 text-yellow-500 text-sm text-center">
-            ⚠️ Establishing connection...
-          </p>
+          <p className="mt-8 text-yellow-500 text-sm text-center">⚠️ Connecting to server...</p>
         )}
       </div>
 
-      {/* Safe area padding for notch/home indicator */}
+      {/* Bounce animation */}
       <style jsx global>{`
-        .safe-area-inset {
-          padding-top: max(env(safe-area-inset-top), 12px);
-          padding-bottom: max(env(safe-area-inset-bottom), 12px);
-          padding-left: env(safe-area-inset-left);
-          padding-right: env(safe-area-inset-right);
-        }
-        
         @keyframes bounce {
-          0%, 100% {
-            transform: translateY(0);
-          }
-          50% {
-            transform: translateY(-8px);
-          }
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-8px); }
         }
       `}</style>
     </div>
