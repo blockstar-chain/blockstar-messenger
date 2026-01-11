@@ -584,6 +584,112 @@ export async function cancelCallNotification(
   }
 }
 
+/**
+ * Send call notification with deep link URL and auth token
+ * Used for mobile devices to open /call page directly from notification
+ */
+export async function sendCallNotificationWithDeepLink(
+  token: string,
+  platform: 'ios' | 'android',
+  callPayload: CallPushPayload,
+  authToken: string,
+  callUrl: string
+): Promise<boolean> {
+  console.log(`📞 Sending ${callPayload.callType} call notification with deep link to ${platform}`);
+  console.log(`   Caller: ${callPayload.callerName || callPayload.callerId}`);
+  console.log(`   CallId: ${callPayload.callId}`);
+  console.log(`   Deep Link: ${callUrl.substring(0, 60)}...`);
+
+  if (!firebaseInitialized) {
+    console.log('📱 [FCM] Firebase not initialized, cannot send call notification');
+    return false;
+  }
+
+  const callerDisplay = callPayload.callerName || 
+    (callPayload.callerId?.substring(0, 10) + '...');
+
+  const message: admin.messaging.Message = {
+    token,
+    // DATA payload - this is what the app receives
+    data: {
+      type: 'incoming_call',
+      callId: callPayload.callId,
+      callerId: callPayload.callerId,
+      callerName: callPayload.callerName || '',
+      caller: callPayload.callerName || callerDisplay,
+      callType: callPayload.callType,
+      timestamp: Date.now().toString(),
+      // Include auth token and URL for deep linking
+      authToken: authToken,
+      callUrl: callUrl,
+    },
+  };
+
+  if (platform === 'android') {
+    // Android: Use high-priority data message with notification
+    message.android = {
+      priority: 'high',
+      ttl: 30000, // 30 seconds
+      notification: {
+        channelId: 'calls',
+        priority: 'max',
+        title: `📞 Incoming ${callPayload.callType} call`,
+        body: `${callerDisplay} is calling...`,
+        sound: 'default',
+        tag: `incoming-call-${callPayload.callId}`,
+        visibility: 'public',
+        clickAction: 'INCOMING_CALL',
+      },
+    };
+  }
+
+  if (platform === 'ios') {
+    // iOS: Use alert notification with deep link data
+    message.apns = {
+      headers: {
+        'apns-priority': '10',
+        'apns-push-type': 'alert',
+        'apns-expiration': String(Math.floor(Date.now() / 1000) + 30),
+      },
+      payload: {
+        aps: {
+          alert: {
+            title: `📞 Incoming ${callPayload.callType} call`,
+            body: `${callerDisplay} is calling...`,
+          },
+          sound: 'default',
+          badge: 1,
+          'content-available': 1,
+          'mutable-content': 1,
+          category: 'INCOMING_CALL',
+        },
+        // Custom data for the app
+        callId: callPayload.callId,
+        callerId: callPayload.callerId,
+        callerName: callPayload.callerName || '',
+        callType: callPayload.callType,
+        authToken: authToken,
+        callUrl: callUrl,
+      },
+    };
+  }
+
+  try {
+    const response = await admin.messaging().send(message);
+    console.log(`📞 [FCM] Call notification with deep link sent successfully: ${response}`);
+    return true;
+  } catch (error: any) {
+    console.error(`📞 [FCM] Failed to send call notification with deep link:`, error.message);
+    
+    if (error.code === 'messaging/registration-token-not-registered' ||
+      error.code === 'messaging/invalid-registration-token') {
+      console.log(`📱 [FCM] Invalid token, should be removed`);
+    }
+    
+    return false;
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════
 // EXPORTS
 // ═══════════════════════════════════════════════════════════════
@@ -594,6 +700,7 @@ export default {
   initializeAPNs,
   sendFCMPush,
   sendCallNotification,
+  sendCallNotificationWithDeepLink,
   sendMessageNotification,
   cancelCallNotification,
   firebaseInitialized

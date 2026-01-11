@@ -2445,7 +2445,7 @@ export default function Sidebar({
         isOpen={showMeshSettings}
         onClose={() => setShowMeshSettings(false)}
       />
-
+{/* 
       <IncomingCallModal
         isOpen={showIncomingCall}
         callerName={incomingCallData?.callerName || 'Unknown'}
@@ -2454,7 +2454,7 @@ export default function Sidebar({
         callType={incomingCallData?.callType || 'audio'}
         onAnswer={handleAnswerCall}
         onDecline={handleDeclineCall}
-      />
+      /> */}
 
     </>
   );

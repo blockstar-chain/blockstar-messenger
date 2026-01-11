@@ -10,6 +10,7 @@ import crypto from 'crypto';
 import db from './database/db';
 import profileResolver from './services/profileResolver';
 import pushService from './services/pushNotificationService';
+import callTokenService from './services/callTokenService';
 
 
 
@@ -33,7 +34,7 @@ app.use(express.json({ limit: '50mb' }));
 // ═══════════════════════════════════════════════════════════════
 app.post('/api/debug-log', (req, res) => {
   const { message, extra, timestamp, platform, source } = req.body;
-  
+
   console.log('');
   console.log('📱═══════════════════════════════════════════════════════');
   console.log(`📱 MOBILE DEBUG [${platform || 'unknown'}] ${source ? `(${source})` : ''}`);
@@ -45,7 +46,7 @@ app.post('/api/debug-log', (req, res) => {
   }
   console.log('📱═══════════════════════════════════════════════════════');
   console.log('');
-  
+
   res.status(200).json({ success: true });
 });
 
@@ -182,22 +183,22 @@ const lastSeenTimes = new Map<string, number>(); // walletAddress -> timestamp
 // REST API ENDPOINTS
 // ============================================
 
-app.get('/test-push', async (req, res) => {
-  let recipient = "0xf93389abc18a6acdea5127c727e350bdf7f81156"
-  let finalCallId = "0xad5292d3d35f57cc0d7876cfd7b583dc99637b0d-0xf93389abc18a6acdea5127c727e350bdf7f81156-1765169684666"
-  let address = "0xad5292d3d35f57cc0d7876cfd7b583dc99637b0d"
-  let displayName = "blockstardev"
-  let callType = "audio"
-  const pushSent = await sendCallPushNotification(
-    recipient,
-    finalCallId,
-    address,
-    displayName,
-    callType
-  );
+// app.get('/test-push', async (req, res) => {
+//   let recipient = "0xf93389abc18a6acdea5127c727e350bdf7f81156"
+//   let finalCallId = "0xad5292d3d35f57cc0d7876cfd7b583dc99637b0d-0xf93389abc18a6acdea5127c727e350bdf7f81156-1765169684666"
+//   let address = "0xad5292d3d35f57cc0d7876cfd7b583dc99637b0d"
+//   let displayName = "blockstardev"
+//   let callType = "audio"
+//   const pushSent = await sendCallPushNotification(
+//     recipient,
+//     finalCallId,
+//     address,
+//     displayName,
+//     callType
+//   );
 
-  console.log(pushSent)
-})
+//   console.log(pushSent)
+// })
 
 // Health check
 app.get('/health', async (req, res) => {
@@ -256,9 +257,9 @@ app.get('/api/push-token/check/:walletAddress', async (req, res) => {
 
   try {
     const tokens = await db.getPushTokens(walletAddress.toLowerCase());
-    
+
     console.log(`📱 Token check for ${walletAddress}: ${tokens.length} token(s) found`);
-    
+
     res.json({
       success: true,
       hasToken: tokens.length > 0,
@@ -284,9 +285,9 @@ app.get('/api/push-token/status/:walletAddress', async (req, res) => {
 
   try {
     const tokens = await db.getPushTokens(walletAddress.toLowerCase());
-    
-    const firebaseReady = pushService.firebaseInitialized? true : false;
-    
+
+    const firebaseReady = pushService.firebaseInitialized ? true : false;
+
     res.json({
       success: true,
       enabled: tokens.length > 0,
@@ -324,7 +325,7 @@ app.post('/api/push-token/force-register', async (req, res) => {
 
   try {
     const normalizedAddress = walletAddress.toLowerCase();
-    
+
     // Delete all existing tokens for this wallet on this platform
     // This ensures we don't have stale tokens
     const existingTokens = await db.getPushTokens(normalizedAddress);
@@ -387,7 +388,7 @@ app.post('/api/push-token/test', async (req, res) => {
           },
           platform as 'ios' | 'android'
         );
-        
+
         if (success) {
           sent++;
         } else {
@@ -404,8 +405,8 @@ app.post('/api/push-token/test', async (req, res) => {
       sent,
       failed,
       totalTokens: tokens.length,
-      message: sent > 0 
-        ? `Test notification sent to ${sent} device(s)` 
+      message: sent > 0
+        ? `Test notification sent to ${sent} device(s)`
         : 'Failed to send test notification'
     });
   } catch (error) {
@@ -469,6 +470,131 @@ app.delete('/api/push-token', async (req, res) => {
   }
 });
 
+app.post('/api/calls/verify-token', async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        error: 'Token is required'
+      });
+    }
+
+    const callData = callTokenService.verifyCallToken(token);
+
+    if (!callData) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid or expired token'
+      });
+    }
+
+    // Get additional user info
+    const recipient = await db.getUserByWallet(callData.recipientWallet);
+
+    res.json({
+      success: true,
+      callId: callData.callId,
+      callerId: callData.callerId,
+      callerName: callData.callerName,
+      callType: callData.callType,
+      recipientWallet: callData.recipientWallet,
+      // Include recipient's user data for the session
+      user: recipient ? {
+        walletAddress: recipient.wallet_address,
+        username: recipient.username,
+      } : null
+    });
+
+  } catch (error) {
+    console.error('Error verifying call token:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to verify token'
+    });
+  }
+});
+
+// Get call offer - used by mobile /call page after answering
+app.get('/api/calls/:callId/offer', async (req, res) => {
+  try {
+    const { callId } = req.params;
+    const { token } = req.query;
+
+    if (!callId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Call ID is required'
+      });
+    }
+
+    // Optional: verify token for additional security
+    if (token) {
+      const callData = callTokenService.verifyCallToken(token as string);
+      if (!callData || callData.callId !== callId) {
+        return res.status(401).json({
+          success: false,
+          error: 'Invalid token for this call'
+        });
+      }
+    }
+
+    const offer = callTokenService.getCallOffer(callId);
+
+    if (!offer) {
+      return res.status(404).json({
+        success: false,
+        error: 'Call offer not found or expired'
+      });
+    }
+
+    res.json({
+      success: true,
+      offer,
+    });
+
+  } catch (error) {
+    console.error('Error getting call offer:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get call offer'
+    });
+  }
+});
+
+// Get pending call info (without token, just by callId - for checking if call still active)
+app.get('/api/calls/:callId/status', async (req, res) => {
+  try {
+    const { callId } = req.params;
+
+    const pendingCall = callTokenService.getPendingCall(callId);
+
+    if (!pendingCall) {
+      return res.json({
+        success: true,
+        active: false,
+        reason: 'Call not found or expired'
+      });
+    }
+
+    res.json({
+      success: true,
+      active: true,
+      callType: pendingCall.callType,
+      hasOffer: !!pendingCall.offer,
+    });
+
+  } catch (error) {
+    console.error('Error getting call status:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get call status'
+    });
+  }
+});
+
+
 
 // Send call-specific push notification (high priority)
 async function sendCallPushNotification(
@@ -476,7 +602,8 @@ async function sendCallPushNotification(
   callId: string,
   callerId: string,
   callerName: string | undefined,
-  callType: any
+  callType: 'audio' | 'video',
+  offer?: any  // WebRTC offer to store for later retrieval
 ): Promise<boolean> {
   try {
     const tokens = await db.getPushTokens(recipientWallet);
@@ -488,10 +615,29 @@ async function sendCallPushNotification(
 
     console.log(`📞 Sending call notification to ${tokens.length} device(s)`);
 
+    // ═══════════════════════════════════════════════════════════════
+    // Generate auth token and store call data
+    // ═══════════════════════════════════════════════════════════════
+    const authToken = callTokenService.createPendingCall(
+      callId,
+      callerId,
+      callerName,
+      callType,
+      recipientWallet,
+      offer  // Store the offer for later retrieval
+    );
+
+    // Generate the deep link URL
+    const frontendUrl = process.env.FRONTEND_URL || 'https://messenger.blockstar.world';
+    const callUrl = `${frontendUrl}/call?callId=${encodeURIComponent(callId)}&callerId=${encodeURIComponent(callerId)}&callerName=${encodeURIComponent(callerName || '')}&callType=${callType}&token=${authToken}`;
+
+    console.log(`📞 Call deep link generated: ${callUrl.substring(0, 80)}...`);
+
     let sent = false;
     for (const { push_token, platform } of tokens) {
       try {
-        const success = await pushService.sendCallNotification(
+        // Use new function that includes deep link
+        const success = await pushService.sendCallNotificationWithDeepLink(
           push_token,
           platform as 'ios' | 'android',
           {
@@ -499,7 +645,9 @@ async function sendCallPushNotification(
             callerId,
             callerName,
             callType,
-          }
+          },
+          authToken,
+          callUrl
         );
         if (success) sent = true;
       } catch (err) {
@@ -978,7 +1126,7 @@ app.get('/api/conversations/:walletAddress', async (req, res) => {
     // These are phantom groups created by bugs - they should not be returned
     const beforeFilter = conversations.length;
     const invalidGroupIds: string[] = [];
-    
+
     conversations = conversations.filter(c => {
       if (c.type === 'group') {
         const name = c.name || '';
@@ -994,15 +1142,15 @@ app.get('/api/conversations/:walletAddress', async (req, res) => {
       }
       return true;
     });
-    
+
     if (beforeFilter !== conversations.length) {
       console.log(`🧹 Filtered out ${beforeFilter - conversations.length} invalid groups`);
-      
+
       // PERMANENTLY DELETE invalid groups from database to stop them from appearing
       // This runs async in background - don't await to not slow down response
       if (invalidGroupIds.length > 0) {
         console.log(`🗑️ Scheduling deletion of ${invalidGroupIds.length} invalid groups: ${invalidGroupIds.join(', ')}`);
-        
+
         // Delete in background
         (async () => {
           for (const groupId of invalidGroupIds) {
@@ -2259,7 +2407,8 @@ io.on('connection', (socket: Socket) => {
           finalCallId,
           address,
           displayName,
-          callType
+          callType,
+          offer  // <-- ADD THIS: Pass the offer so it's stored for retrieval
         );
 
         if (pushSent) {
@@ -2292,7 +2441,7 @@ io.on('connection', (socket: Socket) => {
       const callerSocketId = activeConnections.get(callerAddress);
 
       console.log('Call answer received:', { callId, callerAddress, callerSocketId: !!callerSocketId });
-
+      callTokenService.removePendingCall(callId);
       if (callerSocketId) {
         io.to(callerSocketId).emit('call:answer', {
           callId,
@@ -2338,20 +2487,21 @@ io.on('connection', (socket: Socket) => {
       if (otherSocketId) {
         io.to(otherSocketId).emit('call:ended', { callId, endedBy: address });
       }
+      callTokenService.removePendingCall(callId);
     } catch (error) {
       console.error('Error ending call:', error);
     }
   });
 
   // Handle missed call - creates a message in chat
-  socket.on('call:missed', async ({ 
-    callId, 
-    callerId, 
-    recipientId, 
-    callType, 
+  socket.on('call:missed', async ({
+    callId,
+    callerId,
+    recipientId,
+    callType,
     callerName,
-    reason 
-  }: { 
+    reason
+  }: {
     callId: string;
     callerId: string;
     recipientId: string;
@@ -2419,7 +2569,7 @@ io.on('connection', (socket: Socket) => {
           callerId.toLowerCase(),
           recipientId.toLowerCase()
         );
-        
+
         // Create the message content as a JSON object with all the metadata
         const messageContent = JSON.stringify({
           isSystemMessage: true,
@@ -2430,7 +2580,7 @@ io.on('connection', (socket: Socket) => {
           callerName: callerName || truncateAddress(callerId),
           reason,
         });
-        
+
         // Save using correct function signature: (conversationId, senderWallet, content, messageType, clientId)
         await db.saveMessage(
           conversationId,
@@ -2447,7 +2597,7 @@ io.on('connection', (socket: Socket) => {
       // Send to recipient if online
       const recipientSocketId = activeConnections.get(recipientId.toLowerCase());
       console.log('📤 Recipient socket lookup:', recipientId.toLowerCase(), '→', recipientSocketId || 'NOT ONLINE');
-      
+
       if (recipientSocketId) {
         io.to(recipientSocketId).emit('message', missedCallMessage);
         console.log('✅ Missed call message sent to recipient via socket');
@@ -2458,7 +2608,7 @@ io.on('connection', (socket: Socket) => {
       // Also send to caller so they see it in their chat
       const callerSocketId = activeConnections.get(callerId.toLowerCase());
       console.log('📤 Caller socket lookup:', callerId.toLowerCase(), '→', callerSocketId || 'NOT ONLINE');
-      
+
       if (callerSocketId) {
         io.to(callerSocketId).emit('message', missedCallMessage);
         console.log('✅ Missed call message sent to caller via socket');
@@ -2473,13 +2623,13 @@ io.on('connection', (socket: Socket) => {
         callerName || truncateAddress(callerId),
         callType
       );
-      
+
       if (pushSent) {
         console.log('📱 Missed call push notification sent');
       } else {
         console.log('⚠️ No push notification sent (recipient may not have FCM token)');
       }
-      
+
       console.log('═══════════════════════════════════════');
       console.log('✅ MISSED CALL HANDLING COMPLETE');
       console.log('═══════════════════════════════════════');
