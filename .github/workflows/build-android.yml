@@ -1,74 +1,48 @@
 name: Build Android APK
-
 on:
   workflow_dispatch:
   push:
     branches:
       - main
-
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      # 1) Checkout repo
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      # 2) Setup Node
+        
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: 18
-
-      # 3) Install dependencies in frontend
+          
       - name: Install npm dependencies
         run: |
           cd frontend
           npm install
-
-      # 4) Build Next.js + sync Capacitor (android)
+          
       - name: Build frontend & sync Capacitor
         run: |
           cd frontend
           npm run build
           npx cap sync android
-
-      # 5) Setup Java + Android SDK
+          
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
-
+          
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-
-      # 6) Restore keystore into android/app/
-      - name: Decode keystore into android/app
+        
+      - name: Decode keystore
         run: |
           mkdir -p frontend/android/app
           echo "$KEYSTORE_FILE" | base64 --decode > frontend/android/app/blockstar-cypher.keystore
-          echo "Contents of frontend/android/app:"
-          ls -al frontend/android/app
         env:
           KEYSTORE_FILE: ${{ secrets.KEYSTORE_FILE }}
-
-      - name: Debug - Check signing config
-        run: |
-          echo "KEYSTORE_PASSWORD length: ${#KEYSTORE_PASSWORD}"
-          echo "KEY_PASSWORD length: ${#KEY_PASSWORD}"
-          echo "KEY_ALIAS value: $KEY_ALIAS"
-          echo "Keystore file exists:"
-          ls -la frontend/android/app/blockstar-cypher.keystore
-          # Test if keystore is valid
-          keytool -list -keystore frontend/android/app/blockstar-cypher.keystore -storepass "$KEYSTORE_PASSWORD" || echo "Keystore test failed"
-        env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-
-      # 7) Build signed release APK (Gradle uses signingConfigs from build.gradle)
+          
       - name: Build signed release APK
         run: |
           cd frontend/android
@@ -80,3 +54,15 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          
+      - name: List APK files
+        run: |
+          echo "=== APK files found ==="
+          find frontend/android -name "*.apk" -type f -ls
+          
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BlockStar-release-apk
+          path: frontend/android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
