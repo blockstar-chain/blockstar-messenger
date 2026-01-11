@@ -2,7 +2,7 @@
 // BlockStar Cypher - NFT Domain Profile Resolver Client
 // Fetches profile data from backend which reads from smart contract
 
-const API_BASE = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
+export const API_BASE = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
 const RESOLVER_BASE = 'https://domains.blockstar.site';
 
 // LocalStorage key for persisting wallet->profile mappings

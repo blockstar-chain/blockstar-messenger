@@ -11,6 +11,7 @@ import { webRTCService } from '@/lib/webrtc';
 import { webSocketService } from '@/lib/websocket';
 import { getAvatarColor, getInitials, truncateAddress } from '@/utils/helpers';
 import toast from 'react-hot-toast';
+import { API_BASE } from '@/lib/profileResolver';
 
 // Wrap the main component with Suspense for useSearchParams
 export default function MobileCallPage() {
@@ -112,8 +113,7 @@ function MobileCallContent() {
     try {
       console.log('🔐 Verifying call token...');
       
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
-      const response = await fetch(`${API_URL}/api/calls/verify-token`, {
+      const response = await fetch(`${API_BASE}/api/calls/verify-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token })

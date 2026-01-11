@@ -35,17 +35,17 @@ app.use(express.json({ limit: '50mb' }));
 app.post('/api/debug-log', (req, res) => {
   const { message, extra, timestamp, platform, source } = req.body;
 
-  console.log('');
-  console.log('📱═══════════════════════════════════════════════════════');
-  console.log(`📱 MOBILE DEBUG [${platform || 'unknown'}] ${source ? `(${source})` : ''}`);
-  console.log(`📱 Time: ${timestamp || new Date().toISOString()}`);
-  console.log('📱───────────────────────────────────────────────────────');
-  console.log(`📱 ${message}`);
-  if (extra) {
-    console.log('📱 Extra:', extra);
-  }
-  console.log('📱═══════════════════════════════════════════════════════');
-  console.log('');
+  // console.log('');
+  // console.log('📱═══════════════════════════════════════════════════════');
+  // console.log(`📱 MOBILE DEBUG [${platform || 'unknown'}] ${source ? `(${source})` : ''}`);
+  // console.log(`📱 Time: ${timestamp || new Date().toISOString()}`);
+  // console.log('📱───────────────────────────────────────────────────────');
+  // console.log(`📱 ${message}`);
+  // if (extra) {
+  //   console.log('📱 Extra:', extra);
+  // }
+  // console.log('📱═══════════════════════════════════════════════════════');
+  // console.log('');
 
   res.status(200).json({ success: true });
 });
@@ -606,12 +606,15 @@ async function sendCallPushNotification(
   offer?: any  // WebRTC offer to store for later retrieval
 ): Promise<boolean> {
   try {
+    console.log('hererere inside sendCallPushNotification')
     const tokens = await db.getPushTokens(recipientWallet);
-
+    console.log(tokens)
     if (tokens.length === 0) {
       console.log(`📱 No push tokens for ${recipientWallet.substring(0, 10)}... - cannot send call notification`);
       return false;
     }
+
+    console.log("here 1")
 
     console.log(`📞 Sending call notification to ${tokens.length} device(s)`);
 
@@ -631,7 +634,7 @@ async function sendCallPushNotification(
     const frontendUrl = process.env.FRONTEND_URL || 'https://messenger.blockstar.world';
     const callUrl = `${frontendUrl}/call?callId=${encodeURIComponent(callId)}&callerId=${encodeURIComponent(callerId)}&callerName=${encodeURIComponent(callerName || '')}&callType=${callType}&token=${authToken}`;
 
-    console.log(`📞 Call deep link generated: ${callUrl.substring(0, 80)}...`);
+    console.log(`📞 Call deep link generated: ${callUrl}`);
 
     let sent = false;
     for (const { push_token, platform } of tokens) {
@@ -2402,7 +2405,7 @@ io.on('connection', (socket: Socket) => {
         console.log("callType", callType)
 
         // Send push notification
-        const pushSent = await sendCallPushNotification(
+        await sendCallPushNotification(
           recipient,
           finalCallId,
           address,
@@ -2411,7 +2414,7 @@ io.on('connection', (socket: Socket) => {
           offer  // <-- ADD THIS: Pass the offer so it's stored for retrieval
         );
 
-        if (pushSent) {
+        // if (pushSent) {
           console.log(`📞 Push notification sent for call ${finalCallId}`);
           // Tell the caller we're trying to reach them via push
           socket.emit('call:initiated', {
@@ -2419,13 +2422,13 @@ io.on('connection', (socket: Socket) => {
             recipientAddress: recipient,
             viaPush: true // Indicate this went via push, not direct socket
           });
-        } else {
-          // No push tokens or push failed
-          socket.emit('call:unavailable', {
-            recipientAddress: recipient,
-            reason: 'User is offline and push notifications unavailable',
-          });
-        }
+        // } else {
+        //   // No push tokens or push failed
+        //   socket.emit('call:unavailable', {
+        //     recipientAddress: recipient,
+        //     reason: 'User is offline and push notifications unavailable',
+        //   });
+        // }
       }
     } catch (error) {
       console.error('Error initiating call:', error);
@@ -2441,7 +2444,7 @@ io.on('connection', (socket: Socket) => {
       const callerSocketId = activeConnections.get(callerAddress);
 
       console.log('Call answer received:', { callId, callerAddress, callerSocketId: !!callerSocketId });
-      callTokenService.removePendingCall(callId);
+      // callTokenService.removePendingCall(callId);
       if (callerSocketId) {
         io.to(callerSocketId).emit('call:answer', {
           callId,
@@ -2487,7 +2490,7 @@ io.on('connection', (socket: Socket) => {
       if (otherSocketId) {
         io.to(otherSocketId).emit('call:ended', { callId, endedBy: address });
       }
-      callTokenService.removePendingCall(callId);
+      // callTokenService.removePendingCall(callId);
     } catch (error) {
       console.error('Error ending call:', error);
     }
