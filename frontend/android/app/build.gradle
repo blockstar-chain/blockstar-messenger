@@ -11,14 +11,12 @@ android {
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
-             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
-             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
 
-
-signingConfigs {
+    // ✅ MUST BE INSIDE android { } block
+    signingConfigs {
         release {
             storeFile file("blockstar-cypher.keystore")
             storePassword System.getenv("KEYSTORE_PASSWORD")
@@ -34,7 +32,7 @@ signingConfigs {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
-}
+}  // <-- android block closes HERE
 
 repositories {
     flatDir{
