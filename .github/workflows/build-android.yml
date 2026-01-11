@@ -72,11 +72,11 @@ jobs:
       - name: Build signed release APK
         run: |
           cd frontend/android
-          ./gradlew assembleRelease
-
-      # 8) Upload APK artifact
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: BlockStar-release-apk
-          path: frontend/android/app/build/outputs/apk/release/app-release.apk
+          ./gradlew assembleRelease \
+            -PKEYSTORE_PASSWORD="${KEYSTORE_PASSWORD}" \
+            -PKEY_PASSWORD="${KEY_PASSWORD}" \
+            -PKEY_ALIAS="${KEY_ALIAS}"
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}

@@ -15,13 +15,13 @@ android {
         }
     }
 
-    // ✅ MUST BE INSIDE android { } block
     signingConfigs {
         release {
             storeFile file("blockstar-cypher.keystore")
-            storePassword System.getenv("KEYSTORE_PASSWORD")
-            keyAlias System.getenv("KEY_ALIAS")
-            keyPassword System.getenv("KEY_PASSWORD")
+            // Try project property first, then env var, then empty string
+            storePassword project.hasProperty('KEYSTORE_PASSWORD') ? project.KEYSTORE_PASSWORD : System.getenv("KEYSTORE_PASSWORD") ?: ""
+            keyAlias project.hasProperty('KEY_ALIAS') ? project.KEY_ALIAS : System.getenv("KEY_ALIAS") ?: "blockstar"
+            keyPassword project.hasProperty('KEY_PASSWORD') ? project.KEY_PASSWORD : System.getenv("KEY_PASSWORD") ?: ""
         }
     }
     
@@ -32,7 +32,7 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
-}  // <-- android block closes HERE
+}
 
 repositories {
     flatDir{
