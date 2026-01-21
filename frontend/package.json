@@ -2,11 +2,17 @@
   "name": "blockstar-cypher-frontend",
   "version": "2.0.0",
   "private": true,
+  "main": "electron/main.js",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "electron:dev": "electron .",
+    "electron:build": "electron-builder",
+    "electron:build:win": "electron-builder --win",
+    "electron:build:mac": "electron-builder --mac",
+    "electron:build:linux": "electron-builder --linux"
   },
   "dependencies": {
     "@capacitor-community/bluetooth-le": "^3.1.4",
@@ -61,6 +67,8 @@
     "@types/react-dom": "^18",
     "@types/uuid": "^9.0.0",
     "autoprefixer": "^10.0.1",
+    "electron": "^40.0.0",
+    "electron-builder": "^26.4.0",
     "eslint": "^8",
     "eslint-config-next": "14.0.4",
     "postcss": "^8",

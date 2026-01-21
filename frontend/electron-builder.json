@@ -1,0 +1,126 @@
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "com.blockstar.cypher",
+  "productName": "BlockStar Cypher",
+  "copyright": "Copyright © 2024 BlockStar",
+  
+  "directories": {
+    "output": "dist",
+    "buildResources": "build"
+  },
+  
+  "files": [
+    "electron/**/*",
+    "out/**/*",
+    "public/**/*",
+    "!**/*.map",
+    "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
+    "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
+    "!**/node_modules/.bin"
+  ],
+  
+  "extraResources": [
+    {
+      "from": "public/",
+      "to": "public/",
+      "filter": ["**/*"]
+    }
+  ],
+
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      },
+      {
+        "target": "portable",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "public/icon.ico",
+    "artifactName": "${productName}-${version}-Windows.${ext}"
+  },
+  
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false,
+    "installerIcon": "public/icon.ico",
+    "uninstallerIcon": "public/icon.ico",
+    "installerHeaderIcon": "public/icon.ico",
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "BlockStar Cypher"
+  },
+  
+  "portable": {
+    "artifactName": "${productName}-${version}-Portable.${ext}"
+  },
+
+  "mac": {
+    "target": [
+      {
+        "target": "dmg",
+        "arch": ["x64", "arm64"]
+      },
+      {
+        "target": "zip",
+        "arch": ["x64", "arm64"]
+      }
+    ],
+    "icon": "public/icon.icns",
+    "category": "public.app-category.social-networking",
+    "artifactName": "${productName}-${version}-macOS-${arch}.${ext}",
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false,
+    "entitlements": "build/entitlements.mac.plist",
+    "entitlementsInherit": "build/entitlements.mac.plist"
+  },
+  
+  "dmg": {
+    "contents": [
+      {
+        "x": 130,
+        "y": 220
+      },
+      {
+        "x": 410,
+        "y": 220,
+        "type": "link",
+        "path": "/Applications"
+      }
+    ],
+    "window": {
+      "width": 540,
+      "height": 380
+    }
+  },
+
+  "linux": {
+    "target": [
+      {
+        "target": "AppImage",
+        "arch": ["x64"]
+      },
+      {
+        "target": "deb",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "public/icons",
+    "category": "Network",
+    "artifactName": "${productName}-${version}-Linux.${ext}"
+  },
+  
+  "appImage": {
+    "artifactName": "${productName}-${version}.${ext}"
+  },
+
+  "publish": {
+    "provider": "github",
+    "owner": "your-org",
+    "repo": "cypher"
+  }
+}

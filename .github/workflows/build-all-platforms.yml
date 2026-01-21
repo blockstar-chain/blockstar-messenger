@@ -1,0 +1,439 @@
+name: Build All Platforms
+
+on:
+  push:
+    branches: [main, master]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      build_android:
+        description: 'Build Android APK'
+        required: false
+        default: true
+        type: boolean
+      build_windows:
+        description: 'Build Windows'
+        required: false
+        default: true
+        type: boolean
+      build_macos:
+        description: 'Build macOS'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════
+  # BUILD FRONTEND (shared by all platforms)
+  # ═══════════════════════════════════════════════════════════════
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: ${{ vars.API_URL || 'https://api.example.com' }}
+
+      - name: Upload frontend build
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: frontend/out
+          retention-days: 1
+
+  # ═══════════════════════════════════════════════════════════════
+  # ANDROID APK BUILD
+  # ═══════════════════════════════════════════════════════════════
+  # build-android:
+  #   needs: build-frontend
+  #   runs-on: ubuntu-latest
+  #   if: ${{ github.event.inputs.build_android != 'false' }}
+    
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+
+  #     - name: Setup Node.js
+  #       uses: actions/setup-node@v4
+  #       with:
+  #         node-version: ${{ env.NODE_VERSION }}
+  #         cache: 'npm'
+  #         cache-dependency-path: frontend/package-lock.json
+
+  #     - name: Setup Java
+  #       uses: actions/setup-java@v4
+  #       with:
+  #         distribution: 'temurin'
+  #         java-version: '17'
+
+  #     - name: Setup Android SDK
+  #       uses: android-actions/setup-android@v3
+
+  #     - name: Download frontend build
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: frontend-build
+  #         path: frontend/out
+
+  #     - name: Install dependencies
+  #       working-directory: frontend
+  #       run: npm ci
+
+  #     - name: Install Capacitor CLI
+  #       run: npm install -g @capacitor/cli
+
+  #     - name: Sync Capacitor
+  #       working-directory: frontend
+  #       run: npx cap sync android
+
+  #     - name: Decode Keystore
+  #       working-directory: frontend/android/app
+  #       run: |
+  #         echo "${{ secrets.KEYSTORE_FILE }}" | base64 --decode > blockstar-cypher.keystore
+  #         ls -la blockstar-cypher.keystore
+
+  #     - name: Build Android APK
+  #       working-directory: frontend/android
+  #       run: |
+  #         chmod +x ./gradlew
+  #         ./gradlew assembleRelease \
+  #           -PKEYSTORE_PASSWORD="${{ secrets.KEYSTORE_PASSWORD }}" \
+  #           -PKEY_PASSWORD="${{ secrets.KEY_PASSWORD }}" \
+  #           -PKEY_ALIAS="${{ secrets.KEY_ALIAS || 'blockstar' }}"
+
+  #     - name: Upload Android APK
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: android-apk
+  #         path: frontend/android/app/build/outputs/apk/release/*.apk
+  #         retention-days: 30
+
+  # ═══════════════════════════════════════════════════════════════
+  # WINDOWS BUILD (Electron)
+  # ═══════════════════════════════════════════════════════════════
+  build-windows:
+    needs: build-frontend
+    runs-on: windows-latest
+    if: ${{ github.event.inputs.build_windows != 'false' }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Download frontend build
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-build
+          path: frontend/out
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Electron dependencies
+        working-directory: frontend
+        run: |
+          npm install --save-dev electron electron-builder
+        
+      - name: Create Electron main.js (if not exists)
+        working-directory: frontend
+        shell: pwsh
+        run: |
+          if (!(Test-Path "electron/main.js")) {
+            New-Item -ItemType Directory -Force -Path "electron"
+            @"
+          const { app, BrowserWindow, shell } = require('electron');
+          const path = require('path');
+
+          let mainWindow;
+
+          function createWindow() {
+            mainWindow = new BrowserWindow({
+              width: 1200,
+              height: 800,
+              minWidth: 800,
+              minHeight: 600,
+              webPreferences: {
+                nodeIntegration: false,
+                contextIsolation: true,
+                webSecurity: true,
+              },
+              icon: path.join(__dirname, '../public/icon.png'),
+              titleBarStyle: 'default',
+              show: false,
+            });
+
+            // Load the app
+            if (process.env.NODE_ENV === 'development') {
+              mainWindow.loadURL('http://localhost:3000');
+              mainWindow.webContents.openDevTools();
+            } else {
+              mainWindow.loadFile(path.join(__dirname, '../out/index.html'));
+            }
+
+            // Handle external links
+            mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+              shell.openExternal(url);
+              return { action: 'deny' };
+            });
+
+            mainWindow.once('ready-to-show', () => {
+              mainWindow.show();
+            });
+
+            mainWindow.on('closed', () => {
+              mainWindow = null;
+            });
+          }
+
+          app.whenReady().then(createWindow);
+
+          app.on('window-all-closed', () => {
+            if (process.platform !== 'darwin') {
+              app.quit();
+            }
+          });
+
+          app.on('activate', () => {
+            if (BrowserWindow.getAllWindows().length === 0) {
+              createWindow();
+            }
+          });
+          "@ | Out-File -FilePath "electron/main.js" -Encoding UTF8
+          }
+
+      - name: Update package.json for Electron
+        working-directory: frontend
+        shell: pwsh
+        run: |
+          $pkg = Get-Content package.json | ConvertFrom-Json
+          $pkg.main = "electron/main.js"
+          if (-not $pkg.build) {
+            $pkg | Add-Member -NotePropertyName "build" -NotePropertyValue @{
+              appId = "com.blockstar.cypher"
+              productName = "BlockStar Cypher"
+              directories = @{
+                output = "dist"
+              }
+              files = @(
+                "electron/**/*"
+                "out/**/*"
+                "public/**/*"
+              )
+              win = @{
+                target = @("nsis", "portable")
+                icon = "public/icon.ico"
+              }
+            } -Force
+          }
+          $pkg | ConvertTo-Json -Depth 10 | Set-Content package.json
+
+      - name: Build Windows App
+        working-directory: frontend
+        run: npx electron-builder --win --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Windows Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: |
+            frontend/dist/*.exe
+            frontend/dist/*.msi
+          retention-days: 30
+
+  # ═══════════════════════════════════════════════════════════════
+  # MACOS BUILD (Electron)
+  # ═══════════════════════════════════════════════════════════════
+  build-macos:
+    needs: build-frontend
+    runs-on: macos-latest
+    if: ${{ github.event.inputs.build_macos != 'false' }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Download frontend build
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-build
+          path: frontend/out
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Electron dependencies
+        working-directory: frontend
+        run: npm install --save-dev electron electron-builder
+
+      - name: Create Electron main.js (if not exists)
+        working-directory: frontend
+        run: |
+          mkdir -p electron
+          if [ ! -f "electron/main.js" ]; then
+            cat > electron/main.js << 'EOF'
+          const { app, BrowserWindow, shell } = require('electron');
+          const path = require('path');
+
+          let mainWindow;
+
+          function createWindow() {
+            mainWindow = new BrowserWindow({
+              width: 1200,
+              height: 800,
+              minWidth: 800,
+              minHeight: 600,
+              webPreferences: {
+                nodeIntegration: false,
+                contextIsolation: true,
+                webSecurity: true,
+              },
+              icon: path.join(__dirname, '../public/icon.png'),
+              titleBarStyle: 'hiddenInset',
+              show: false,
+            });
+
+            // Load the app
+            if (process.env.NODE_ENV === 'development') {
+              mainWindow.loadURL('http://localhost:3000');
+              mainWindow.webContents.openDevTools();
+            } else {
+              mainWindow.loadFile(path.join(__dirname, '../out/index.html'));
+            }
+
+            // Handle external links
+            mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+              shell.openExternal(url);
+              return { action: 'deny' };
+            });
+
+            mainWindow.once('ready-to-show', () => {
+              mainWindow.show();
+            });
+
+            mainWindow.on('closed', () => {
+              mainWindow = null;
+            });
+          }
+
+          app.whenReady().then(createWindow);
+
+          app.on('window-all-closed', () => {
+            if (process.platform !== 'darwin') {
+              app.quit();
+            }
+          });
+
+          app.on('activate', () => {
+            if (BrowserWindow.getAllWindows().length === 0) {
+              createWindow();
+            }
+          });
+          EOF
+          fi
+
+      - name: Update package.json for Electron
+        working-directory: frontend
+        run: |
+          # Add electron config to package.json using Node
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json'));
+            pkg.main = 'electron/main.js';
+            pkg.build = pkg.build || {};
+            pkg.build.appId = 'com.blockstar.cypher';
+            pkg.build.productName = 'BlockStar Cypher';
+            pkg.build.directories = { output: 'dist' };
+            pkg.build.files = ['electron/**/*', 'out/**/*', 'public/**/*'];
+            pkg.build.mac = {
+              target: ['dmg', 'zip'],
+              icon: 'public/icon.icns',
+              category: 'public.app-category.social-networking'
+            };
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          "
+
+      - name: Build macOS App (unsigned)
+        working-directory: frontend
+        run: npx electron-builder --mac --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload macOS Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: |
+            frontend/dist/*.dmg
+            frontend/dist/*.zip
+          retention-days: 30
+
+  # ═══════════════════════════════════════════════════════════════
+  # CREATE RELEASE (on tag push)
+  # ═══════════════════════════════════════════════════════════════
+  create-release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display structure of downloaded files
+        run: ls -R artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/android-apk/*.apk
+            artifacts/windows-build/*.exe
+            artifacts/macos-build/*.dmg
+            artifacts/macos-build/*.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'alpha') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
