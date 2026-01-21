@@ -3,6 +3,8 @@
   "version": "2.0.0",
   "private": true,
   "main": "electron/main.js",
+  "description": "BlockStar Cypher - Secure Messaging",
+  "author": "BlockStar",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

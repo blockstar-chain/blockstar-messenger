@@ -247,12 +247,69 @@ jobs:
           "@ | Out-File -FilePath "electron/main.js" -Encoding UTF8
           }
 
+      - name: Generate Windows icon
+        working-directory: frontend
+        shell: pwsh
+        run: |
+          # Install sharp for image conversion
+          npm install --save-dev sharp
+          
+          # Create icon generation script
+          @"
+          const sharp = require('sharp');
+          const fs = require('fs');
+          const path = require('path');
+          
+          async function generateIcon() {
+            const pngPath = 'public/icon.png';
+            const icoPath = 'public/icon.ico';
+            
+            // Check if PNG exists
+            if (!fs.existsSync(pngPath)) {
+              console.log('No icon.png found, creating placeholder...');
+              // Create a simple 256x256 blue square as placeholder
+              const svg = Buffer.from(
+                '<svg width="256" height="256"><rect width="256" height="256" fill="#3B82F6"/><text x="128" y="140" text-anchor="middle" font-size="48" fill="white">BC</text></svg>'
+              );
+              await sharp(svg).resize(256, 256).png().toFile(pngPath);
+            }
+            
+            // Get image info
+            const metadata = await sharp(pngPath).metadata();
+            console.log('Icon size:', metadata.width, 'x', metadata.height);
+            
+            // If icon is too small, resize it
+            if (metadata.width < 256 || metadata.height < 256) {
+              console.log('Resizing icon to 256x256...');
+              await sharp(pngPath)
+                .resize(256, 256, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+                .toFile('public/icon-256.png');
+              fs.copyFileSync('public/icon-256.png', pngPath);
+            }
+            
+            console.log('Icon ready for electron-builder');
+          }
+          
+          generateIcon().catch(console.error);
+          "@ | Out-File -FilePath "generate-icon.js" -Encoding UTF8
+          
+          node generate-icon.js
+
       - name: Update package.json for Electron
         working-directory: frontend
         shell: pwsh
         run: |
           $pkg = Get-Content package.json | ConvertFrom-Json
           $pkg.main = "electron/main.js"
+          
+          # Add description and author if missing (required by electron-builder)
+          if (-not $pkg.description) {
+            $pkg | Add-Member -NotePropertyName "description" -NotePropertyValue "BlockStar Cypher - Secure Messaging" -Force
+          }
+          if (-not $pkg.author) {
+            $pkg | Add-Member -NotePropertyName "author" -NotePropertyValue "BlockStar" -Force
+          }
+          
           if (-not $pkg.build) {
             $pkg | Add-Member -NotePropertyName "build" -NotePropertyValue @{
               appId = "com.blockstar.cypher"
@@ -267,7 +324,7 @@ jobs:
               )
               win = @{
                 target = @("nsis", "portable")
-                icon = "public/icon.ico"
+                icon = "public/icon.png"
               }
             } -Force
           }
@@ -390,6 +447,51 @@ jobs:
           EOF
           fi
 
+      - name: Generate macOS icon
+        working-directory: frontend
+        run: |
+          # Install sharp for image processing
+          npm install --save-dev sharp
+          
+          # Create icon generation script
+          cat > generate-icon.js << 'ICONSCRIPT'
+          const sharp = require('sharp');
+          const fs = require('fs');
+          
+          async function generateIcon() {
+            const pngPath = 'public/icon.png';
+            
+            // Check if PNG exists
+            if (!fs.existsSync(pngPath)) {
+              console.log('No icon.png found, creating placeholder...');
+              // Create a simple 512x512 blue square as placeholder
+              const svg = Buffer.from(
+                '<svg width="512" height="512"><rect width="512" height="512" fill="#3B82F6" rx="100"/><text x="256" y="300" text-anchor="middle" font-size="200" fill="white" font-family="Arial">BC</text></svg>'
+              );
+              await sharp(svg).resize(512, 512).png().toFile(pngPath);
+            }
+            
+            // Get image info
+            const metadata = await sharp(pngPath).metadata();
+            console.log('Icon size:', metadata.width, 'x', metadata.height);
+            
+            // If icon is too small, resize it to 512x512 (recommended for macOS)
+            if (metadata.width < 512 || metadata.height < 512) {
+              console.log('Resizing icon to 512x512...');
+              await sharp(pngPath)
+                .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+                .toFile('public/icon-512.png');
+              fs.copyFileSync('public/icon-512.png', pngPath);
+            }
+            
+            console.log('Icon ready for electron-builder');
+          }
+          
+          generateIcon().catch(console.error);
+          ICONSCRIPT
+          
+          node generate-icon.js
+
       - name: Update package.json for Electron
         working-directory: frontend
         run: |
@@ -398,6 +500,11 @@ jobs:
             const fs = require('fs');
             const pkg = JSON.parse(fs.readFileSync('package.json'));
             pkg.main = 'electron/main.js';
+            
+            // Add required fields if missing
+            pkg.description = pkg.description || 'BlockStar Cypher - Secure Messaging';
+            pkg.author = pkg.author || 'BlockStar';
+            
             pkg.build = pkg.build || {};
             pkg.build.appId = 'com.blockstar.cypher';
             pkg.build.productName = 'BlockStar Cypher';
@@ -405,7 +512,7 @@ jobs:
             pkg.build.files = ['electron/**/*', 'out/**/*', 'public/**/*'];
             pkg.build.mac = {
               target: ['dmg', 'zip'],
-              icon: 'public/icon.icns',
+              icon: 'public/icon.png',
               category: 'public.app-category.social-networking'
             };
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
