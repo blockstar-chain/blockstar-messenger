@@ -309,6 +309,12 @@ jobs:
           if (-not $pkg.author) {
             $pkg | Add-Member -NotePropertyName "author" -NotePropertyValue "BlockStar" -Force
           }
+          if (-not $pkg.repository) {
+            $pkg | Add-Member -NotePropertyName "repository" -NotePropertyValue @{
+              type = "git"
+              url = "https://github.com/user/repo"
+            } -Force
+          }
           
           if (-not $pkg.build) {
             $pkg | Add-Member -NotePropertyName "build" -NotePropertyValue @{
@@ -326,13 +332,15 @@ jobs:
                 target = @("nsis", "portable")
                 icon = "public/icon.png"
               }
+              publish = $null
+              generateUpdatesFilesForAllChannels = $false
             } -Force
           }
           $pkg | ConvertTo-Json -Depth 10 | Set-Content package.json
 
       - name: Build Windows App
         working-directory: frontend
-        run: npx electron-builder --win --publish never
+        run: npx electron-builder --win --publish never --config.generateUpdatesFilesForAllChannels=false
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -504,6 +512,7 @@ jobs:
             // Add required fields if missing
             pkg.description = pkg.description || 'BlockStar Cypher - Secure Messaging';
             pkg.author = pkg.author || 'BlockStar';
+            pkg.repository = pkg.repository || { type: 'git', url: 'https://github.com/user/repo' };
             
             pkg.build = pkg.build || {};
             pkg.build.appId = 'com.blockstar.cypher';
@@ -515,12 +524,15 @@ jobs:
               icon: 'public/icon.png',
               category: 'public.app-category.social-networking'
             };
+            // Disable publish/auto-update to avoid provider errors
+            pkg.build.publish = null;
+            pkg.build.generateUpdatesFilesForAllChannels = false;
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
           "
 
       - name: Build macOS App (unsigned)
         working-directory: frontend
-        run: npx electron-builder --mac --publish never
+        run: npx electron-builder --mac --publish never --config.generateUpdatesFilesForAllChannels=false
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
