@@ -9,11 +9,11 @@ on:
     branches: [main, master]
   workflow_dispatch:
     inputs:
-      build_android:
-        description: 'Build Android APK'
-        required: false
-        default: true
-        type: boolean
+      # build_android:
+      #   description: 'Build Android APK'
+      #   required: false
+      #   default: true
+      #   type: boolean
       build_windows:
         description: 'Build Windows'
         required: false
@@ -431,7 +431,7 @@ jobs:
   # CREATE RELEASE (on tag push)
   # ═══════════════════════════════════════════════════════════════
   create-release:
-    needs: [build-android, build-windows, build-macos]
+    needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     
