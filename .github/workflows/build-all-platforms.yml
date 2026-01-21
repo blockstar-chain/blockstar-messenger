@@ -42,12 +42,23 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('**/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
 
       - name: Install dependencies
         working-directory: frontend
-        run: npm ci
+        run: |
+          if [ -f "package-lock.json" ]; then
+            npm ci
+          else
+            npm install
+          fi
 
       - name: Build frontend
         working-directory: frontend
@@ -78,8 +89,6 @@ jobs:
   #       uses: actions/setup-node@v4
   #       with:
   #         node-version: ${{ env.NODE_VERSION }}
-  #         cache: 'npm'
-  #         cache-dependency-path: frontend/package-lock.json
 
   #     - name: Setup Java
   #       uses: actions/setup-java@v4
@@ -98,7 +107,12 @@ jobs:
 
   #     - name: Install dependencies
   #       working-directory: frontend
-  #       run: npm ci
+  #       run: |
+  #         if [ -f "package-lock.json" ]; then
+  #           npm ci
+  #         else
+  #           npm install
+  #         fi
 
   #     - name: Install Capacitor CLI
   #       run: npm install -g @capacitor/cli
@@ -145,8 +159,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
 
       - name: Download frontend build
         uses: actions/download-artifact@v4
@@ -156,12 +168,17 @@ jobs:
 
       - name: Install dependencies
         working-directory: frontend
-        run: npm ci
+        run: |
+          if (Test-Path "package-lock.json") {
+            npm ci
+          } else {
+            npm install
+          }
+        shell: pwsh
 
       - name: Install Electron dependencies
         working-directory: frontend
-        run: |
-          npm install --save-dev electron electron-builder
+        run: npm install --save-dev electron electron-builder
         
       - name: Create Electron main.js (if not exists)
         working-directory: frontend
@@ -287,8 +304,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
 
       - name: Download frontend build
         uses: actions/download-artifact@v4
@@ -298,7 +313,12 @@ jobs:
 
       - name: Install dependencies
         working-directory: frontend
-        run: npm ci
+        run: |
+          if [ -f "package-lock.json" ]; then
+            npm ci
+          else
+            npm install
+          fi
 
       - name: Install Electron dependencies
         working-directory: frontend
@@ -411,7 +431,7 @@ jobs:
   # CREATE RELEASE (on tag push)
   # ═══════════════════════════════════════════════════════════════
   create-release:
-    needs: [build-windows, build-macos]
+    needs: [build-android, build-windows, build-macos]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     
