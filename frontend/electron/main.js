@@ -1,14 +1,29 @@
 // electron/main.js
 // Main process for Electron desktop app
 
-const { app, BrowserWindow, shell, ipcMain, Notification } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, Notification, protocol } = require('electron');
 const path = require('path');
+const url = require('url');
+const fs = require('fs');
 
 // Keep a global reference to prevent garbage collection
 let mainWindow;
 
 // Determine if we're in development mode
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+
+// Register custom protocol before app is ready
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'app',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true
+    }
+  }
+]);
 
 function createWindow() {
   // Create the browser window
@@ -37,14 +52,43 @@ function createWindow() {
     mainWindow.loadURL('http://localhost:3000');
     mainWindow.webContents.openDevTools();
   } else {
-    // In production, load the built files
-    mainWindow.loadFile(path.join(__dirname, '../out/index.html'));
+    // FIXED: Load production build with proper file protocol
+    const indexPath = path.join(__dirname, '../out/index.html');
+    
+    // Verify file exists
+    if (fs.existsSync(indexPath)) {
+      mainWindow.loadURL(url.format({
+        pathname: indexPath,
+        protocol: 'file:',
+        slashes: true
+      }));
+      
+      // Uncomment below to debug in production
+      // mainWindow.webContents.openDevTools();
+    } else {
+      console.error('❌ index.html not found at:', indexPath);
+      console.error('Current directory:', __dirname);
+      console.error('Parent directory contents:', fs.readdirSync(path.join(__dirname, '..')));
+    }
   }
 
+  // Log loading errors for debugging
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+    console.error('❌ Failed to load:', validatedURL);
+    console.error('Error:', errorDescription, '(code:', errorCode + ')');
+  });
+
+  // Log console messages from renderer (useful for debugging)
+  mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+    const levels = ['verbose', 'info', 'warning', 'error'];
+    const prefix = levels[level] === 'error' ? '❌' : 'ℹ️';
+    console.log(`${prefix} [Renderer]: ${message}`);
+  });
+
   // Handle external links - open in default browser
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('http://') || url.startsWith('https://')) {
-      shell.openExternal(url);
+  mainWindow.webContents.setWindowOpenHandler(({ url: linkUrl }) => {
+    if (linkUrl.startsWith('http://') || linkUrl.startsWith('https://')) {
+      shell.openExternal(linkUrl);
       return { action: 'deny' };
     }
     return { action: 'allow' };
@@ -74,6 +118,11 @@ function createWindow() {
       'http://localhost:3000',
       'https://messenger.blockstar.world',
     ];
+    
+    // In production, also allow file:// protocol
+    if (!isDev && navigationUrl.startsWith('file://')) {
+      return; // Allow file:// navigation in production
+    }
     
     if (!allowedOrigins.some(origin => navigationUrl.startsWith(origin))) {
       event.preventDefault();

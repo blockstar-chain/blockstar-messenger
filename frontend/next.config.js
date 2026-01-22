@@ -3,6 +3,8 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  basePath: '',
+  assetPrefix: process.env.NODE_ENV === 'production' ? './' : '',
   reactStrictMode: true,
   webpack: (config) => {
     config.resolve.fallback = {
@@ -17,6 +19,14 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      // Fix for Electron
+      config.output.publicPath = './_next/';
+    }
+    return config;
+  },
+  trailingSlash: true,
   output: 'export',
 }
 
