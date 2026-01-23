@@ -14,11 +14,11 @@ on:
         required: false
         default: true
         type: boolean
-      build_macos:
-        description: 'Build macOS'
-        required: false
-        default: true
-        type: boolean
+      # build_macos:
+      #   description: 'Build macOS'
+      #   required: false
+      #   default: true
+      #   type: boolean
 
 env:
   NODE_VERSION: '20'
@@ -325,229 +325,229 @@ jobs:
   # ═══════════════════════════════════════════════════════════════
   # MACOS BUILD (Electron)
   # ═══════════════════════════════════════════════════════════════
-  build-macos:
-    needs: build-frontend
-    runs-on: macos-latest
-    if: ${{ github.event.inputs.build_macos != 'false' }}
+  # build-macos:
+  #   needs: build-frontend
+  #   runs-on: macos-latest
+  #   if: ${{ github.event.inputs.build_macos != 'false' }}
     
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
+  #     - name: Setup Node.js
+  #       uses: actions/setup-node@v4
+  #       with:
+  #         node-version: ${{ env.NODE_VERSION }}
 
-      - name: Download frontend build
-        uses: actions/download-artifact@v4
-        with:
-          name: frontend-build
-          path: frontend/out
+  #     - name: Download frontend build
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: frontend-build
+  #         path: frontend/out
 
-      - name: Verify downloaded build
-        working-directory: frontend
-        run: |
-          echo "Checking downloaded files..."
-          find out -type f | head -20
+  #     - name: Verify downloaded build
+  #       working-directory: frontend
+  #       run: |
+  #         echo "Checking downloaded files..."
+  #         find out -type f | head -20
 
-      - name: Install dependencies
-        working-directory: frontend
-        run: |
-          if [ -f "package-lock.json" ]; then
-            npm ci
-          else
-            npm install
-          fi
+  #     - name: Install dependencies
+  #       working-directory: frontend
+  #       run: |
+  #         if [ -f "package-lock.json" ]; then
+  #           npm ci
+  #         else
+  #           npm install
+  #         fi
 
-      - name: Install Electron dependencies
-        working-directory: frontend
-        run: npm install --save-dev electron electron-builder
+  #     - name: Install Electron dependencies
+  #       working-directory: frontend
+  #       run: npm install --save-dev electron electron-builder
 
-      - name: Create Electron main.js
-        working-directory: frontend
-        run: |
-          mkdir -p electron
-          cat > electron/main.js << 'EOF'
-          const { app, BrowserWindow, shell, protocol } = require('electron');
-          const path = require('path');
-          const url = require('url');
-          const fs = require('fs');
+  #     - name: Create Electron main.js
+  #       working-directory: frontend
+  #       run: |
+  #         mkdir -p electron
+  #         cat > electron/main.js << 'EOF'
+  #         const { app, BrowserWindow, shell, protocol } = require('electron');
+  #         const path = require('path');
+  #         const url = require('url');
+  #         const fs = require('fs');
 
-          let mainWindow;
+  #         let mainWindow;
 
-          protocol.registerSchemesAsPrivileged([
-            {
-              scheme: 'app',
-              privileges: {
-                standard: true,
-                secure: true,
-                supportFetchAPI: true,
-                corsEnabled: true
-              }
-            }
-          ]);
+  #         protocol.registerSchemesAsPrivileged([
+  #           {
+  #             scheme: 'app',
+  #             privileges: {
+  #               standard: true,
+  #               secure: true,
+  #               supportFetchAPI: true,
+  #               corsEnabled: true
+  #             }
+  #           }
+  #         ]);
 
-          function createWindow() {
-            mainWindow = new BrowserWindow({
-              width: 1200,
-              height: 800,
-              minWidth: 800,
-              minHeight: 600,
-              webPreferences: {
-                nodeIntegration: false,
-                contextIsolation: true,
-                webSecurity: true,
-              },
-              icon: path.join(__dirname, '../public/icon.png'),
-              titleBarStyle: 'hiddenInset',
-              show: false,
-            });
+  #         function createWindow() {
+  #           mainWindow = new BrowserWindow({
+  #             width: 1200,
+  #             height: 800,
+  #             minWidth: 800,
+  #             minHeight: 600,
+  #             webPreferences: {
+  #               nodeIntegration: false,
+  #               contextIsolation: true,
+  #               webSecurity: true,
+  #             },
+  #             icon: path.join(__dirname, '../public/icon.png'),
+  #             titleBarStyle: 'hiddenInset',
+  #             show: false,
+  #           });
 
-            if (process.env.NODE_ENV === 'development') {
-              mainWindow.loadURL('http://localhost:3000');
-              mainWindow.webContents.openDevTools();
-            } else {
-              const indexPath = path.join(__dirname, '../out/index.html');
+  #           if (process.env.NODE_ENV === 'development') {
+  #             mainWindow.loadURL('http://localhost:3000');
+  #             mainWindow.webContents.openDevTools();
+  #           } else {
+  #             const indexPath = path.join(__dirname, '../out/index.html');
               
-              if (fs.existsSync(indexPath)) {
-                mainWindow.loadURL(url.format({
-                  pathname: indexPath,
-                  protocol: 'file:',
-                  slashes: true
-                }));
-              } else {
-                console.error('index.html not found at:', indexPath);
-              }
-            }
+  #             if (fs.existsSync(indexPath)) {
+  #               mainWindow.loadURL(url.format({
+  #                 pathname: indexPath,
+  #                 protocol: 'file:',
+  #                 slashes: true
+  #               }));
+  #             } else {
+  #               console.error('index.html not found at:', indexPath);
+  #             }
+  #           }
 
-            mainWindow.webContents.setWindowOpenHandler(({ url: linkUrl }) => {
-              shell.openExternal(linkUrl);
-              return { action: 'deny' };
-            });
+  #           mainWindow.webContents.setWindowOpenHandler(({ url: linkUrl }) => {
+  #             shell.openExternal(linkUrl);
+  #             return { action: 'deny' };
+  #           });
 
-            mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
-              console.error('Failed to load:', validatedURL, errorDescription);
-            });
+  #           mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+  #             console.error('Failed to load:', validatedURL, errorDescription);
+  #           });
 
-            mainWindow.once('ready-to-show', () => {
-              mainWindow.show();
-            });
+  #           mainWindow.once('ready-to-show', () => {
+  #             mainWindow.show();
+  #           });
 
-            mainWindow.on('closed', () => {
-              mainWindow = null;
-            });
-          }
+  #           mainWindow.on('closed', () => {
+  #             mainWindow = null;
+  #           });
+  #         }
 
-          app.whenReady().then(createWindow);
+  #         app.whenReady().then(createWindow);
 
-          app.on('window-all-closed', () => {
-            if (process.platform !== 'darwin') {
-              app.quit();
-            }
-          });
+  #         app.on('window-all-closed', () => {
+  #           if (process.platform !== 'darwin') {
+  #             app.quit();
+  #           }
+  #         });
 
-          app.on('activate', () => {
-            if (BrowserWindow.getAllWindows().length === 0) {
-              createWindow();
-            }
-          });
-          EOF
+  #         app.on('activate', () => {
+  #           if (BrowserWindow.getAllWindows().length === 0) {
+  #             createWindow();
+  #           }
+  #         });
+  #         EOF
 
-      - name: Generate macOS icon
-        working-directory: frontend
-        run: |
-          npm install --save-dev sharp
+  #     - name: Generate macOS icon
+  #       working-directory: frontend
+  #       run: |
+  #         npm install --save-dev sharp
           
-          cat > generate-icon.js << 'ICONSCRIPT'
-          const sharp = require('sharp');
-          const fs = require('fs');
+  #         cat > generate-icon.js << 'ICONSCRIPT'
+  #         const sharp = require('sharp');
+  #         const fs = require('fs');
           
-          async function generateIcon() {
-            const pngPath = 'public/icon.png';
+  #         async function generateIcon() {
+  #           const pngPath = 'public/icon.png';
             
-            if (!fs.existsSync('public')) {
-              fs.mkdirSync('public', { recursive: true });
-            }
+  #           if (!fs.existsSync('public')) {
+  #             fs.mkdirSync('public', { recursive: true });
+  #           }
             
-            if (!fs.existsSync(pngPath)) {
-              console.log('Creating placeholder icon...');
-              const svg = Buffer.from(
-                '<svg width="512" height="512"><rect width="512" height="512" fill="#3B82F6" rx="100"/><text x="256" y="300" text-anchor="middle" font-size="200" fill="white" font-family="Arial">BC</text></svg>'
-              );
-              await sharp(svg).resize(512, 512).png().toFile(pngPath);
-            }
+  #           if (!fs.existsSync(pngPath)) {
+  #             console.log('Creating placeholder icon...');
+  #             const svg = Buffer.from(
+  #               '<svg width="512" height="512"><rect width="512" height="512" fill="#3B82F6" rx="100"/><text x="256" y="300" text-anchor="middle" font-size="200" fill="white" font-family="Arial">BC</text></svg>'
+  #             );
+  #             await sharp(svg).resize(512, 512).png().toFile(pngPath);
+  #           }
             
-            const metadata = await sharp(pngPath).metadata();
-            console.log('Icon size:', metadata.width, 'x', metadata.height);
+  #           const metadata = await sharp(pngPath).metadata();
+  #           console.log('Icon size:', metadata.width, 'x', metadata.height);
             
-            if (metadata.width < 512 || metadata.height < 512) {
-              console.log('Resizing icon to 512x512...');
-              await sharp(pngPath)
-                .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
-                .toFile('public/icon-512.png');
-              fs.copyFileSync('public/icon-512.png', pngPath);
-            }
+  #           if (metadata.width < 512 || metadata.height < 512) {
+  #             console.log('Resizing icon to 512x512...');
+  #             await sharp(pngPath)
+  #               .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+  #               .toFile('public/icon-512.png');
+  #             fs.copyFileSync('public/icon-512.png', pngPath);
+  #           }
             
-            console.log('Icon ready');
-          }
+  #           console.log('Icon ready');
+  #         }
           
-          generateIcon().catch(console.error);
-          ICONSCRIPT
+  #         generateIcon().catch(console.error);
+  #         ICONSCRIPT
           
-          node generate-icon.js
+  #         node generate-icon.js
 
-      - name: Update package.json
-        working-directory: frontend
-        run: |
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json'));
-            pkg.main = 'electron/main.js';
-            pkg.description = pkg.description || 'BlockStar Cypher - Secure Messaging';
-            pkg.author = pkg.author || 'BlockStar';
-            pkg.repository = pkg.repository || { type: 'git', url: 'https://github.com/user/repo' };
+  #     - name: Update package.json
+  #       working-directory: frontend
+  #       run: |
+  #         node -e "
+  #           const fs = require('fs');
+  #           const pkg = JSON.parse(fs.readFileSync('package.json'));
+  #           pkg.main = 'electron/main.js';
+  #           pkg.description = pkg.description || 'BlockStar Cypher - Secure Messaging';
+  #           pkg.author = pkg.author || 'BlockStar';
+  #           pkg.repository = pkg.repository || { type: 'git', url: 'https://github.com/user/repo' };
             
-            pkg.build = {
-              appId: 'com.blockstar.cypher',
-              productName: 'BlockStar Cypher',
-              directories: { output: 'dist' },
-              files: ['electron/**/*', 'out/**/*', 'public/**/*', '!out/.next/cache/**/*'],
-              mac: {
-                target: ['dmg', 'zip'],
-                icon: 'public/icon.png',
-                category: 'public.app-category.social-networking'
-              },
-              publish: null,
-              generateUpdatesFilesForAllChannels: false,
-              compression: 'normal',
-              asar: true
-            };
+  #           pkg.build = {
+  #             appId: 'com.blockstar.cypher',
+  #             productName: 'BlockStar Cypher',
+  #             directories: { output: 'dist' },
+  #             files: ['electron/**/*', 'out/**/*', 'public/**/*', '!out/.next/cache/**/*'],
+  #             mac: {
+  #               target: ['dmg', 'zip'],
+  #               icon: 'public/icon.png',
+  #               category: 'public.app-category.social-networking'
+  #             },
+  #             publish: null,
+  #             generateUpdatesFilesForAllChannels: false,
+  #             compression: 'normal',
+  #             asar: true
+  #           };
             
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
-          "
+  #           fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+  #         "
 
-      - name: Build macOS App
-        working-directory: frontend
-        run: npx electron-builder --mac --publish never
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+  #     - name: Build macOS App
+  #       working-directory: frontend
+  #       run: npx electron-builder --mac --publish never
+  #       env:
+  #         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #         CSC_IDENTITY_AUTO_DISCOVERY: false
 
-      - name: Upload macOS Build
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-build
-          path: |
-            frontend/dist/*.dmg
-            frontend/dist/*.zip
-          retention-days: 30
+  #     - name: Upload macOS Build
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: macos-build
+  #         path: |
+  #           frontend/dist/*.dmg
+  #           frontend/dist/*.zip
+  #         retention-days: 30
 
   # ═══════════════════════════════════════════════════════════════
   # CREATE RELEASE (on tag push)
   # ═══════════════════════════════════════════════════════════════
   create-release:
-    needs: [build-windows, build-macos]
+    needs: [build-windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     

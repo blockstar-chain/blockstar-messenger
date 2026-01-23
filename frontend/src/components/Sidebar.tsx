@@ -29,6 +29,7 @@ import { clearUserSession } from '@/lib/persistentAuth';
 import IncomingCallModal from './IncomingCallModal';
 import { useIncomingCallFromNotification, PendingCallData } from '@/hooks/useIncomingCallFromNotification';
 import { Capacitor } from '@capacitor/core';
+import { isDesktopApp, useDesktopWallet } from '@/hooks/useDesktopWallet';
 
 // Cache for decrypted message previews
 const decryptedPreviewCache = new Map<string, string>();
@@ -151,7 +152,9 @@ export default function Sidebar({
   const [hoveredConversation, setHoveredConversation] = useState<string | null>(null);
   const domainName = currentUser?.username ? currentUser.username.includes('@') ? currentUser.username.split('@')[0] : currentUser.username : "";
   const stats = useSettingReslover(domainName || '');
-  const { disconnect } = useDisconnect()
+  const { disconnect } = useDisconnect();
+  const [isDesktop, setIsDesktop] = useState(false);
+  const desktopWallet = useDesktopWallet();
   const [showIncomingCall, setShowIncomingCall] = useState(false);
   const [incomingCallData, setIncomingCallData] = useState<{
     callId: string;
@@ -202,6 +205,10 @@ export default function Sidebar({
   // Ref to hold ringtone audio so it can be stopped from anywhere
   const ringtoneRef = React.useRef<HTMLAudioElement | null>(null);
 
+  useEffect(() => {
+    setIsDesktop(isDesktopApp());
+  }, []);
+
   const stopRingtone = () => {
     if (ringtoneRef.current) {
       ringtoneRef.current.pause();
@@ -215,11 +222,11 @@ export default function Sidebar({
     try {
       // Stop any existing ringtone first
       stopRingtone();
-      
+
       ringtoneRef.current = new Audio('/sounds/incoming.mp3');
       ringtoneRef.current.loop = true;
       ringtoneRef.current.volume = 1.0;
-      
+
       // Try to play - handle autoplay restrictions
       const playPromise = ringtoneRef.current.play();
       if (playPromise !== undefined) {
@@ -350,7 +357,7 @@ export default function Sidebar({
           offer = JSON.parse(storedOffer);
         }
       }
-      
+
       if (!offer) {
         throw new Error('No call offer found - call may have expired');
       }
@@ -370,7 +377,7 @@ export default function Sidebar({
         // onSignal callback
         (signal) => {
           console.log('📤 Signal from answerer:', signal.type || 'candidate');
-          
+
           if (signal.type === 'answer') {
             // Send the SDP answer back to the caller
             console.log('📤 Sending SDP ANSWER to caller', viaMesh ? '(via mesh)' : '(via server)');
@@ -435,7 +442,7 @@ export default function Sidebar({
     } catch (error: any) {
       console.error('❌ Error answering call:', error);
       toast.error('Failed to answer: ' + error.message);
-      
+
       // Clean up on error
       stopRingtone();
       webRTCService.cleanup();
@@ -773,7 +780,7 @@ export default function Sidebar({
       }
 
       let allConversations = await db.conversations.toArray();
-      
+
       // Filter out invalid groups (groups without proper names)
       // These are phantom groups created by bugs
       const beforeFilter = allConversations.length;
@@ -783,17 +790,17 @@ export default function Sidebar({
           if (!name || name === 'Group Chat' || name.trim() === '') {
             console.log(`⚠️ Filtering out invalid local group: ${c.id} (name: "${name}")`);
             // Also delete from IndexedDB
-            db.conversations.delete(c.id).catch(() => {});
+            db.conversations.delete(c.id).catch(() => { });
             return false;
           }
         }
         return true;
       });
-      
+
       if (beforeFilter !== allConversations.length) {
         console.log(`🧹 Filtered out ${beforeFilter - allConversations.length} invalid local groups`);
       }
-      
+
       const localGroups = allConversations.filter(c => c.type === 'group');
       const localDirects = allConversations.filter(c => c.type === 'direct');
       console.log(`📋 Found ${allConversations.length} in IndexedDB (${localGroups.length} groups, ${localDirects.length} direct)`);
@@ -887,7 +894,7 @@ export default function Sidebar({
                   delivered: true,
                   read: false,
                 } : null;
-                
+
                 // Determine which lastMessage to use (prefer more recent)
                 let finalLastMessage = existingLocal.lastMessage;
                 if (serverLastMessage) {
@@ -895,7 +902,7 @@ export default function Sidebar({
                     finalLastMessage = serverLastMessage;
                   }
                 }
-                
+
                 // Update existing local conversation with server data (especially admin/creator info)
                 const updatedConv = {
                   ...existingLocal,
@@ -1321,39 +1328,44 @@ export default function Sidebar({
 
   const handleLogout = async () => {
     console.log('🚪 Logging out...');
-    
+
     try {
       // 1. Unregister push notifications
       await unregisterPushNotifications();
-      
+
       // 2. Disconnect wallet - wrap in try/catch to handle network modal issues
       try {
-        await disconnect();
+        if(isDesktop){
+          await desktopWallet.disconnect();
+        }
+        else{
+          await disconnect();
+        }
       } catch (disconnectError) {
         console.warn('⚠️ Wallet disconnect error (may be network modal issue):', disconnectError);
         // Continue with logout even if disconnect fails
       }
-      
+
       // 3. Force blockchain service disconnect
       try {
         blockchainService.disconnect();
       } catch (e) {
         console.warn('⚠️ Blockchain disconnect error:', e);
       }
-      
+
       // 4. Disconnect WebSocket
       try {
         webSocketService.disconnect();
       } catch (e) {
         console.warn('⚠️ WebSocket disconnect error:', e);
       }
-      
+
       // 5. Clear persistent session - IMPORTANT for staying logged out!
       await clearUserSession();
-      
+
       // 6. Reset app store
       useAppStore.getState().reset();
-      
+
       // 7. Clear any cached data
       try {
         localStorage.removeItem('wagmi.store');
@@ -1364,9 +1376,9 @@ export default function Sidebar({
       } catch (e) {
         console.warn('⚠️ Cache clear error:', e);
       }
-      
+
       console.log('✅ Logged out successfully');
-      
+
       // 8. Reload to clear any remaining state
       window.location.reload();
     } catch (error) {
@@ -1862,7 +1874,7 @@ export default function Sidebar({
       {/* New Chat Modal */}
       {showNewChatModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end md:items-center justify-center p-0 md:p-4 overflow-y-auto">
-          <div 
+          <div
             className="bg-card border border-midnight rounded-t-2xl md:rounded-2xl shadow-2xl max-w-md w-full p-4 md:p-6 max-h-[85vh] md:max-h-[90vh] overflow-y-auto new-chat-modal"
             style={{
               marginBottom: 'env(safe-area-inset-bottom, 0)',
@@ -2445,7 +2457,7 @@ export default function Sidebar({
         isOpen={showMeshSettings}
         onClose={() => setShowMeshSettings(false)}
       />
-{/* 
+      {/* 
       <IncomingCallModal
         isOpen={showIncomingCall}
         callerName={incomingCallData?.callerName || 'Unknown'}
