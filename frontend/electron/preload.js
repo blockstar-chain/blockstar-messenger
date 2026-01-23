@@ -9,19 +9,43 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Platform info
   getPlatform: () => ipcRenderer.invoke('get-platform'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
-  
+
   // Notifications
-  showNotification: (title, body) => 
+  showNotification: (title, body) =>
     ipcRenderer.invoke('show-notification', { title, body }),
-  
+
   // Window controls
   minimizeToTray: () => ipcRenderer.send('minimize-to-tray'),
-  
+
   // Deep link handling
   onDeepLink: (callback) => {
     ipcRenderer.on('deep-link', (event, url) => callback(url));
   },
-  
+
+
+  // ─── NEW: Wallet Bridge ───
+  walletOpenBrowser: (url) => ipcRenderer.invoke('wallet-open-browser', url),
+  walletStartServer: () => ipcRenderer.invoke('wallet-start-server'),
+  walletStopServer: () => ipcRenderer.invoke('wallet-stop-server'),
+
+  onWalletConnected: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('wallet-connected', handler);
+    return () => ipcRenderer.removeListener('wallet-connected', handler);
+  },
+
+  onWalletCancelled: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('wallet-cancelled', handler);
+    return () => ipcRenderer.removeListener('wallet-cancelled', handler);
+  },
+
+  onWalletSigned: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('wallet-signed', handler);
+    return () => ipcRenderer.removeListener('wallet-signed', handler);
+  },
+
   // Check if running in Electron
   isElectron: true,
 });

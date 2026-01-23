@@ -4,12 +4,12 @@ import NFT_ABI from '@/abi/nft.json';
 import axios from 'axios';
 
 // BlockStar Chain Configuration from environment
-const BLOCKSTAR_CHAIN_ID = process.env.NEXT_PUBLIC_CHAIN_ID || '0x89'; // Default to Polygon
-const BLOCKSTAR_RPC_URL = process.env.NEXT_PUBLIC_RPC_URL || 'https://polygon-rpc.com';
-const NFT_CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_NFT_CONTRACT || '0x0000000000000000000000000000000000000000';
-const CHAIN_NAME = process.env.NEXT_PUBLIC_CHAIN_NAME || 'Polygon';
-const CHAIN_SYMBOL = process.env.NEXT_PUBLIC_CHAIN_SYMBOL || 'MATIC';
-const EXPLORER_URL = process.env.NEXT_PUBLIC_EXPLORER_URL || 'https://polygonscan.com';
+const BLOCKSTAR_CHAIN_ID = process.env.NEXT_PUBLIC_CHAIN_ID || '0x1588'; // Default to Polygon
+const BLOCKSTAR_RPC_URL = process.env.NEXT_PUBLIC_RPC_URL || 'https://mainnet-rpc.blockstar.one';
+const NFT_CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_NFT_CONTRACT || '0x1E9248a78352150e8b2E7E728346EDd41A77FDeA';
+const CHAIN_NAME = process.env.NEXT_PUBLIC_CHAIN_NAME || 'BlockStar';
+const CHAIN_SYMBOL = process.env.NEXT_PUBLIC_CHAIN_SYMBOL || 'BST';
+const EXPLORER_URL = process.env.NEXT_PUBLIC_EXPLORER_URL || 'https://scan.blockstar.one';
 
 
 export class BlockchainService {

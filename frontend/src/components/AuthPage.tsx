@@ -1,3 +1,14 @@
+'use client';
+
+/**
+ * Updated AuthPage
+ * 
+ * - On Desktop (Electron): Uses browser-based MetaMask for connect + sign
+ * - On Mobile/Web: Uses existing Reown/AppKit + wagmi
+ * 
+ * Replace your existing AuthPage.tsx with this
+ */
+
 import React, { useState, useEffect } from 'react';
 import { useAppStore } from '@/store';
 import { blockchainService } from '@/lib/blockchain';
@@ -9,19 +20,45 @@ import toast from 'react-hot-toast';
 import logoImg from '@/images/logo.png';
 import Image from 'next/image';
 import ConnectButton from './ConnectButton';
-import { useAppKitAccount } from '@reown/appkit/react';
-import { useSignMessage } from 'wagmi';
 import { saveUserSession } from '@/lib/persistentAuth';
 
+// Reown/wagmi hooks (for mobile/web)
+import { useAppKitAccount } from '@reown/appkit/react';
+import { useSignMessage } from 'wagmi';
+
+// Desktop wallet hook
+import { useDesktopWallet, isDesktopApp } from '@/hooks/useDesktopWallet';
 
 export default function AuthPage() {
-  const { address } = useAppKitAccount();
-  const { signMessageAsync } = useSignMessage();
+  const [isDesktop, setIsDesktop] = useState(false);
+  
+  // Desktop wallet
+  const desktopWallet = useDesktopWallet();
+  
+  // Reown/wagmi (for mobile/web)
+  const { address: appKitAddress } = useAppKitAccount();
+  const { signMessageAsync: wagmiSignMessage } = useSignMessage();
+  
+  // Detect platform
+  useEffect(() => {
+    setIsDesktop(isDesktopApp());
+  }, []);
+  
+  // Use appropriate address based on platform
+  const address = isDesktop ? desktopWallet.address : appKitAddress;
+  
+  // Use appropriate sign function based on platform
+  const signMessageAsync = isDesktop 
+    ? desktopWallet.signMessageAsync 
+    : wagmiSignMessage;
+  
   const { setCurrentUser, setAuthenticated } = useAppStore();
   const [isConnecting, setIsConnecting] = useState(false);
   const [currentStep, setCurrentStep] = useState<'connect' | 'verify' | 'encrypt'>('connect');
 
   const handleConnectWallet = async () => {
+    if (!address) return;
+    
     setIsConnecting(true);
 
     try {
@@ -46,6 +83,7 @@ export default function AuthPage() {
       setCurrentStep('encrypt');
 
       // Initialize encryption with wallet-derived keys
+      // This uses the platform-appropriate signMessageAsync
       const signMessageFn = async (message: string) => {
         return await signMessageAsync({ message });
       };
@@ -97,11 +135,12 @@ export default function AuthPage() {
     }
   };
 
+  // Trigger auth when address changes (user connected)
   useEffect(() => {
     if (address) {
       handleConnectWallet();
     }
-  }, [address])
+  }, [address]);
 
   const StepIcon = ({ step, icon: Icon }: { step: string; icon: any }) => {
     const isActive = currentStep === step;
@@ -177,7 +216,11 @@ export default function AuthPage() {
               <StepIcon step="connect" icon={Wallet} />
               <div className="flex-1">
                 <h3 className="font-semibold text-white">Connect Wallet</h3>
-                <p className="text-sm text-secondary">Connect your Web3 wallet to get started</p>
+                <p className="text-sm text-secondary">
+                  {isDesktop 
+                    ? 'Connect MetaMask from your browser' 
+                    : 'Connect your Web3 wallet to get started'}
+                </p>
               </div>
               {isConnecting && currentStep === 'connect' && (
                 <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary-500 border-t-transparent"></div>
@@ -203,7 +246,11 @@ export default function AuthPage() {
               <StepIcon step="encrypt" icon={Lock} />
               <div className="flex-1">
                 <h3 className="font-semibold text-white">Initialize Encryption</h3>
-                <p className="text-sm text-secondary">Set up end-to-end encryption</p>
+                <p className="text-sm text-secondary">
+                  {isDesktop
+                    ? 'Sign a message in your browser to set up encryption'
+                    : 'Set up end-to-end encryption'}
+                </p>
               </div>
               {isConnecting && currentStep === 'encrypt' && (
                 <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary-500 border-t-transparent"></div>
@@ -212,7 +259,17 @@ export default function AuthPage() {
           </div>
 
 
-          <ConnectButton isConnecting={isConnecting} className="w-full bg-gradient-to-r from-primary-500 to-cyan-500 hover:from-primary-600 hover:to-cyan-600 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 shadow-glow hover:shadow-glow-lg" />
+          <ConnectButton 
+            isConnecting={isConnecting} 
+            className="w-full bg-gradient-to-r from-primary-500 to-cyan-500 hover:from-primary-600 hover:to-cyan-600 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 shadow-glow hover:shadow-glow-lg" 
+          />
+
+          {/* Desktop hint */}
+          {isDesktop && !address && (
+            <p className="text-xs text-center text-secondary mt-3">
+              💡 Your browser will open to connect MetaMask
+            </p>
+          )}
 
           {/* Info */}
           <div className="mt-6 p-4 bg-dark-200 border border-midnight rounded-xl">

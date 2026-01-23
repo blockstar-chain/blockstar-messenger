@@ -14,7 +14,8 @@
     "electron:build": "electron-builder",
     "electron:build:win": "electron-builder --win",
     "electron:build:mac": "electron-builder --mac",
-    "electron:build:linux": "electron-builder --linux"
+    "electron:build:linux": "electron-builder --linux",
+    "electron:build:mac:unsigned": "electron-builder --mac --config.mac.identity=null"
   },
   "dependencies": {
     "@capacitor-community/bluetooth-le": "^3.1.4",

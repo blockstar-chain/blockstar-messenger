@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
   "appId": "com.blockstar.cypher",
   "productName": "BlockStar Cypher",
-  "copyright": "Copyright © 2024 BlockStar",
+  "copyright": "Copyright © 2026 BlockStar",
   
   "directories": {
     "output": "dist",
