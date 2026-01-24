@@ -1,12 +1,14 @@
 'use client';
 
 /**
- * Updated ConnectButton
+ * ConnectButton - Auto-switches between desktop and mobile/web
  * 
- * - On Desktop (Electron): Uses browser-based MetaMask flow
- * - On Mobile/Web: Uses existing Reown/AppKit modal
+ * CRITICAL: This file REPLACES your existing ConnectButton.tsx
  * 
- * Replace your existing ConnectButton.tsx with this
+ * Make sure to:
+ * 1. Delete or rename your old ConnectButton.tsx
+ * 2. Clear build cache: rm -rf .next/ (or on Windows: rmdir /s .next)
+ * 3. Rebuild: npm run build
  */
 
 import { trimAddress } from "@/utils/helpers";
@@ -22,6 +24,7 @@ interface ConnectButtonProps {
 
 export default function ConnectButton({ className, isConnecting: externalConnecting }: ConnectButtonProps) {
   const [isDesktop, setIsDesktop] = useState(false);
+  const [mounted, setMounted] = useState(false);
   
   // Desktop wallet hook
   const desktopWallet = useDesktopWallet();
@@ -32,7 +35,21 @@ export default function ConnectButton({ className, isConnecting: externalConnect
   
   // Detect platform on mount
   useEffect(() => {
-    setIsDesktop(isDesktopApp());
+    setMounted(true);
+    const desktop = isDesktopApp();
+    setIsDesktop(desktop);
+    
+    // ═══════════════════════════════════════════════════════════
+    // DIAGNOSTIC LOG - This MUST appear in console
+    // ═══════════════════════════════════════════════════════════
+    console.log('═══════════════════════════════════════════════════════');
+    console.log('🔌 ConnectButton MOUNTED');
+    console.log('   Protocol:', typeof window !== 'undefined' ? window.location.protocol : 'N/A');
+    console.log('   isDesktop:', desktop);
+    console.log('   electronAPI exists:', typeof window !== 'undefined' && !!(window as any).electronAPI);
+    console.log('   electronAPI.isElectron:', typeof window !== 'undefined' && (window as any).electronAPI?.isElectron);
+    console.log('   walletOpenBrowser:', typeof window !== 'undefined' && typeof (window as any).electronAPI?.walletOpenBrowser);
+    console.log('═══════════════════════════════════════════════════════');
   }, []);
   
   // Use appropriate values based on platform
@@ -41,12 +58,30 @@ export default function ConnectButton({ className, isConnecting: externalConnect
   const isConnecting = externalConnecting || (isDesktop && desktopWallet.isConnecting);
   
   const handleClick = () => {
+    console.log('═══════════════════════════════════════════════════════');
+    console.log('🔘 Connect Button CLICKED');
+    console.log('   isDesktop:', isDesktop);
+    console.log('   Using:', isDesktop ? 'DESKTOP WALLET (browser flow)' : 'REOWN/APPKIT (modal)');
+    console.log('═══════════════════════════════════════════════════════');
+    
     if (isDesktop) {
+      console.log('📱 Calling desktopWallet.open()...');
       desktopWallet.open();
     } else {
+      console.log('📱 Calling openAppKit()...');
       openAppKit();
     }
   };
+
+  // Don't render until mounted to avoid hydration mismatch
+  if (!mounted) {
+    return (
+      <button type="button" className={className} disabled>
+        <Wallet size={22} />
+        Loading...
+      </button>
+    );
+  }
 
   return (
     address && isConnected ? (
@@ -73,6 +108,10 @@ export default function ConnectButton({ className, isConnecting: externalConnect
           <>
             <Wallet size={22} />
             Connect Wallet
+            {/* Debug indicator - remove in production */}
+            <span style={{ fontSize: '10px', marginLeft: '4px', opacity: 0.5 }}>
+              {isDesktop ? '(D)' : '(M)'}
+            </span>
           </>
         )}
       </button>

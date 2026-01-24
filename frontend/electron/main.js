@@ -152,10 +152,13 @@ app.whenReady().then(() => {
 
 // Quit when all windows are closed (except on macOS)
 app.on('window-all-closed', () => {
+  // Clean up wallet server
   if (walletCallbackServer) {
     walletCallbackServer.close();
     walletCallbackServer = null;
   }
+  
+  // Your existing quit logic...
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -171,14 +174,32 @@ ipcMain.handle('wallet-open-browser', async (event, url) => {
 });
 
 // Start local callback server
+ipcMain.handle('wallet-open-browser', async (event, url) => {
+  console.log('🔗 [Main] Opening browser:', url);
+  try {
+    await shell.openExternal(url);
+    return { success: true };
+  } catch (error) {
+    console.error('❌ [Main] Failed to open browser:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Start local callback server
 ipcMain.handle('wallet-start-server', async () => {
+  console.log('🔗 [Main] Starting wallet callback server...');
+  
   return new Promise((resolve) => {
+    // Close existing server if any
     if (walletCallbackServer) {
-      resolve({ port: WALLET_CALLBACK_PORT });
-      return;
+      try {
+        walletCallbackServer.close();
+      } catch (e) {}
+      walletCallbackServer = null;
     }
 
     walletCallbackServer = http.createServer((req, res) => {
+      // CORS headers
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
 
@@ -189,14 +210,15 @@ ipcMain.handle('wallet-start-server', async () => {
       }
 
       const reqUrl = new URL(req.url, `http://localhost:${WALLET_CALLBACK_PORT}`);
+      console.log('🔗 [Main] Callback received:', reqUrl.pathname);
 
-      // ─── CONNECT CALLBACK ───
+      // ─── WALLET CONNECT CALLBACK ───
       if (reqUrl.pathname === '/callback') {
         const address = reqUrl.searchParams.get('address');
         const chainId = reqUrl.searchParams.get('chainId');
         const session = reqUrl.searchParams.get('session');
 
-        console.log('✅ Wallet connected:', address);
+        console.log('✅ [Main] Wallet connected:', { address, chainId, session });
 
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('wallet-connected', { address, chainId, session });
@@ -204,90 +226,117 @@ ipcMain.handle('wallet-start-server', async () => {
         }
 
         res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end(`<!DOCTYPE html><html><head><style>
-          body{font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:linear-gradient(135deg,#0f172a,#1e293b);color:white}
-        </style></head><body><div style="text-align:center">
-          <div style="font-size:64px;margin-bottom:16px">✓</div>
-          <h1>Wallet Connected!</h1>
-          <p>Returning to BlockStar Cypher...</p>
-          <script>setTimeout(()=>window.close(),1500)</script>
-        </div></body></html>`);
+        res.end(`<!DOCTYPE html>
+<html><head>
+<style>
+body { font-family: system-ui; display: flex; justify-content: center; align-items: center; 
+       height: 100vh; margin: 0; background: linear-gradient(135deg, #0f172a, #1e293b); color: white; }
+.container { text-align: center; }
+.icon { font-size: 64px; margin-bottom: 16px; }
+h1 { margin: 0 0 8px 0; }
+p { opacity: 0.7; }
+</style>
+</head><body>
+<div class="container">
+  <div class="icon">✓</div>
+  <h1>Wallet Connected!</h1>
+  <p>Returning to BlockStar Cypher...</p>
+</div>
+<script>setTimeout(() => window.close(), 1500);</script>
+</body></html>`);
         return;
       }
 
-      // ─── SIGN CALLBACK ───
+      // ─── MESSAGE SIGN CALLBACK ───
       if (reqUrl.pathname === '/sign-callback') {
         const signId = reqUrl.searchParams.get('signId');
         const signature = reqUrl.searchParams.get('signature');
+        const error = reqUrl.searchParams.get('error');
 
-        console.log('✅ Message signed');
+        console.log('✅ [Main] Message signed:', { signId, hasSignature: !!signature });
 
         if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('wallet-signed', { signId, signature });
+          mainWindow.webContents.send('wallet-signed', { signId, signature, error });
           mainWindow.focus();
         }
 
         res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end(`<!DOCTYPE html><html><head><style>
-          body{font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:linear-gradient(135deg,#0f172a,#1e293b);color:white}
-        </style></head><body><div style="text-align:center">
-          <div style="font-size:64px;margin-bottom:16px">✓</div>
-          <h1>Message Signed!</h1>
-          <p>Returning to BlockStar Cypher...</p>
-          <script>setTimeout(()=>window.close(),1500)</script>
-        </div></body></html>`);
+        res.end(`<!DOCTYPE html>
+<html><head>
+<style>
+body { font-family: system-ui; display: flex; justify-content: center; align-items: center; 
+       height: 100vh; margin: 0; background: linear-gradient(135deg, #0f172a, #1e293b); color: white; }
+.container { text-align: center; }
+.icon { font-size: 64px; margin-bottom: 16px; }
+h1 { margin: 0 0 8px 0; }
+p { opacity: 0.7; }
+</style>
+</head><body>
+<div class="container">
+  <div class="icon">✓</div>
+  <h1>Message Signed!</h1>
+  <p>Returning to BlockStar Cypher...</p>
+</div>
+<script>setTimeout(() => window.close(), 1500);</script>
+</body></html>`);
         return;
       }
 
-      // ─── CANCEL ───
+      // ─── CANCEL CALLBACK ───
       if (reqUrl.pathname === '/cancel') {
+        console.log('❌ [Main] Wallet operation cancelled');
+
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('wallet-cancelled', {});
           mainWindow.focus();
         }
-        res.writeHead(200);
+
+        res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end('<html><body><script>window.close()</script></body></html>');
         return;
       }
 
+      // 404 for unknown routes
       res.writeHead(404);
       res.end('Not found');
     });
 
     walletCallbackServer.listen(WALLET_CALLBACK_PORT, '127.0.0.1', () => {
-      console.log(`🔗 Wallet callback server on port ${WALLET_CALLBACK_PORT}`);
+      console.log(`✅ [Main] Wallet callback server running on port ${WALLET_CALLBACK_PORT}`);
       resolve({ port: WALLET_CALLBACK_PORT });
     });
 
     walletCallbackServer.on('error', (err) => {
-      console.error('❌ Wallet server error:', err);
-      resolve({ port: null, error: err.message });
+      console.error('❌ [Main] Wallet server error:', err);
+      
+      // If port is in use, try to use it anyway (might be from previous instance)
+      if (err.code === 'EADDRINUSE') {
+        console.log('🔄 [Main] Port in use, assuming existing server');
+        resolve({ port: WALLET_CALLBACK_PORT });
+      } else {
+        resolve({ port: null, error: err.message });
+      }
     });
   });
 });
 
 // Stop callback server
 ipcMain.handle('wallet-stop-server', async () => {
+  console.log('🔗 [Main] Stopping wallet callback server...');
+  
   if (walletCallbackServer) {
-    walletCallbackServer.close();
-    walletCallbackServer = null;
+    try {
+      walletCallbackServer.close();
+      walletCallbackServer = null;
+      console.log('✅ [Main] Wallet callback server stopped');
+    } catch (e) {
+      console.error('❌ [Main] Error stopping server:', e);
+    }
   }
+  
   return { success: true };
 });
 
-// Show native notification
-ipcMain.handle('show-notification', async (event, { title, body }) => {
-  if (Notification.isSupported()) {
-    const notification = new Notification({
-      title,
-      body,
-      icon: path.join(__dirname, '../public/icon.png'),
-    });
-    notification.show();
-    return true;
-  }
-  return false;
-});
 
 // Get app version
 ipcMain.handle('get-app-version', () => {
