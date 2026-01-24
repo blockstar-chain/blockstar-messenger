@@ -168,12 +168,7 @@ app.on('window-all-closed', () => {
 // IPC HANDLERS (for communication with renderer process)
 // ═══════════════════════════════════════════════════════════════
 
-ipcMain.handle('wallet-open-browser', async (event, url) => {
-  await shell.openExternal(url);
-  return { success: true };
-});
-
-// Start local callback server
+// Open URL in system browser (ONLY ONCE - no duplicates!)
 ipcMain.handle('wallet-open-browser', async (event, url) => {
   console.log('🔗 [Main] Opening browser:', url);
   try {
