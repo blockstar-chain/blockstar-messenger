@@ -14,11 +14,6 @@ on:
         required: false
         default: true
         type: boolean
-      # build_macos:
-      #   description: 'Build macOS'
-      #   required: false
-      #   default: true
-      #   type: boolean
 
 env:
   NODE_VERSION: '20'
@@ -67,12 +62,6 @@ jobs:
         run: |
           echo "Checking build output..."
           ls -la out/
-          echo "Checking _next directory..."
-          ls -la out/_next/ || echo "_next directory not found"
-          echo "Checking for CSS files..."
-          find out -name "*.css" || echo "No CSS files found"
-          echo "Checking for JS files..."
-          find out -name "*.js" | head -5 || echo "No JS files found"
 
       - name: Upload frontend build
         uses: actions/upload-artifact@v4
@@ -104,13 +93,6 @@ jobs:
           name: frontend-build
           path: frontend/out
 
-      - name: Verify downloaded build
-        working-directory: frontend
-        shell: pwsh
-        run: |
-          Write-Host "Checking downloaded files..."
-          Get-ChildItem out -Recurse | Select-Object FullName | Format-Table -AutoSize
-
       - name: Install dependencies
         working-directory: frontend
         run: |
@@ -124,100 +106,89 @@ jobs:
       - name: Install Electron dependencies
         working-directory: frontend
         run: npm install --save-dev electron electron-builder
-        
-      - name: Create Electron files
+
+      # ═══════════════════════════════════════════════════════════════
+      # USE EXISTING ELECTRON FILES - Don't overwrite them!
+      # ═══════════════════════════════════════════════════════════════
+      - name: Verify electron files exist
         working-directory: frontend
         shell: pwsh
         run: |
-          # Create electron directory
-          New-Item -ItemType Directory -Force -Path "electron"
+          Write-Host "Checking for electron files..."
           
-          # Create main.js with proper file loading
-          @"
-          const { app, BrowserWindow, shell, protocol } = require('electron');
-          const path = require('path');
-          const url = require('url');
-          const fs = require('fs');
-
-          let mainWindow;
-
-          protocol.registerSchemesAsPrivileged([
-            {
-              scheme: 'app',
-              privileges: {
-                standard: true,
-                secure: true,
-                supportFetchAPI: true,
-                corsEnabled: true
-              }
-            }
-          ]);
-
-          function createWindow() {
-            mainWindow = new BrowserWindow({
-              width: 1200,
-              height: 800,
-              minWidth: 800,
-              minHeight: 600,
-              webPreferences: {
-                nodeIntegration: false,
-                contextIsolation: true,
-                webSecurity: true,
-              },
-              icon: path.join(__dirname, '../public/icon.png'),
-              titleBarStyle: 'default',
-              show: false,
-            });
-
-            if (process.env.NODE_ENV === 'development') {
-              mainWindow.loadURL('http://localhost:3000');
-              mainWindow.webContents.openDevTools();
-            } else {
-              const indexPath = path.join(__dirname, '../out/index.html');
-              
-              if (fs.existsSync(indexPath)) {
-                mainWindow.loadURL(url.format({
-                  pathname: indexPath,
-                  protocol: 'file:',
-                  slashes: true
-                }));
-              } else {
-                console.error('index.html not found at:', indexPath);
-              }
-            }
-
-            mainWindow.webContents.setWindowOpenHandler(({ url: linkUrl }) => {
-              shell.openExternal(linkUrl);
-              return { action: 'deny' };
-            });
-
-            mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
-              console.error('Failed to load:', validatedURL, errorDescription);
-            });
-
-            mainWindow.once('ready-to-show', () => {
-              mainWindow.show();
-            });
-
-            mainWindow.on('closed', () => {
-              mainWindow = null;
-            });
+          if (Test-Path "electron/main.js") {
+            Write-Host "✅ electron/main.js exists"
+            Write-Host "First 30 lines:"
+            Get-Content electron/main.js | Select-Object -First 30
+          } else {
+            Write-Host "❌ electron/main.js NOT FOUND!"
+            exit 1
           }
+          
+          if (Test-Path "electron/preload.js") {
+            Write-Host "✅ electron/preload.js exists"
+            Write-Host "Content:"
+            Get-Content electron/preload.js
+          } else {
+            Write-Host "❌ electron/preload.js NOT FOUND - Creating it..."
+            # Create preload.js if missing
+            @'
+const { contextBridge, ipcRenderer } = require('electron');
 
-          app.whenReady().then(createWindow);
+console.log('[Preload] Loading...');
 
-          app.on('window-all-closed', () => {
-            if (process.platform !== 'darwin') {
-              app.quit();
-            }
-          });
+contextBridge.exposeInMainWorld('electronAPI', {
+  isElectron: true,
+  getPlatform: () => ipcRenderer.invoke('get-platform'),
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  
+  walletOpenBrowser: (url) => {
+    console.log('[Preload] walletOpenBrowser:', url);
+    return ipcRenderer.invoke('wallet-open-browser', url);
+  },
+  
+  walletStartServer: () => {
+    console.log('[Preload] walletStartServer');
+    return ipcRenderer.invoke('wallet-start-server');
+  },
+  
+  walletStopServer: () => {
+    console.log('[Preload] walletStopServer');
+    return ipcRenderer.invoke('wallet-stop-server');
+  },
+  
+  onWalletConnected: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('wallet-connected', handler);
+    return () => ipcRenderer.removeListener('wallet-connected', handler);
+  },
+  
+  onWalletCancelled: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('wallet-cancelled', handler);
+    return () => ipcRenderer.removeListener('wallet-cancelled', handler);
+  },
+  
+  onWalletSigned: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('wallet-signed', handler);
+    return () => ipcRenderer.removeListener('wallet-signed', handler);
+  },
+});
 
-          app.on('activate', () => {
-            if (BrowserWindow.getAllWindows().length === 0) {
-              createWindow();
-            }
-          });
-          "@ | Out-File -FilePath "electron/main.js" -Encoding UTF8
+console.log('[Preload] Loaded successfully!');
+'@ | Out-File -FilePath "electron/preload.js" -Encoding UTF8
+            Write-Host "✅ Created electron/preload.js"
+          }
+          
+          # Verify preload is referenced in main.js
+          $mainContent = Get-Content electron/main.js -Raw
+          if ($mainContent -match "preload.*preload\.js") {
+            Write-Host "✅ main.js references preload.js"
+          } else {
+            Write-Host "⚠️ WARNING: main.js might not reference preload.js!"
+            Write-Host "Make sure webPreferences includes: preload: path.join(__dirname, 'preload.js')"
+          }
 
       - name: Generate Windows icon
         working-directory: frontend
@@ -228,7 +199,6 @@ jobs:
           @"
           const sharp = require('sharp');
           const fs = require('fs');
-          const path = require('path');
           
           async function generateIcon() {
             const pngPath = 'public/icon.png';
@@ -264,49 +234,39 @@ jobs:
           
           node generate-icon.js
 
-      - name: Update package.json
+      - name: Update package.json for electron-builder
         working-directory: frontend
         shell: pwsh
         run: |
-          $pkg = Get-Content package.json | ConvertFrom-Json
-          $pkg.main = "electron/main.js"
-          
-          if (-not $pkg.description) {
-            $pkg | Add-Member -NotePropertyName "description" -NotePropertyValue "BlockStar Cypher - Secure Messaging" -Force
-          }
-          if (-not $pkg.author) {
-            $pkg | Add-Member -NotePropertyName "author" -NotePropertyValue "BlockStar" -Force
-          }
-          if (-not $pkg.repository) {
-            $pkg | Add-Member -NotePropertyName "repository" -NotePropertyValue @{
-              type = "git"
-              url = "https://github.com/user/repo"
-            } -Force
-          }
-          
-          $pkg | Add-Member -NotePropertyName "build" -NotePropertyValue @{
-            appId = "com.blockstar.cypher"
-            productName = "BlockStar Cypher"
-            directories = @{
-              output = "dist"
-            }
-            files = @(
-              "electron/**/*",
-              "out/**/*",
-              "public/**/*",
-              "!out/.next/cache/**/*"
-            )
-            win = @{
-              target = @("nsis", "portable")
-              icon = "public/icon.png"
-            }
-            publish = $null
-            generateUpdatesFilesForAllChannels = $false
-            compression = "normal"
-            asar = $true
-          } -Force
-          
-          $pkg | ConvertTo-Json -Depth 10 | Set-Content package.json
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json'));
+            pkg.main = 'electron/main.js';
+            pkg.description = pkg.description || 'BlockStar Cypher - Secure Messaging';
+            pkg.author = pkg.author || 'BlockStar';
+            pkg.repository = pkg.repository || { type: 'git', url: 'https://github.com/user/repo' };
+            
+            pkg.build = {
+              appId: 'com.blockstar.cypher',
+              productName: 'BlockStar Cypher',
+              directories: { output: 'dist' },
+              files: ['electron/**/*', 'out/**/*', 'public/**/*', '!out/.next/cache/**/*'],
+              win: {
+                target: ['nsis'],
+                icon: 'public/icon.png'
+              },
+              nsis: {
+                oneClick: false,
+                allowToChangeInstallationDirectory: true
+              },
+              publish: null,
+              generateUpdatesFilesForAllChannels: false,
+              compression: 'normal',
+              asar: true
+            };
+            
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          "
 
       - name: Build Windows App
         working-directory: frontend
@@ -321,227 +281,6 @@ jobs:
           path: |
             frontend/dist/*.exe
           retention-days: 30
-
-  # ═══════════════════════════════════════════════════════════════
-  # MACOS BUILD (Electron)
-  # ═══════════════════════════════════════════════════════════════
-  # build-macos:
-  #   needs: build-frontend
-  #   runs-on: macos-latest
-  #   if: ${{ github.event.inputs.build_macos != 'false' }}
-    
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-
-  #     - name: Setup Node.js
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: ${{ env.NODE_VERSION }}
-
-  #     - name: Download frontend build
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         name: frontend-build
-  #         path: frontend/out
-
-  #     - name: Verify downloaded build
-  #       working-directory: frontend
-  #       run: |
-  #         echo "Checking downloaded files..."
-  #         find out -type f | head -20
-
-  #     - name: Install dependencies
-  #       working-directory: frontend
-  #       run: |
-  #         if [ -f "package-lock.json" ]; then
-  #           npm ci
-  #         else
-  #           npm install
-  #         fi
-
-  #     - name: Install Electron dependencies
-  #       working-directory: frontend
-  #       run: npm install --save-dev electron electron-builder
-
-  #     - name: Create Electron main.js
-  #       working-directory: frontend
-  #       run: |
-  #         mkdir -p electron
-  #         cat > electron/main.js << 'EOF'
-  #         const { app, BrowserWindow, shell, protocol } = require('electron');
-  #         const path = require('path');
-  #         const url = require('url');
-  #         const fs = require('fs');
-
-  #         let mainWindow;
-
-  #         protocol.registerSchemesAsPrivileged([
-  #           {
-  #             scheme: 'app',
-  #             privileges: {
-  #               standard: true,
-  #               secure: true,
-  #               supportFetchAPI: true,
-  #               corsEnabled: true
-  #             }
-  #           }
-  #         ]);
-
-  #         function createWindow() {
-  #           mainWindow = new BrowserWindow({
-  #             width: 1200,
-  #             height: 800,
-  #             minWidth: 800,
-  #             minHeight: 600,
-  #             webPreferences: {
-  #               nodeIntegration: false,
-  #               contextIsolation: true,
-  #               webSecurity: true,
-  #             },
-  #             icon: path.join(__dirname, '../public/icon.png'),
-  #             titleBarStyle: 'hiddenInset',
-  #             show: false,
-  #           });
-
-  #           if (process.env.NODE_ENV === 'development') {
-  #             mainWindow.loadURL('http://localhost:3000');
-  #             mainWindow.webContents.openDevTools();
-  #           } else {
-  #             const indexPath = path.join(__dirname, '../out/index.html');
-              
-  #             if (fs.existsSync(indexPath)) {
-  #               mainWindow.loadURL(url.format({
-  #                 pathname: indexPath,
-  #                 protocol: 'file:',
-  #                 slashes: true
-  #               }));
-  #             } else {
-  #               console.error('index.html not found at:', indexPath);
-  #             }
-  #           }
-
-  #           mainWindow.webContents.setWindowOpenHandler(({ url: linkUrl }) => {
-  #             shell.openExternal(linkUrl);
-  #             return { action: 'deny' };
-  #           });
-
-  #           mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
-  #             console.error('Failed to load:', validatedURL, errorDescription);
-  #           });
-
-  #           mainWindow.once('ready-to-show', () => {
-  #             mainWindow.show();
-  #           });
-
-  #           mainWindow.on('closed', () => {
-  #             mainWindow = null;
-  #           });
-  #         }
-
-  #         app.whenReady().then(createWindow);
-
-  #         app.on('window-all-closed', () => {
-  #           if (process.platform !== 'darwin') {
-  #             app.quit();
-  #           }
-  #         });
-
-  #         app.on('activate', () => {
-  #           if (BrowserWindow.getAllWindows().length === 0) {
-  #             createWindow();
-  #           }
-  #         });
-  #         EOF
-
-  #     - name: Generate macOS icon
-  #       working-directory: frontend
-  #       run: |
-  #         npm install --save-dev sharp
-          
-  #         cat > generate-icon.js << 'ICONSCRIPT'
-  #         const sharp = require('sharp');
-  #         const fs = require('fs');
-          
-  #         async function generateIcon() {
-  #           const pngPath = 'public/icon.png';
-            
-  #           if (!fs.existsSync('public')) {
-  #             fs.mkdirSync('public', { recursive: true });
-  #           }
-            
-  #           if (!fs.existsSync(pngPath)) {
-  #             console.log('Creating placeholder icon...');
-  #             const svg = Buffer.from(
-  #               '<svg width="512" height="512"><rect width="512" height="512" fill="#3B82F6" rx="100"/><text x="256" y="300" text-anchor="middle" font-size="200" fill="white" font-family="Arial">BC</text></svg>'
-  #             );
-  #             await sharp(svg).resize(512, 512).png().toFile(pngPath);
-  #           }
-            
-  #           const metadata = await sharp(pngPath).metadata();
-  #           console.log('Icon size:', metadata.width, 'x', metadata.height);
-            
-  #           if (metadata.width < 512 || metadata.height < 512) {
-  #             console.log('Resizing icon to 512x512...');
-  #             await sharp(pngPath)
-  #               .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
-  #               .toFile('public/icon-512.png');
-  #             fs.copyFileSync('public/icon-512.png', pngPath);
-  #           }
-            
-  #           console.log('Icon ready');
-  #         }
-          
-  #         generateIcon().catch(console.error);
-  #         ICONSCRIPT
-          
-  #         node generate-icon.js
-
-  #     - name: Update package.json
-  #       working-directory: frontend
-  #       run: |
-  #         node -e "
-  #           const fs = require('fs');
-  #           const pkg = JSON.parse(fs.readFileSync('package.json'));
-  #           pkg.main = 'electron/main.js';
-  #           pkg.description = pkg.description || 'BlockStar Cypher - Secure Messaging';
-  #           pkg.author = pkg.author || 'BlockStar';
-  #           pkg.repository = pkg.repository || { type: 'git', url: 'https://github.com/user/repo' };
-            
-  #           pkg.build = {
-  #             appId: 'com.blockstar.cypher',
-  #             productName: 'BlockStar Cypher',
-  #             directories: { output: 'dist' },
-  #             files: ['electron/**/*', 'out/**/*', 'public/**/*', '!out/.next/cache/**/*'],
-  #             mac: {
-  #               target: ['dmg', 'zip'],
-  #               icon: 'public/icon.png',
-  #               category: 'public.app-category.social-networking'
-  #             },
-  #             publish: null,
-  #             generateUpdatesFilesForAllChannels: false,
-  #             compression: 'normal',
-  #             asar: true
-  #           };
-            
-  #           fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
-  #         "
-
-  #     - name: Build macOS App
-  #       working-directory: frontend
-  #       run: npx electron-builder --mac --publish never
-  #       env:
-  #         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #         CSC_IDENTITY_AUTO_DISCOVERY: false
-
-  #     - name: Upload macOS Build
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: macos-build
-  #         path: |
-  #           frontend/dist/*.dmg
-  #           frontend/dist/*.zip
-  #         retention-days: 30
 
   # ═══════════════════════════════════════════════════════════════
   # CREATE RELEASE (on tag push)
@@ -565,8 +304,6 @@ jobs:
         with:
           files: |
             artifacts/windows-build/*.exe
-            artifacts/macos-build/*.dmg
-            artifacts/macos-build/*.zip
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'alpha') }}
