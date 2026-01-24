@@ -117,51 +117,64 @@ jobs:
 
       - name: Generate Windows icon
         working-directory: frontend
+        shell: pwsh
         run: |
           npm install --save-dev sharp
-          node -e "
-          const sharp = require('sharp');
-          const fs = require('fs');
+          
+          # Write icon generation script to file to avoid quote escaping issues
+          $script = @'
+          const sharp = require("sharp");
+          const fs = require("fs");
           async function go() {
-            if (!fs.existsSync('public')) fs.mkdirSync('public', { recursive: true });
-            const pngPath = 'public/icon.png';
+            if (!fs.existsSync("public")) fs.mkdirSync("public", { recursive: true });
+            const pngPath = "public/icon.png";
             if (!fs.existsSync(pngPath)) {
-              console.log('Creating placeholder icon...');
-              const svg = Buffer.from('<svg width=\"256\" height=\"256\"><rect width=\"256\" height=\"256\" fill=\"#3B82F6\"/><text x=\"128\" y=\"140\" text-anchor=\"middle\" font-size=\"48\" fill=\"white\">BC</text></svg>');
+              console.log("Creating placeholder icon...");
+              const svg = Buffer.from("<svg width='256' height='256'><rect width='256' height='256' fill='#3B82F6'/><text x='128' y='140' text-anchor='middle' font-size='48' fill='white'>BC</text></svg>");
               await sharp(svg).resize(256, 256).png().toFile(pngPath);
             }
             const m = await sharp(pngPath).metadata();
-            console.log('Icon:', m.width, 'x', m.height);
+            console.log("Icon:", m.width, "x", m.height);
             if (m.width < 256 || m.height < 256) {
-              await sharp(pngPath).resize(256, 256).toFile('public/icon-256.png');
-              fs.copyFileSync('public/icon-256.png', pngPath);
+              await sharp(pngPath).resize(256, 256).toFile("public/icon-256.png");
+              fs.copyFileSync("public/icon-256.png", pngPath);
             }
+            console.log("Icon ready");
           }
           go().catch(console.error);
-          "
+          '@
+          
+          $script | Out-File -FilePath "generate-icon.js" -Encoding UTF8
+          node generate-icon.js
 
       - name: Update package.json for electron-builder
         working-directory: frontend
+        shell: pwsh
         run: |
-          node -e "
-          const fs = require('fs');
-          const pkg = JSON.parse(fs.readFileSync('package.json'));
-          pkg.main = 'electron/main.js';
-          pkg.description = pkg.description || 'BlockStar Cypher';
-          pkg.author = pkg.author || 'BlockStar';
-          pkg.repository = pkg.repository || { type: 'git', url: 'https://github.com/user/repo' };
+          # Write package.json update script to file
+          $script = @'
+          const fs = require("fs");
+          const pkg = JSON.parse(fs.readFileSync("package.json"));
+          pkg.main = "electron/main.js";
+          pkg.description = pkg.description || "BlockStar Cypher";
+          pkg.author = pkg.author || "BlockStar";
+          pkg.repository = pkg.repository || { type: "git", url: "https://github.com/user/repo" };
           pkg.build = {
-            appId: 'com.blockstar.cypher',
-            productName: 'BlockStar Cypher',
-            directories: { output: 'dist' },
-            files: ['electron/**/*', 'out/**/*', 'public/**/*'],
-            win: { target: ['nsis'], icon: 'public/icon.png' },
+            appId: "com.blockstar.cypher",
+            productName: "BlockStar Cypher",
+            directories: { output: "dist" },
+            files: ["electron/**/*", "out/**/*", "public/**/*"],
+            win: { target: ["nsis"], icon: "public/icon.png" },
             nsis: { oneClick: false, allowToChangeInstallationDirectory: true },
             publish: null,
             asar: true
           };
-          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
-          "
+          fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
+          console.log("package.json updated");
+          '@
+          
+          $script | Out-File -FilePath "update-pkg.js" -Encoding UTF8
+          node update-pkg.js
 
       - name: Build Windows App
         working-directory: frontend
