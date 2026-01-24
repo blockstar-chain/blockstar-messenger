@@ -19,9 +19,6 @@ env:
   NODE_VERSION: '20'
 
 jobs:
-  # ═══════════════════════════════════════════════════════════════
-  # BUILD FRONTEND (shared by all platforms)
-  # ═══════════════════════════════════════════════════════════════
   build-frontend:
     runs-on: ubuntu-latest
     steps:
@@ -59,9 +56,7 @@ jobs:
 
       - name: Verify build output
         working-directory: frontend
-        run: |
-          echo "Checking build output..."
-          ls -la out/
+        run: ls -la out/
 
       - name: Upload frontend build
         uses: actions/upload-artifact@v4
@@ -70,9 +65,6 @@ jobs:
           path: frontend/out
           retention-days: 1
 
-  # ═══════════════════════════════════════════════════════════════
-  # WINDOWS BUILD (Electron)
-  # ═══════════════════════════════════════════════════════════════
   build-windows:
     needs: build-frontend
     runs-on: windows-latest
@@ -95,177 +87,80 @@ jobs:
 
       - name: Install dependencies
         working-directory: frontend
+        shell: pwsh
         run: |
           if (Test-Path "package-lock.json") {
             npm ci
           } else {
             npm install
           }
-        shell: pwsh
 
       - name: Install Electron dependencies
         working-directory: frontend
         run: npm install --save-dev electron electron-builder
 
-      # ═══════════════════════════════════════════════════════════════
-      # USE EXISTING ELECTRON FILES - Don't overwrite them!
-      # ═══════════════════════════════════════════════════════════════
       - name: Verify electron files exist
         working-directory: frontend
         shell: pwsh
         run: |
           Write-Host "Checking for electron files..."
-          
-          if (Test-Path "electron/main.js") {
-            Write-Host "✅ electron/main.js exists"
-            Write-Host "First 30 lines:"
-            Get-Content electron/main.js | Select-Object -First 30
-          } else {
-            Write-Host "❌ electron/main.js NOT FOUND!"
+          if (-not (Test-Path "electron/main.js")) {
+            Write-Host "ERROR: electron/main.js NOT FOUND"
             exit 1
           }
-          
-          if (Test-Path "electron/preload.js") {
-            Write-Host "✅ electron/preload.js exists"
-            Write-Host "Content:"
-            Get-Content electron/preload.js
-          } else {
-            Write-Host "❌ electron/preload.js NOT FOUND - Creating it..."
-            # Create preload.js if missing
-            @'
-const { contextBridge, ipcRenderer } = require('electron');
-
-console.log('[Preload] Loading...');
-
-contextBridge.exposeInMainWorld('electronAPI', {
-  isElectron: true,
-  getPlatform: () => ipcRenderer.invoke('get-platform'),
-  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
-  
-  walletOpenBrowser: (url) => {
-    console.log('[Preload] walletOpenBrowser:', url);
-    return ipcRenderer.invoke('wallet-open-browser', url);
-  },
-  
-  walletStartServer: () => {
-    console.log('[Preload] walletStartServer');
-    return ipcRenderer.invoke('wallet-start-server');
-  },
-  
-  walletStopServer: () => {
-    console.log('[Preload] walletStopServer');
-    return ipcRenderer.invoke('wallet-stop-server');
-  },
-  
-  onWalletConnected: (callback) => {
-    const handler = (event, data) => callback(data);
-    ipcRenderer.on('wallet-connected', handler);
-    return () => ipcRenderer.removeListener('wallet-connected', handler);
-  },
-  
-  onWalletCancelled: (callback) => {
-    const handler = () => callback();
-    ipcRenderer.on('wallet-cancelled', handler);
-    return () => ipcRenderer.removeListener('wallet-cancelled', handler);
-  },
-  
-  onWalletSigned: (callback) => {
-    const handler = (event, data) => callback(data);
-    ipcRenderer.on('wallet-signed', handler);
-    return () => ipcRenderer.removeListener('wallet-signed', handler);
-  },
-});
-
-console.log('[Preload] Loaded successfully!');
-'@ | Out-File -FilePath "electron/preload.js" -Encoding UTF8
-            Write-Host "✅ Created electron/preload.js"
+          Write-Host "Found electron/main.js"
+          if (-not (Test-Path "electron/preload.js")) {
+            Write-Host "ERROR: electron/preload.js NOT FOUND"
+            exit 1
           }
-          
-          # Verify preload is referenced in main.js
-          $mainContent = Get-Content electron/main.js -Raw
-          if ($mainContent -match "preload.*preload\.js") {
-            Write-Host "✅ main.js references preload.js"
-          } else {
-            Write-Host "⚠️ WARNING: main.js might not reference preload.js!"
-            Write-Host "Make sure webPreferences includes: preload: path.join(__dirname, 'preload.js')"
-          }
+          Write-Host "Found electron/preload.js"
 
       - name: Generate Windows icon
         working-directory: frontend
-        shell: pwsh
         run: |
           npm install --save-dev sharp
-          
-          @"
+          node -e "
           const sharp = require('sharp');
           const fs = require('fs');
-          
-          async function generateIcon() {
+          async function go() {
+            if (!fs.existsSync('public')) fs.mkdirSync('public', { recursive: true });
             const pngPath = 'public/icon.png';
-            
-            if (!fs.existsSync('public')) {
-              fs.mkdirSync('public', { recursive: true });
-            }
-            
             if (!fs.existsSync(pngPath)) {
               console.log('Creating placeholder icon...');
-              const svg = Buffer.from(
-                '<svg width="256" height="256"><rect width="256" height="256" fill="#3B82F6"/><text x="128" y="140" text-anchor="middle" font-size="48" fill="white">BC</text></svg>'
-              );
+              const svg = Buffer.from('<svg width=\"256\" height=\"256\"><rect width=\"256\" height=\"256\" fill=\"#3B82F6\"/><text x=\"128\" y=\"140\" text-anchor=\"middle\" font-size=\"48\" fill=\"white\">BC</text></svg>');
               await sharp(svg).resize(256, 256).png().toFile(pngPath);
             }
-            
-            const metadata = await sharp(pngPath).metadata();
-            console.log('Icon size:', metadata.width, 'x', metadata.height);
-            
-            if (metadata.width < 256 || metadata.height < 256) {
-              console.log('Resizing icon to 256x256...');
-              await sharp(pngPath)
-                .resize(256, 256, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
-                .toFile('public/icon-256.png');
+            const m = await sharp(pngPath).metadata();
+            console.log('Icon:', m.width, 'x', m.height);
+            if (m.width < 256 || m.height < 256) {
+              await sharp(pngPath).resize(256, 256).toFile('public/icon-256.png');
               fs.copyFileSync('public/icon-256.png', pngPath);
             }
-            
-            console.log('Icon ready');
           }
-          
-          generateIcon().catch(console.error);
-          "@ | Out-File -FilePath "generate-icon.js" -Encoding UTF8
-          
-          node generate-icon.js
+          go().catch(console.error);
+          "
 
       - name: Update package.json for electron-builder
         working-directory: frontend
-        shell: pwsh
         run: |
           node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json'));
-            pkg.main = 'electron/main.js';
-            pkg.description = pkg.description || 'BlockStar Cypher - Secure Messaging';
-            pkg.author = pkg.author || 'BlockStar';
-            pkg.repository = pkg.repository || { type: 'git', url: 'https://github.com/user/repo' };
-            
-            pkg.build = {
-              appId: 'com.blockstar.cypher',
-              productName: 'BlockStar Cypher',
-              directories: { output: 'dist' },
-              files: ['electron/**/*', 'out/**/*', 'public/**/*', '!out/.next/cache/**/*'],
-              win: {
-                target: ['nsis'],
-                icon: 'public/icon.png'
-              },
-              nsis: {
-                oneClick: false,
-                allowToChangeInstallationDirectory: true
-              },
-              publish: null,
-              generateUpdatesFilesForAllChannels: false,
-              compression: 'normal',
-              asar: true
-            };
-            
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json'));
+          pkg.main = 'electron/main.js';
+          pkg.description = pkg.description || 'BlockStar Cypher';
+          pkg.author = pkg.author || 'BlockStar';
+          pkg.repository = pkg.repository || { type: 'git', url: 'https://github.com/user/repo' };
+          pkg.build = {
+            appId: 'com.blockstar.cypher',
+            productName: 'BlockStar Cypher',
+            directories: { output: 'dist' },
+            files: ['electron/**/*', 'out/**/*', 'public/**/*'],
+            win: { target: ['nsis'], icon: 'public/icon.png' },
+            nsis: { oneClick: false, allowToChangeInstallationDirectory: true },
+            publish: null,
+            asar: true
+          };
+          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
           "
 
       - name: Build Windows App
@@ -278,13 +173,9 @@ console.log('[Preload] Loaded successfully!');
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: |
-            frontend/dist/*.exe
+          path: frontend/dist/*.exe
           retention-days: 30
 
-  # ═══════════════════════════════════════════════════════════════
-  # CREATE RELEASE (on tag push)
-  # ═══════════════════════════════════════════════════════════════
   create-release:
     needs: [build-windows]
     runs-on: ubuntu-latest
@@ -302,8 +193,7 @@ console.log('[Preload] Loaded successfully!');
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: |
-            artifacts/windows-build/*.exe
+          files: artifacts/windows-build/*.exe
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'alpha') }}
