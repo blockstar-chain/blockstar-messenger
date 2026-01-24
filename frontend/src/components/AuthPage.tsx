@@ -1,13 +1,5 @@
 'use client';
 
-/**
- * Updated AuthPage
- * 
- * - On Desktop (Electron): Uses browser-based MetaMask for connect + sign
- * - On Mobile/Web: Uses existing Reown/AppKit + wagmi
- * 
- * Replace your existing AuthPage.tsx with this
- */
 
 import React, { useState, useEffect } from 'react';
 import { useAppStore } from '@/store';
@@ -31,39 +23,43 @@ import { useDesktopWallet, isDesktopApp } from '@/hooks/useDesktopWallet';
 
 export default function AuthPage() {
   const [isDesktop, setIsDesktop] = useState(false);
-  
+
   // Desktop wallet
   const desktopWallet = useDesktopWallet();
-  
+
   // Reown/wagmi (for mobile/web)
   const { address: appKitAddress } = useAppKitAccount();
   const { signMessageAsync: wagmiSignMessage } = useSignMessage();
-  
+
   // Detect platform
   useEffect(() => {
     setIsDesktop(isDesktopApp());
   }, []);
-  
+
   // Use appropriate address based on platform
   const address = isDesktop ? desktopWallet.address : appKitAddress;
-  
+
   // Use appropriate sign function based on platform
-  const signMessageAsync = isDesktop 
-    ? desktopWallet.signMessageAsync 
+  const signMessageAsync = isDesktop
+    ? desktopWallet.signMessageAsync
     : wagmiSignMessage;
-  
+
   const { setCurrentUser, setAuthenticated } = useAppStore();
   const [isConnecting, setIsConnecting] = useState(false);
   const [currentStep, setCurrentStep] = useState<'connect' | 'verify' | 'encrypt'>('connect');
+  const [currentstate, setCurrentstate] = useState('loading...');
 
   const handleConnectWallet = async () => {
+    setCurrentstate('handleConnectWallet')
     if (!address) return;
-    
+
     setIsConnecting(true);
 
     try {
       setCurrentStep('connect');
+      setCurrentstate('handleConnectWallet')
       const contractconnect = await blockchainService.connectWallet();
+      setCurrentstate(JSON.stringify(contractconnect));
       if (!contractconnect) {
         return false;
       }
@@ -217,8 +213,8 @@ export default function AuthPage() {
               <div className="flex-1">
                 <h3 className="font-semibold text-white">Connect Wallet</h3>
                 <p className="text-sm text-secondary">
-                  {isDesktop 
-                    ? 'Connect MetaMask from your browser' 
+                  {isDesktop
+                    ? 'Connect MetaMask from your browser'
                     : 'Connect your Web3 wallet to get started'}
                 </p>
               </div>
@@ -259,10 +255,15 @@ export default function AuthPage() {
           </div>
 
 
-          <ConnectButton 
-            isConnecting={isConnecting} 
-            className="w-full bg-gradient-to-r from-primary-500 to-cyan-500 hover:from-primary-600 hover:to-cyan-600 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 shadow-glow hover:shadow-glow-lg" 
+          <ConnectButton
+            isConnecting={isConnecting}
+            className="w-full bg-gradient-to-r from-primary-500 to-cyan-500 hover:from-primary-600 hover:to-cyan-600 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 shadow-glow hover:shadow-glow-lg"
+            isDesktop={isDesktop}
+            desktopWallet={desktopWallet}
+            address={address}
+            isConnected={isConnecting}
           />
+        
 
           {/* Desktop hint */}
           {isDesktop && !address && (

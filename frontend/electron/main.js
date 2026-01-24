@@ -220,25 +220,97 @@ ipcMain.handle('wallet-start-server', async () => {
           mainWindow.focus();
         }
 
-        res.writeHead(200, { 'Content-Type': 'text/html' });
+        // FIXED: Better auto-close HTML with multiple fallback methods
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(`<!DOCTYPE html>
-<html><head>
-<style>
-body { font-family: system-ui; display: flex; justify-content: center; align-items: center; 
-       height: 100vh; margin: 0; background: linear-gradient(135deg, #0f172a, #1e293b); color: white; }
-.container { text-align: center; }
-.icon { font-size: 64px; margin-bottom: 16px; }
-h1 { margin: 0 0 8px 0; }
-p { opacity: 0.7; }
-</style>
-</head><body>
-<div class="container">
-  <div class="icon">✓</div>
-  <h1>Wallet Connected!</h1>
-  <p>Returning to BlockStar Cypher...</p>
-</div>
-<script>setTimeout(() => window.close(), 1500);</script>
-</body></html>`);
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Connected</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+    .container {
+      text-align: center;
+      animation: fadeIn 0.3s ease-in;
+    }
+    .icon {
+      font-size: 72px;
+      margin-bottom: 20px;
+      animation: scaleIn 0.5s ease-out;
+    }
+    h1 {
+      margin: 0 0 12px 0;
+      font-size: 28px;
+      font-weight: 600;
+    }
+    p {
+      opacity: 0.9;
+      font-size: 16px;
+      margin: 0;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes scaleIn {
+      from { transform: scale(0); }
+      to { transform: scale(1); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="icon">✓</div>
+    <h1>Wallet Connected!</h1>
+    <p>Returning to BlockStar Cypher...</p>
+  </div>
+  <script>
+    // Multiple methods to ensure window closes
+    
+    // Method 1: Standard window.close()
+    setTimeout(() => {
+      window.close();
+    }, 1500);
+    
+    // Method 2: Try to close parent/opener if exists
+    setTimeout(() => {
+      if (window.opener && !window.opener.closed) {
+        window.opener.focus();
+      }
+      window.close();
+    }, 1600);
+    
+    // Method 3: Force close with self.close()
+    setTimeout(() => {
+      self.close();
+    }, 1700);
+    
+    // Method 4: Alternative close method
+    setTimeout(() => {
+      try {
+        window.open('', '_self').close();
+      } catch (e) {
+        console.log('Alt close failed:', e);
+      }
+    }, 1800);
+    
+    // Method 5: Last resort - redirect to about:blank then close
+    setTimeout(() => {
+      window.location.href = 'about:blank';
+      setTimeout(() => window.close(), 100);
+    }, 2000);
+  </script>
+</body>
+</html>`);
         return;
       }
 
@@ -255,25 +327,78 @@ p { opacity: 0.7; }
           mainWindow.focus();
         }
 
-        res.writeHead(200, { 'Content-Type': 'text/html' });
+        // FIXED: Better auto-close HTML with multiple fallback methods
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(`<!DOCTYPE html>
-<html><head>
-<style>
-body { font-family: system-ui; display: flex; justify-content: center; align-items: center; 
-       height: 100vh; margin: 0; background: linear-gradient(135deg, #0f172a, #1e293b); color: white; }
-.container { text-align: center; }
-.icon { font-size: 64px; margin-bottom: 16px; }
-h1 { margin: 0 0 8px 0; }
-p { opacity: 0.7; }
-</style>
-</head><body>
-<div class="container">
-  <div class="icon">✓</div>
-  <h1>Message Signed!</h1>
-  <p>Returning to BlockStar Cypher...</p>
-</div>
-<script>setTimeout(() => window.close(), 1500);</script>
-</body></html>`);
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Signed</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+    .container {
+      text-align: center;
+      animation: fadeIn 0.3s ease-in;
+    }
+    .icon {
+      font-size: 72px;
+      margin-bottom: 20px;
+      animation: scaleIn 0.5s ease-out;
+    }
+    h1 {
+      margin: 0 0 12px 0;
+      font-size: 28px;
+      font-weight: 600;
+    }
+    p {
+      opacity: 0.9;
+      font-size: 16px;
+      margin: 0;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes scaleIn {
+      from { transform: scale(0); }
+      to { transform: scale(1); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="icon">✓</div>
+    <h1>Message Signed!</h1>
+    <p>Returning to BlockStar Cypher...</p>
+  </div>
+  <script>
+    // Multiple methods to ensure window closes
+    
+    setTimeout(() => window.close(), 1500);
+    setTimeout(() => {
+      if (window.opener && !window.opener.closed) window.opener.focus();
+      window.close();
+    }, 1600);
+    setTimeout(() => self.close(), 1700);
+    setTimeout(() => {
+      try { window.open('', '_self').close(); } catch (e) {}
+    }, 1800);
+    setTimeout(() => {
+      window.location.href = 'about:blank';
+      setTimeout(() => window.close(), 100);
+    }, 2000);
+  </script>
+</body>
+</html>`);
         return;
       }
 
@@ -286,8 +411,20 @@ p { opacity: 0.7; }
           mainWindow.focus();
         }
 
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end('<html><body><script>window.close()</script></body></html>');
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(`<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Cancelled</title></head>
+<body>
+<script>
+  window.close();
+  setTimeout(() => self.close(), 100);
+  setTimeout(() => {
+    try { window.open('', '_self').close(); } catch (e) {}
+  }, 200);
+</script>
+</body>
+</html>`);
         return;
       }
 

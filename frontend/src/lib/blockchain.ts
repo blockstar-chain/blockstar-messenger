@@ -1,4 +1,4 @@
-import { ethers, BrowserProvider, JsonRpcSigner } from 'ethers';
+import { ethers, JsonRpcSigner } from 'ethers';
 import { NFTMetadata } from '@/types';
 import NFT_ABI from '@/abi/nft.json';
 import axios from 'axios';
