@@ -112,7 +112,7 @@ jobs:
 
       - name: Install Electron dependencies
         working-directory: frontend
-        run: npm install --save-dev electron electron-builder
+        run: npm install --save-dev electron electron-builder --legacy-peer-deps
         
       - name: Create Electron files
         working-directory: frontend
@@ -335,7 +335,7 @@ jobs:
           fi
       - name: Install Electron dependencies
         working-directory: frontend
-        run: npm install --save-dev electron electron-builder
+        run: npm install --save-dev electron electron-builder --legacy-peer-deps
 
       - name: Create Electron main.js
         working-directory: frontend
