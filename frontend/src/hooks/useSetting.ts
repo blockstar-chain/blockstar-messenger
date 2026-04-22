@@ -83,33 +83,44 @@ export const useSettingReslover = (name = '', filter = true) => {
     useEffect(() => {
         async function fetch() {
             try {
-                let split_name = name.trim().split('.');
+                // V3: Parse name and TLD (e.g., "name@tld" or "name.tld" or just "name")
+                let domainName = name.trim();
+                let tld = 'blockstar'; // default TLD
+
+                if (domainName.includes('@')) {
+                    const parts = domainName.split('@');
+                    domainName = parts[0];
+                    tld = parts[1] || 'blockstar';
+                } else if (domainName.includes('.')) {
+                    const parts = domainName.split('.');
+                    domainName = parts[0];
+                    tld = parts[1] || 'blockstar';
+                }
 
                 let contract = getWeb3Contract(NFT_ABI, process.env.NEXT_PUBLIC_NFT_CONTRACT || "" as string);
-                let records = null;
-                let domain_name = '';
-                let sub_domain = '';
-                let isSubdomain = false;
-                if (split_name.length === 1) {
-                    domain_name = split_name[0]
-                    records = await contract.methods.getUnifiedRecords(split_name[0], "").call();
-                }
-                else if (split_name.length > 1) {
-                    domain_name = split_name[1];
-                    isSubdomain = true;
-                    sub_domain = split_name[0];
-                    records = await contract.methods.getUnifiedRecords(split_name[1], split_name[0] ? split_name[0] : '').call();
-                }
+                
+                // V3: Use getAllRecords(name, tld) instead of getUnifiedRecords
+                let records = await contract.methods.getAllRecords(domainName, tld).call();
 
                 let data: any = [];
 
-                let tokenIdOfName = await contract.methods.getNameToTokenId(domain_name).call();
-                let owner = '';
-                if (tokenIdOfName) {
-                    owner = await contract.methods.ownerOf(tokenIdOfName).call();
-                }
+                // V3: Use getDomainInfo(name, tld) to get owner and tokenId in one call
+                let domainInfo = await contract.methods.getDomainInfo(domainName, tld).call();
+                let owner = domainInfo.domainOwner || domainInfo[0] || '';
+                let tokenId = domainInfo.tokenId || domainInfo[3] || 0;
 
-                let subdomains = await contract.methods.getAllSubdomains(domain_name).call();
+                // V3: Fetch metadata (description, image) if tokenId exists
+                let metaImage = '';
+                let metaDescription = '';
+                if (tokenId && Number(tokenId) > 0) {
+                    try {
+                        let metadata = await contract.methods.getMetadata(tokenId).call();
+                        metaDescription = metadata.description || metadata[0] || '';
+                        metaImage = metadata.image || metadata[1] || '';
+                    } catch (err) {
+                        console.log('Could not get metadata:', err);
+                    }
+                }
 
                 let banner: any = '';
                 let profile: any = '';
@@ -117,25 +128,39 @@ export const useSettingReslover = (name = '', filter = true) => {
 
                 if (records) {
                     let index = 0;
-                    records[0].map((items: any, key: any) => {
-                        if (items === 'profile' && filter) {
-                            profile = ipfsToUrl(records[1][key])
+                    const keys = records.keys || records[0];
+                    const values = records.values || records[1];
+                    
+                    keys.map((item: any, key: any) => {
+                        const itemLower = item.toLowerCase();
+                        if ((itemLower === 'avatar' || itemLower === 'profile' || itemLower === 'pfp') && filter) {
+                            profile = ipfsToUrl(values[key]) || values[key]
                         }
-                        else if (items === 'banner' && filter) {
-                            banner = ipfsToUrl(records[1][key])
+                        else if ((itemLower === 'banner' || itemLower === 'cover') && filter) {
+                            banner = ipfsToUrl(values[key]) || values[key]
                         }
-                        else if (items === 'bio' && filter) {
-                            bio = records[1][key]
+                        else if ((itemLower === 'bio' || itemLower === 'description' || itemLower === 'about') && filter) {
+                            bio = values[key]
+                        }
+                        else if (itemLower === 'display_name' && filter) {
+                            // display_name is metadata, not a social link — skip it
                         }
                         else {
                             data[index] = {
-                                key: items,
-                                value: records[1][key]
+                                key: item,
+                                value: values[key]
                             }
                             index++;
                         }
                     })
+                }
 
+                // V3: Use metadata as fallback for profile image and bio
+                if (!profile && metaImage) {
+                    profile = ipfsToUrl(metaImage) || metaImage;
+                }
+                if (!bio && metaDescription) {
+                    bio = metaDescription;
                 }
 
                 setStats({
@@ -146,10 +171,10 @@ export const useSettingReslover = (name = '', filter = true) => {
                     profile,
                     banner,
                     bio,
-                    subdomains,
-                    isSubdomain,
-                    main_domain: domain_name,
-                    sub_domain
+                    subdomains: [],      // V3: No subdomain support
+                    isSubdomain: false,  // V3: No subdomain support
+                    main_domain: domainName,
+                    sub_domain: ''
                 })
             }
             catch (err) {

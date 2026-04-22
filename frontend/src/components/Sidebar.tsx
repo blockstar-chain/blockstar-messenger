@@ -23,14 +23,13 @@ import MeshSettingsSection from './MeshSettingsSection';
 import MeshSettingsComponent from './MeshSettings';
 import NotificationSettingsPanel from './NotificationSettings';
 import RingtoneSettingsPanel from './RingtoneSettings';
-import { useDisconnect } from '@reown/appkit/react';
 import { unregisterPushNotifications } from '@/lib/pushNotifications';
 import { clearUserSession } from '@/lib/persistentAuth';
 import IncomingCallModal from './IncomingCallModal';
 import { useIncomingCallFromNotification, PendingCallData } from '@/hooks/useIncomingCallFromNotification';
 import { Capacitor } from '@capacitor/core';
 import { isDesktopApp, useDesktopWallet } from '@/hooks/useDesktopWallet';
-
+import { useDisconnect } from 'wagmi';
 // Cache for decrypted message previews
 const decryptedPreviewCache = new Map<string, string>();
 
@@ -150,7 +149,8 @@ export default function Sidebar({
   const [loadingProfile, setLoadingProfile] = useState(false);
   const [contactProfiles, setContactProfiles] = useState<Record<string, BlockStarProfile | null>>({});
   const [hoveredConversation, setHoveredConversation] = useState<string | null>(null);
-  const domainName = currentUser?.username ? currentUser.username.includes('@') ? currentUser.username.split('@')[0] : currentUser.username : "";
+  // V3: Pass full username with TLD to resolver (it handles name@tld parsing)
+  const domainName = currentUser?.username || "";
   const stats = useSettingReslover(domainName || '');
   const { disconnect } = useDisconnect();
   const [isDesktop, setIsDesktop] = useState(false);
@@ -636,11 +636,8 @@ export default function Sidebar({
   // Load current user profile immediately
   useEffect(() => {
     if (currentUser?.username) {
-      const domainName = currentUser.username.includes('@')
-        ? currentUser.username.split('@')[0]
-        : currentUser.username;
-
-      resolveProfile(domainName)
+      // V3: Pass full username with TLD (e.g., "ashish@ai") so backend can resolve with correct TLD
+      resolveProfile(currentUser.username)
         .then((profile) => {
           setUserProfile(profile);
         })
@@ -664,10 +661,8 @@ export default function Sidebar({
         const normalizedAddress = address.toLowerCase();
 
         // FIRST check local wallet cache (populated when @name was resolved)
-        // This must happen before checking state, because state might have null from previous lookup
         const cachedProfile = getProfileByWallet(address);
         if (cachedProfile) {
-          // Update state if we have a cached profile (even if state was null before)
           const currentProfile = contactProfiles[normalizedAddress];
           if (currentProfile !== cachedProfile) {
             setContactProfiles(prev => ({ ...prev, [normalizedAddress]: cachedProfile }));
@@ -675,8 +670,9 @@ export default function Sidebar({
           continue;
         }
 
-        // Skip if already checked (and no cache available)
-        if (contactProfiles[normalizedAddress] !== undefined) continue;
+        // Skip if already have a valid profile (not null)
+        // If previous lookup stored null (failed), retry to pick up backend fixes
+        if (contactProfiles[normalizedAddress]) continue;
 
         try {
           // Try to resolve by looking up if they have an NFT name in our database
@@ -707,11 +703,8 @@ export default function Sidebar({
   useEffect(() => {
     if (showSettingsModal && currentUser?.username && !userProfile) {
       setLoadingProfile(true);
-      const domainName = currentUser.username.includes('@')
-        ? currentUser.username.split('@')[0]
-        : currentUser.username;
-
-      resolveProfile(domainName)
+      // V3: Pass full username with TLD
+      resolveProfile(currentUser.username)
         .then((profile) => {
           setUserProfile(profile);
           setLoadingProfile(false);
@@ -997,10 +990,8 @@ export default function Sidebar({
           nameToResolve = nameToResolve.slice(1); // Remove leading @
         }
 
-        if (nameToResolve.includes('@')) {
-          // "ashish@blockstar" → "ashish"
-          nameToResolve = nameToResolve.split('@')[0];
-        }
+        // V3: Keep the TLD if present (e.g., "ashish@bst" stays as-is)
+        // Backend resolver will parse name + tld from the full string
 
         const profile = await resolveProfile(nameToResolve);
 
@@ -1174,9 +1165,7 @@ export default function Sidebar({
           nameToResolve = nameToResolve.slice(1); // Remove leading @
         }
 
-        if (nameToResolve.includes('@')) {
-          nameToResolve = nameToResolve.split('@')[0]; // Get part before @
-        }
+        // V3: Keep the TLD if present (e.g., "ashish@bst" stays as-is)
 
         const profile = await resolveProfile(nameToResolve);
 
@@ -2354,7 +2343,7 @@ export default function Sidebar({
                   {/* Edit Profile Link */}
                   {currentUser?.username && (
                     <a
-                      href={`https://domains.blockstar.site/reslover/${currentUser.username.split('@')[0]}`}
+                      href={`https://domains.blockstar.site/`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="mt-4 flex items-center justify-center gap-2 text-sm text-primary-400 hover:text-primary-300 transition"

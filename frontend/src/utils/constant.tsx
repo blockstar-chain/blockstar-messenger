@@ -4,7 +4,8 @@ import blockstarChatImg from '../images/chat.png';
 import Image from 'next/image';
 
 export function resolveAccountDisplay(account: any) {
-    const config = socialConfig[account.key.toLowerCase()];
+    const key = account.key.toLowerCase().replace(/_/g, ' '); // normalize underscores to spaces
+    const config = socialConfig[account.key.toLowerCase()] || socialConfig[key];
     if (config) {
         const match = account.value.match(config.regex);
         if (match && match[1]) {
@@ -23,7 +24,7 @@ export function resolveAccountDisplay(account: any) {
 
     console.log(account.key)
 
-    if (account.key === 'blockstar social' || account.key === 'blockstar page' || account.key === 'blockstar group') {
+    if (key === 'blockstar social' || key === 'blockstar page' || key === 'blockstar group') {
         const match = account.value.match(/(?:https?:\/\/(?:www\.)?blockstar\.social\/)?@?([A-Za-z0-9_]+)/i);
         if (match && match[1]) {
             return {
@@ -38,7 +39,7 @@ export function resolveAccountDisplay(account: any) {
             }
         }
     }
-    if (account.key === 'blockstar chat') {
+    if (key === 'blockstar chat') {
         const match = account.value.match(/(?:https?:\/\/(?:www\.)?blockstar\.chat\/)?@?([A-Za-z0-9_]+)/i);
         if (match && match[1]) {
             return {
@@ -51,6 +52,12 @@ export function resolveAccountDisplay(account: any) {
                 display: account.value,
                 icon: <Image src={blockstarChatImg} className="h-8 w-8" alt="blockstart" />
             }
+        }
+    }
+    if (key === 'blockstar tv') {
+        return {
+            display: account.value,
+            icon: <Image src={blockstarImg} className="h-8 w-8" alt="blockstar" />
         }
     }
 
@@ -96,12 +103,31 @@ const socialConfig: any = {
         icon: <Image src={blockstarImg} className="h-8 w-8" alt="blockstart" />,
         format: (username) => `@${username}`
     },
+    blockstar_social: {
+        regex: /(?:https?:\/\/(?:www\.)?blockstar\.social\/)?@?(.+)/i,
+        icon: <Image src={blockstarImg} className="h-8 w-8" alt="blockstar" />,
+        format: (val) => val
+    },
+    blockstar_tv: {
+        regex: /(?:https?:\/\/(?:www\.)?)?(.+)/i,
+        icon: <Image src={blockstarImg} className="h-8 w-8" alt="blockstar" />,
+        format: (val) => val
+    },
     instagram: {
         regex: /(?:https?:\/\/(?:www\.)?instagram\.com\/)?@?([A-Za-z0-9_.]+)/i,
-        icon: <></>,
+        icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20" width="20" fill="none" stroke="#E1306C" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/></svg>,
         format: (username) => `@${username}`
     },
-
+    url: {
+        regex: /(?:https?:\/\/)?(.+)/i,
+        icon: <Globe size={18} className="text-blue-400" />,
+        format: (val) => val
+    },
+    website: {
+        regex: /(?:https?:\/\/)?(.+)/i,
+        icon: <Globe size={18} className="text-blue-400" />,
+        format: (val) => val
+    },
 
     tiktok: {
         regex: /(?:https?:\/\/(?:www\.)?tiktok\.com\/@)?([A-Za-z0-9._]+)/i,
@@ -117,7 +143,7 @@ const socialConfig: any = {
 
     medium: {
         regex: /(?:https?:\/\/(?:www\.)?medium\.com\/@)?([A-Za-z0-9._-]+)/i,
-        icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0,0,256,256" width="64px" height="64px" fill-rule="nonzero"><g fill="#ffffff" fill-rule="nonzero" stroke="none" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="10" stroke-dasharray="" stroke-dashoffset="0" font-family="none" font-weight="none" font-size="none" text-anchor="none" style="mix-blend-mode: normal"><g transform="scale(4,4)"><path d="M18.99805,15c-9.37431,0.02204 -16.96202,7.62762 -16.96202,17.00195c0,9.37434 7.58771,16.97991 16.96202,17.00195c9.37431,-0.02204 16.96202,-7.62762 16.96202,-17.00195c0,-9.37434 -7.58771,-16.97991 -16.96202,-17.00195zM45.49805,16c-4.68747,0.02138 -8.48139,7.17943 -8.48139,16.00195c0,8.82252 3.79393,15.98057 8.48139,16.00195c4.68747,-0.02138 8.48139,-7.17943 8.48139,-16.00195c0,-8.82252 -3.79393,-15.98057 -8.48139,-16.00195zM58.5,17c-1.25251,-0.01344 -2.41123,2.84297 -3.03839,7.49012c-0.62716,4.64714 -0.62716,10.37654 0,15.02368c0.62716,4.64714 1.78588,7.50355 3.03839,7.49012c1.25251,0.01344 2.41123,-2.84297 3.03839,-7.49012c0.62716,-4.64714 0.62716,-10.37654 0,-15.02368c-0.62716,-4.64714 -1.78588,-7.50355 -3.03839,-7.49012z" /></g></g></svg>,
+        icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0,0,256,256" width="64px" height="64px" fill-rule="nonzero"><g fill="#ffffff" fill-rule="nonzero" stroke="none" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="10" stroke-dasharray="" stroke-dashoffset="0" font-family="none" font-weight="none" font-size="none" text-anchor="none" style={{mixBlendMode: "normal"}}><g transform="scale(4,4)"><path d="M18.99805,15c-9.37431,0.02204 -16.96202,7.62762 -16.96202,17.00195c0,9.37434 7.58771,16.97991 16.96202,17.00195c9.37431,-0.02204 16.96202,-7.62762 16.96202,-17.00195c0,-9.37434 -7.58771,-16.97991 -16.96202,-17.00195zM45.49805,16c-4.68747,0.02138 -8.48139,7.17943 -8.48139,16.00195c0,8.82252 3.79393,15.98057 8.48139,16.00195c4.68747,-0.02138 8.48139,-7.17943 8.48139,-16.00195c0,-8.82252 -3.79393,-15.98057 -8.48139,-16.00195zM58.5,17c-1.25251,-0.01344 -2.41123,2.84297 -3.03839,7.49012c-0.62716,4.64714 -0.62716,10.37654 0,15.02368c0.62716,4.64714 1.78588,7.50355 3.03839,7.49012c1.25251,0.01344 2.41123,-2.84297 3.03839,-7.49012c0.62716,-4.64714 0.62716,-10.37654 0,-15.02368c-0.62716,-4.64714 -1.78588,-7.50355 -3.03839,-7.49012z" /></g></g></svg>,
         format: (username) => `@${username}`
     },
     "blockstar chat": {

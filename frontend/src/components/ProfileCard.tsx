@@ -45,7 +45,8 @@ export default function ProfileCard({
       setError(null);
 
       // Extract just the domain name (remove @blockstar if present)
-      const domainName = username.includes('@') ? username.split('@')[0] : username;
+      // V3: Pass full username with TLD so backend can resolve with correct TLD
+      const domainName = username.startsWith('@') ? username.slice(1) : username;
 
       resolveProfile(domainName)
         .then((data) => {

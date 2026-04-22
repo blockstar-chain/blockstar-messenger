@@ -17,15 +17,17 @@ const RPC_URL = process.env.BLOCKCHAIN_RPC_URL || 'https://mainnet-rpc.blockstar
 // BlockStar Domains Contract Address
 const CONTRACT_ADDRESS = process.env.DOMAINS_CONTRACT_ADDRESS || '0x1E9248a78352150e8b2E7E728346EDd41A77FDeA';
 
-// BlockStar Domains Contract ABI (minimal ABI for the methods we need)
+// BlockStar Domains V3 Contract ABI (minimal ABI for the methods we need)
+const DEFAULT_TLD = process.env.DEFAULT_TLD || 'blockstar';
+
 const CONTRACT_ABI = [
-  // Get unified records for a domain
+  // Get all records for a domain (V3: name + tld)
   {
     "inputs": [
       { "internalType": "string", "name": "name", "type": "string" },
-      { "internalType": "string", "name": "subdomain", "type": "string" }
+      { "internalType": "string", "name": "tld", "type": "string" }
     ],
-    "name": "getUnifiedRecords",
+    "name": "getAllRecords",
     "outputs": [
       { "internalType": "string[]", "name": "keys", "type": "string[]" },
       { "internalType": "string[]", "name": "values", "type": "string[]" }
@@ -33,14 +35,31 @@ const CONTRACT_ABI = [
     "stateMutability": "view",
     "type": "function"
   },
-  // Get token ID from name
+  // Get domain info (owner, expiration, expired, tokenId) in one call
   {
     "inputs": [
-      { "internalType": "string", "name": "name", "type": "string" }
+      { "internalType": "string", "name": "name", "type": "string" },
+      { "internalType": "string", "name": "tld", "type": "string" }
     ],
-    "name": "getNameToTokenId",
+    "name": "getDomainInfo",
     "outputs": [
-      { "internalType": "uint256", "name": "", "type": "uint256" }
+      { "internalType": "address", "name": "domainOwner", "type": "address" },
+      { "internalType": "uint256", "name": "expiration", "type": "uint256" },
+      { "internalType": "bool", "name": "expired", "type": "bool" },
+      { "internalType": "uint256", "name": "tokenId", "type": "uint256" }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  // Get metadata (description, image) by tokenId
+  {
+    "inputs": [
+      { "internalType": "uint256", "name": "tokenId", "type": "uint256" }
+    ],
+    "name": "getMetadata",
+    "outputs": [
+      { "internalType": "string", "name": "description", "type": "string" },
+      { "internalType": "string", "name": "image", "type": "string" }
     ],
     "stateMutability": "view",
     "type": "function"
@@ -57,14 +76,15 @@ const CONTRACT_ABI = [
     "stateMutability": "view",
     "type": "function"
   },
-  // Get all subdomains
+  // Get primary name for an address
   {
     "inputs": [
-      { "internalType": "string", "name": "name", "type": "string" }
+      { "internalType": "address", "name": "addr", "type": "address" }
     ],
-    "name": "getAllSubdomains",
+    "name": "getPrimaryName",
     "outputs": [
-      { "internalType": "string[]", "name": "", "type": "string[]" }
+      { "internalType": "string", "name": "name", "type": "string" },
+      { "internalType": "string", "name": "tld", "type": "string" }
     ],
     "stateMutability": "view",
     "type": "function"
@@ -166,62 +186,73 @@ export async function resolveProfile(name: string): Promise<BlockStarProfile | n
       return null;
     }
     
-    // Parse domain name (handle subdomains like "sub.domain")
-    const splitName = name.trim().split('.');
-    let domainName = '';
-    let subDomain = '';
-    let isSubdomain = false;
+    // V3: Domain names are name + TLD (no subdomain concept)
+    // Parse input: "name" or "name@tld" or "name.tld"
+    let domainName = name.trim();
+    let tld = DEFAULT_TLD;
     
-    if (splitName.length === 1) {
-      domainName = splitName[0];
-    } else if (splitName.length > 1) {
-      domainName = splitName[1];
-      subDomain = splitName[0];
-      isSubdomain = true;
+    if (domainName.includes('@')) {
+      const parts = domainName.split('@');
+      domainName = parts[0];
+      tld = parts[1] || DEFAULT_TLD;
+    } else if (domainName.includes('.')) {
+      const parts = domainName.split('.');
+      domainName = parts[0];
+      tld = parts[1] || DEFAULT_TLD;
     }
     
-    // Fetch records from smart contract with timeout
+    // V3: Use getDomainInfo to get owner, tokenId, expiration in one call
+    let owner = '';
+    let tokenId: bigint | null = null;
+    try {
+      const domainInfoPromise = domainContract.getDomainInfo(domainName, tld);
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('RPC timeout')), RPC_TIMEOUT)
+      );
+      const domainInfo = await Promise.race([domainInfoPromise, timeoutPromise]) as any;
+      
+      owner = domainInfo.domainOwner || domainInfo[0] || '';
+      tokenId = domainInfo.tokenId || domainInfo[3] || null;
+      const expired = domainInfo.expired ?? domainInfo[2] ?? false;
+      
+      console.log(`🔍 Domain info for ${domainName}.${tld}: owner=${owner}, tokenId=${tokenId?.toString()}, expired=${expired}`);
+      
+      // If domain is expired or owner is zero address, treat as not found
+      if (expired || !owner || owner === '0x0000000000000000000000000000000000000000') {
+        console.log(`❌ Domain ${domainName}.${tld} is expired or not minted`);
+        return null;
+      }
+    } catch (err: any) {
+      console.error('Could not get domain info:', err?.message || err);
+      return null;
+    }
+    
+    // V3: Fetch records using getAllRecords(name, tld)
     let records;
     try {
-      const recordsPromise = domainContract.getUnifiedRecords(domainName, subDomain);
+      const recordsPromise = domainContract.getAllRecords(domainName, tld);
       const timeoutPromise = new Promise((_, reject) => 
         setTimeout(() => reject(new Error('RPC timeout')), RPC_TIMEOUT)
       );
       records = await Promise.race([recordsPromise, timeoutPromise]);
     } catch (rpcError: any) {
-      console.error('RPC call failed for getUnifiedRecords:', rpcError?.message || rpcError);
-      return null;
+      console.error('RPC call failed for getAllRecords:', rpcError?.message || rpcError);
+      // Continue with empty records rather than failing entirely
+      records = [[], []];
     }
     
-    // Get token ID and owner
-    let owner = '';
-    let tokenId: bigint | null = null;
-    try {
-      tokenId = await domainContract.getNameToTokenId(domainName);
-      console.log(`🔍 Token ID for ${domainName}:`, tokenId?.toString());
-      
-      if (tokenId && tokenId > 0n) {
-        owner = await domainContract.ownerOf(tokenId);
-        console.log(`🔍 Owner for ${domainName}:`, owner);
-      } else {
-        console.log(`❌ No token ID found for ${domainName} (domain not minted)`);
+    // V3: Fetch metadata (description, image) from contract if tokenId exists
+    let metaDescription = '';
+    let metaImage = '';
+    if (tokenId && tokenId > 0n) {
+      try {
+        const metadata = await domainContract.getMetadata(tokenId);
+        metaDescription = metadata.description || metadata[0] || '';
+        metaImage = metadata.image || metadata[1] || '';
+        console.log(`🔍 Metadata for tokenId ${tokenId}: desc=${metaDescription ? 'yes' : 'no'}, image=${metaImage ? 'yes' : 'no'}`);
+      } catch (err) {
+        console.log('Could not get metadata:', err);
       }
-    } catch (err: any) {
-      console.log('Could not get owner:', err?.message || err);
-    }
-    
-    // If no owner found, the domain doesn't exist or isn't minted
-    if (!owner) {
-      console.log(`❌ Domain ${name} has no owner - not minted or doesn't exist`);
-      return null;
-    }
-    
-    // Get subdomains
-    let subdomains: string[] = [];
-    try {
-      subdomains = await domainContract.getAllSubdomains(domainName);
-    } catch (err) {
-      console.log('Could not get subdomains:', err);
     }
     
     // Parse records into profile - with fallback if record parsing fails
@@ -229,28 +260,27 @@ export async function resolveProfile(name: string): Promise<BlockStarProfile | n
     try {
       profile = parseRecords(
         records,
-        name,
-        owner,
-        subdomains,
-        isSubdomain,
         domainName,
-        subDomain
+        tld,
+        owner,
+        metaDescription,
+        metaImage
       );
     } catch (parseError) {
       console.log(`⚠️ Record parsing failed for ${name}, creating minimal profile:`, parseError);
       // Create minimal profile with just wallet address
       profile = {
-        username: name,
-        fullUsername: `${name}@blockstar`,
+        username: domainName,
+        fullUsername: `${domainName}@${tld}`,
         walletAddress: owner,
         avatar: '',
         banner: '',
         bio: '',
         records: {},
         subdomains: [],
-        isSubdomain,
+        isSubdomain: false,
         mainDomain: domainName,
-        subDomain,
+        subDomain: '',
         resolvedAt: Date.now(),
       };
     }
@@ -318,22 +348,21 @@ function safeArrayFrom(result: any): string[] {
 }
 
 /**
- * Parse contract records into BlockStarProfile
+ * Parse contract records into BlockStarProfile (V3)
  */
 function parseRecords(
   records: [string[], string[]],
-  name: string,
+  domainName: string,
+  tld: string,
   owner: string,
-  subdomains: string[] | any,
-  isSubdomain: boolean,
-  mainDomain: string,
-  subDomain: string
+  metaDescription: string,
+  metaImage: string
 ): BlockStarProfile {
   // Safely convert ethers Result objects to plain arrays
   const keys: string[] = safeArrayFrom(records?.[0]);
   const values: string[] = safeArrayFrom(records?.[1]);
   
-  console.log(`🔍 Parsed ${keys.length} keys and ${values.length} values for ${name}`);
+  console.log(`🔍 Parsed ${keys.length} keys and ${values.length} values for ${domainName}.${tld}`);
   
   let avatar = '';
   let banner = '';
@@ -367,18 +396,26 @@ function parseRecords(
     }
   });
   
+  // V3: Use metadata image/description as fallback if records don't have them
+  if (!avatar && metaImage) {
+    avatar = metaImage;
+  }
+  if (!bio && metaDescription) {
+    bio = metaDescription;
+  }
+  
   return {
-    username: name,
-    fullUsername: `${name}@blockstar`,
+    username: domainName,
+    fullUsername: `${domainName}@${tld}`,
     walletAddress: owner,
     avatar: ipfsToUrl(avatar) || avatar, // Convert IPFS hash to URL, fallback to original
     banner: ipfsToUrl(banner) || banner, // Convert IPFS hash to URL, fallback to original
     bio,
     records: customRecords,
-    subdomains: safeArrayFrom(subdomains),
-    isSubdomain,
-    mainDomain,
-    subDomain,
+    subdomains: [],       // V3: No subdomain support
+    isSubdomain: false,   // V3: No subdomain support
+    mainDomain: domainName,
+    subDomain: '',
     resolvedAt: Date.now(),
   };
 }

@@ -1,8 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
-import WalletProvider from '../utils/wagmiProvider';
+import { Web3Provider } from '../utils/wagmiProvider';
 import { cookieToInitialState } from 'wagmi';
-import { config } from '@/utils/wagmi';
 import { Toaster } from 'react-hot-toast';
 
 // Using system font stack instead of Google Fonts
@@ -95,7 +94,7 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const initialState = cookieToInitialState(config, undefined);
+  
   return (
     <html lang="en" className="dark">
       <head>
@@ -116,7 +115,7 @@ export default function RootLayout({
         <meta name="format-detection" content="telephone=no" />
       </head>
       <body className={`${fontClass} bg-midnight text-white antialiased`}>
-        <WalletProvider initialState={initialState}>
+        <Web3Provider>
           <Toaster
             position="top-center"
             containerClassName="!top-safe"
@@ -139,7 +138,7 @@ export default function RootLayout({
             }}
           />
           {children}
-        </WalletProvider>
+        </Web3Provider>
       </body>
     </html>
   );

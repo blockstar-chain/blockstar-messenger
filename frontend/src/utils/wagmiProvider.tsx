@@ -1,18 +1,11 @@
-'use client'
+"use client" 
+import { WagmiProvider, createConfig } from "wagmi";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ConnectKitProvider, getDefaultConfig } from "connectkit";
+import { networks, projectId } from "./wagmi";
+import { mainnet } from "viem/chains";
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { createAppKit } from '@reown/appkit/react'
 
-import React, { type ReactNode } from 'react'
-import { WagmiProvider, Config } from 'wagmi'
-import { projectId, wagmiAdapter, blockstarNetwork } from './wagmi'
-
-// Set up queryClient
-const queryClient = new QueryClient()
-
-if (!projectId) {
-  throw new Error('Project ID is not defined')
-}
 
 const metadata = {
   name: process.env.NEXT_PUBLIC_PROJECT_NAME || "",
@@ -21,29 +14,34 @@ const metadata = {
   icons: ['https://avatars.githubusercontent.com/u/179229932']
 }
 
-// Create the modal
-const modal = createAppKit({
-  adapters: [wagmiAdapter],
-  projectId,
-  networks: [blockstarNetwork],
-  metadata: metadata,
-  features: {
-    analytics: true, // Optional - defaults to your Cloud configuration
-    socials: [],
-    email: false,
-    onramp: false,
-    swaps: false,
-    send: false
-  },
-})
 
-function WalletProvider({ children, initialState }: { children: ReactNode; initialState: any }) {
 
+const config = createConfig(
+  getDefaultConfig({
+    // Your dApps chains
+    chains : networks || [mainnet],
+    walletConnectProjectId: projectId || "",
+
+    // Required App Info
+    appName: metadata.name,
+    enableAaveAccount : false,
+    
+
+    // Optional App Info
+    appDescription: metadata.description,
+    appUrl: metadata.url, // your app's url
+    appIcon: [metadata.icons || "https://family.co/logo.png"] // your app's icon, no bigger than 1024x1024px (max. 1MB)
+  }),
+);
+
+const queryClient = new QueryClient();
+
+export const Web3Provider = ({ children }) => {
   return (
-    <WagmiProvider config={wagmiAdapter.wagmiConfig as Config} initialState={initialState}>
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <WagmiProvider config={config}>
+      <QueryClientProvider client={queryClient}>
+        <ConnectKitProvider theme="midnight">{children}</ConnectKitProvider>
+      </QueryClientProvider>
     </WagmiProvider>
-  )
-}
-
-export default WalletProvider
+  );
+};

@@ -15,8 +15,7 @@ import ConnectButton from './ConnectButton';
 import { saveUserSession } from '@/lib/persistentAuth';
 
 // Reown/wagmi hooks (for mobile/web)
-import { useAppKitAccount } from '@reown/appkit/react';
-import { useSignMessage } from 'wagmi';
+import { useConnection, useSignMessage } from 'wagmi';
 
 // Desktop wallet hook
 import { useDesktopWallet, isDesktopApp } from '@/hooks/useDesktopWallet';
@@ -28,7 +27,7 @@ export default function AuthPage() {
   const desktopWallet = useDesktopWallet();
 
   // Reown/wagmi (for mobile/web)
-  const { address: appKitAddress } = useAppKitAccount();
+  const { address: appKitAddress } = useConnection();
   const { signMessageAsync: wagmiSignMessage } = useSignMessage();
 
   // Detect platform

@@ -2,8 +2,7 @@
 // Hook to ensure encryption is initialized when wallet is connected
 
 import { useEffect, useState, useCallback } from 'react';
-import { useSignMessage } from 'wagmi';
-import { useAppKitAccount } from '@reown/appkit/react';
+import { useConnection, useSignMessage } from 'wagmi';
 import { encryptionService } from '@/lib/encryption';
 import { useAppStore } from '@/store';
 import toast from 'react-hot-toast';
@@ -24,7 +23,7 @@ interface EncryptionInitState {
  * Without this, messages cannot be decrypted after app reload.
  */
 export function useEncryptionInit() {
-  const { address, isConnected } = useAppKitAccount();
+  const { address, isConnected } = useConnection();
   const { signMessageAsync } = useSignMessage();
   const { currentUser, setCurrentUser } = useAppStore();
   

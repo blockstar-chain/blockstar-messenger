@@ -1,8 +1,145 @@
 [
     {
         "inputs": [],
-        "stateMutability": "nonpayable",
-        "type": "constructor"
+        "name": "DomainExpired",
+        "type": "error"
+    },
+    {
+        "inputs": [],
+        "name": "DomainNotFound",
+        "type": "error"
+    },
+    {
+        "inputs": [],
+        "name": "ERC20TransferFailed",
+        "type": "error"
+    },
+    {
+        "inputs": [],
+        "name": "FreeClaimAlreadyUsed",
+        "type": "error"
+    },
+    {
+        "inputs": [],
+        "name": "InsufficientBalance",
+        "type": "error"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "required",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint256",
+                "name": "provided",
+                "type": "uint256"
+            }
+        ],
+        "name": "InsufficientPayment",
+        "type": "error"
+    },
+    {
+        "inputs": [],
+        "name": "InvalidNameLength",
+        "type": "error"
+    },
+    {
+        "inputs": [],
+        "name": "LengthMismatch",
+        "type": "error"
+    },
+    {
+        "inputs": [],
+        "name": "NameNotAvailable",
+        "type": "error"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "string",
+                "name": "name",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "tld",
+                "type": "string"
+            }
+        ],
+        "name": "NameOnAuction",
+        "type": "error"
+    },
+    {
+        "inputs": [],
+        "name": "NotAuthorized",
+        "type": "error"
+    },
+    {
+        "inputs": [],
+        "name": "NotOwner",
+        "type": "error"
+    },
+    {
+        "inputs": [],
+        "name": "NotOwnerOrDAO",
+        "type": "error"
+    },
+    {
+        "inputs": [],
+        "name": "TLDAlreadyExists",
+        "type": "error"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "string",
+                "name": "tld",
+                "type": "string"
+            }
+        ],
+        "name": "TLDNotActive",
+        "type": "error"
+    },
+    {
+        "inputs": [],
+        "name": "TokenDoesNotExist",
+        "type": "error"
+    },
+    {
+        "inputs": [],
+        "name": "TransferFailed",
+        "type": "error"
+    },
+    {
+        "inputs": [],
+        "name": "TreasuryTransferFailed",
+        "type": "error"
+    },
+    {
+        "inputs": [],
+        "name": "ZeroAddress",
+        "type": "error"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": false,
+                "internalType": "address",
+                "name": "previousAdmin",
+                "type": "address"
+            },
+            {
+                "indexed": false,
+                "internalType": "address",
+                "name": "newAdmin",
+                "type": "address"
+            }
+        ],
+        "name": "AdminChanged",
+        "type": "event"
     },
     {
         "anonymous": false,
@@ -58,19 +195,39 @@
         "anonymous": false,
         "inputs": [
             {
-                "indexed": false,
-                "internalType": "uint256",
-                "name": "_fromTokenId",
-                "type": "uint256"
-            },
-            {
-                "indexed": false,
-                "internalType": "uint256",
-                "name": "_toTokenId",
-                "type": "uint256"
+                "indexed": true,
+                "internalType": "address",
+                "name": "auctionContract",
+                "type": "address"
             }
         ],
-        "name": "BatchMetadataUpdate",
+        "name": "AuctionContractSet",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "beacon",
+                "type": "address"
+            }
+        ],
+        "name": "BeaconUpgraded",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "dao",
+                "type": "address"
+            }
+        ],
+        "name": "DAOSet",
         "type": "event"
     },
     {
@@ -89,6 +246,12 @@
                 "type": "string"
             },
             {
+                "indexed": false,
+                "internalType": "string",
+                "name": "tld",
+                "type": "string"
+            },
+            {
                 "indexed": true,
                 "internalType": "address",
                 "name": "owner",
@@ -97,8 +260,14 @@
             {
                 "indexed": false,
                 "internalType": "uint256",
-                "name": "expires",
+                "name": "expiration",
                 "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "bool",
+                "name": "gasless",
+                "type": "bool"
             }
         ],
         "name": "DomainRegistered",
@@ -115,14 +284,8 @@
             },
             {
                 "indexed": false,
-                "internalType": "string",
-                "name": "name",
-                "type": "string"
-            },
-            {
-                "indexed": false,
                 "internalType": "uint256",
-                "name": "expires",
+                "name": "newExpiration",
                 "type": "uint256"
             }
         ],
@@ -134,12 +297,37 @@
         "inputs": [
             {
                 "indexed": false,
-                "internalType": "uint256",
-                "name": "_tokenId",
-                "type": "uint256"
+                "internalType": "uint8",
+                "name": "version",
+                "type": "uint8"
             }
         ],
-        "name": "MetadataUpdate",
+        "name": "Initialized",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "uint256",
+                "name": "tokenId",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "string",
+                "name": "description",
+                "type": "string"
+            },
+            {
+                "indexed": false,
+                "internalType": "string",
+                "name": "image",
+                "type": "string"
+            }
+        ],
+        "name": "MetadataSet",
         "type": "event"
     },
     {
@@ -175,24 +363,11 @@
                 "internalType": "string",
                 "name": "name",
                 "type": "string"
-            }
-        ],
-        "name": "PrimaryNameCleared",
-        "type": "event"
-    },
-    {
-        "anonymous": false,
-        "inputs": [
-            {
-                "indexed": true,
-                "internalType": "address",
-                "name": "owner",
-                "type": "address"
             },
             {
                 "indexed": false,
                 "internalType": "string",
-                "name": "name",
+                "name": "tld",
                 "type": "string"
             }
         ],
@@ -207,12 +382,6 @@
                 "internalType": "uint256",
                 "name": "tokenId",
                 "type": "uint256"
-            },
-            {
-                "indexed": false,
-                "internalType": "string",
-                "name": "name",
-                "type": "string"
             },
             {
                 "indexed": false,
@@ -235,105 +404,63 @@
         "inputs": [
             {
                 "indexed": true,
-                "internalType": "uint256",
-                "name": "parentTokenId",
-                "type": "uint256"
+                "internalType": "address",
+                "name": "registrar",
+                "type": "address"
             },
             {
                 "indexed": false,
-                "internalType": "string",
-                "name": "subdomain",
-                "type": "string"
-            },
-            {
-                "indexed": false,
-                "internalType": "string",
-                "name": "fullName",
-                "type": "string"
+                "internalType": "bool",
+                "name": "authorized",
+                "type": "bool"
             }
         ],
-        "name": "SubdomainCreated",
+        "name": "RegistrarSet",
         "type": "event"
     },
     {
         "anonymous": false,
         "inputs": [
-            {
-                "indexed": true,
-                "internalType": "uint256",
-                "name": "parentTokenId",
-                "type": "uint256"
-            },
-            {
-                "indexed": false,
-                "internalType": "string",
-                "name": "subdomain",
-                "type": "string"
-            },
             {
                 "indexed": true,
                 "internalType": "address",
-                "name": "delegate",
+                "name": "relayer",
                 "type": "address"
+            },
+            {
+                "indexed": false,
+                "internalType": "bool",
+                "name": "authorized",
+                "type": "bool"
             }
         ],
-        "name": "SubdomainDelegated",
+        "name": "RelayerSet",
         "type": "event"
     },
     {
         "anonymous": false,
         "inputs": [
             {
-                "indexed": true,
-                "internalType": "uint256",
-                "name": "parentTokenId",
-                "type": "uint256"
-            },
-            {
                 "indexed": false,
                 "internalType": "string",
-                "name": "subdomain",
-                "type": "string"
-            },
-            {
-                "indexed": false,
-                "internalType": "string",
-                "name": "key",
-                "type": "string"
-            },
-            {
-                "indexed": false,
-                "internalType": "string",
-                "name": "value",
+                "name": "tld",
                 "type": "string"
             }
         ],
-        "name": "SubdomainRecordSet",
+        "name": "TLDAdded",
         "type": "event"
     },
     {
         "anonymous": false,
         "inputs": [
             {
-                "indexed": true,
-                "internalType": "uint256",
-                "name": "parentTokenId",
-                "type": "uint256"
-            },
-            {
                 "indexed": false,
                 "internalType": "string",
-                "name": "subdomain",
-                "type": "string"
-            },
-            {
-                "indexed": false,
-                "internalType": "string",
-                "name": "fullName",
+                "name": "tld",
                 "type": "string"
             }
         ],
-        "name": "SubdomainRemoved",
+        "name": "TLDUpdated",
         "type": "event"
     },
     {
@@ -362,13 +489,71 @@
         "type": "event"
     },
     {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "treasury",
+                "type": "address"
+            }
+        ],
+        "name": "TreasurySet",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "implementation",
+                "type": "address"
+            }
+        ],
+        "name": "Upgraded",
+        "type": "event"
+    },
+    {
         "inputs": [],
-        "name": "RENEWAL_DURATION",
+        "name": "MAX_NAME_LENGTH",
         "outputs": [
+            {
+                "internalType": "uint8",
+                "name": "",
+                "type": "uint8"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "MIN_NAME_LENGTH",
+        "outputs": [
+            {
+                "internalType": "uint8",
+                "name": "",
+                "type": "uint8"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
             {
                 "internalType": "uint256",
                 "name": "",
                 "type": "uint256"
+            }
+        ],
+        "name": "activeTLDList",
+        "outputs": [
+            {
+                "internalType": "string",
+                "name": "",
+                "type": "string"
             }
         ],
         "stateMutability": "view",
@@ -378,48 +563,43 @@
         "inputs": [
             {
                 "internalType": "string",
-                "name": "subdomain",
+                "name": "tld",
                 "type": "string"
             },
             {
                 "internalType": "string",
-                "name": "parentName",
-                "type": "string"
-            }
-        ],
-        "name": "_getFullSubdomainName",
-        "outputs": [
-            {
-                "internalType": "string",
-                "name": "",
-                "type": "string"
-            }
-        ],
-        "stateMutability": "pure",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "string",
-                "name": "subdomain",
+                "name": "prefix",
                 "type": "string"
             },
             {
                 "internalType": "uint256",
-                "name": "parentTokenId",
+                "name": "duration",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint256",
+                "name": "renewFee",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint256",
+                "name": "price6plus",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint256",
+                "name": "price4to5",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint256",
+                "name": "price1to3",
                 "type": "uint256"
             }
         ],
-        "name": "_getSubdomainHash",
-        "outputs": [
-            {
-                "internalType": "bytes32",
-                "name": "",
-                "type": "bytes32"
-            }
-        ],
-        "stateMutability": "pure",
+        "name": "addorupdateTLD",
+        "outputs": [],
+        "stateMutability": "nonpayable",
         "type": "function"
     },
     {
@@ -438,6 +618,57 @@
         "name": "approve",
         "outputs": [],
         "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "auctionContract",
+        "outputs": [
+            {
+                "internalType": "address",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "name": "authorizedRegistrars",
+        "outputs": [
+            {
+                "internalType": "bool",
+                "name": "",
+                "type": "bool"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "name": "authorizedRelayers",
+        "outputs": [
+            {
+                "internalType": "bool",
+                "name": "",
+                "type": "bool"
+            }
+        ],
+        "stateMutability": "view",
         "type": "function"
     },
     {
@@ -460,6 +691,19 @@
         "type": "function"
     },
     {
+        "inputs": [],
+        "name": "dao",
+        "outputs": [
+            {
+                "internalType": "address",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
         "inputs": [
             {
                 "internalType": "uint256",
@@ -467,12 +711,40 @@
                 "type": "uint256"
             }
         ],
-        "name": "expirations",
+        "name": "domainRecords",
         "outputs": [
             {
+                "internalType": "string",
+                "name": "name",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "tld",
+                "type": "string"
+            },
+            {
                 "internalType": "uint256",
-                "name": "",
+                "name": "expiration",
                 "type": "uint256"
+            },
+            {
+                "internalType": "bool",
+                "name": "migratedFromV1",
+                "type": "bool"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "getActiveTLDs",
+        "outputs": [
+            {
+                "internalType": "string[]",
+                "name": "",
+                "type": "string[]"
             }
         ],
         "stateMutability": "view",
@@ -483,6 +755,11 @@
             {
                 "internalType": "string",
                 "name": "name",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "tld",
                 "type": "string"
             }
         ],
@@ -497,76 +774,6 @@
                 "internalType": "string[]",
                 "name": "values",
                 "type": "string[]"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "string",
-                "name": "parentName",
-                "type": "string"
-            },
-            {
-                "internalType": "string",
-                "name": "subdomain",
-                "type": "string"
-            }
-        ],
-        "name": "getAllSubdomainRecords",
-        "outputs": [
-            {
-                "internalType": "string[]",
-                "name": "keys",
-                "type": "string[]"
-            },
-            {
-                "internalType": "string[]",
-                "name": "values",
-                "type": "string[]"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "string",
-                "name": "parentName",
-                "type": "string"
-            }
-        ],
-        "name": "getAllSubdomains",
-        "outputs": [
-            {
-                "components": [
-                    {
-                        "internalType": "string",
-                        "name": "name",
-                        "type": "string"
-                    },
-                    {
-                        "internalType": "string",
-                        "name": "fullName",
-                        "type": "string"
-                    },
-                    {
-                        "internalType": "string[]",
-                        "name": "keys",
-                        "type": "string[]"
-                    },
-                    {
-                        "internalType": "string[]",
-                        "name": "values",
-                        "type": "string[]"
-                    }
-                ],
-                "internalType": "struct BlockstarDomains.SubdomainInfo[]",
-                "name": "",
-                "type": "tuple[]"
             }
         ],
         "stateMutability": "view",
@@ -597,6 +804,50 @@
                 "internalType": "string",
                 "name": "name",
                 "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "tld",
+                "type": "string"
+            }
+        ],
+        "name": "getDomainInfo",
+        "outputs": [
+            {
+                "internalType": "address",
+                "name": "domainOwner",
+                "type": "address"
+            },
+            {
+                "internalType": "uint256",
+                "name": "expiration",
+                "type": "uint256"
+            },
+            {
+                "internalType": "bool",
+                "name": "expired",
+                "type": "bool"
+            },
+            {
+                "internalType": "uint256",
+                "name": "tokenId",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "string",
+                "name": "name",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "tld",
+                "type": "string"
             }
         ],
         "name": "getExpiration",
@@ -618,12 +869,41 @@
                 "type": "uint256"
             }
         ],
-        "name": "getName",
+        "name": "getMetadata",
         "outputs": [
             {
                 "internalType": "string",
-                "name": "",
+                "name": "description",
                 "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "image",
+                "type": "string"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "domainOwner",
+                "type": "address"
+            }
+        ],
+        "name": "getOwnedNames",
+        "outputs": [
+            {
+                "internalType": "string[]",
+                "name": "names",
+                "type": "string[]"
+            },
+            {
+                "internalType": "string[]",
+                "name": "tlds",
+                "type": "string[]"
             }
         ],
         "stateMutability": "view",
@@ -635,14 +915,24 @@
                 "internalType": "string",
                 "name": "name",
                 "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "tld",
+                "type": "string"
             }
         ],
-        "name": "getNameToTokenId",
+        "name": "getPrice",
         "outputs": [
             {
                 "internalType": "uint256",
-                "name": "",
+                "name": "price",
                 "type": "uint256"
+            },
+            {
+                "internalType": "bool",
+                "name": "requiresAuction",
+                "type": "bool"
             }
         ],
         "stateMutability": "view",
@@ -660,42 +950,28 @@
         "outputs": [
             {
                 "internalType": "string",
-                "name": "",
-                "type": "string"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "string",
-                "name": "parentName",
-                "type": "string"
-            }
-        ],
-        "name": "getSubdomainCount",
-        "outputs": [
-            {
-                "internalType": "uint256",
-                "name": "",
-                "type": "uint256"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "string",
-                "name": "parentName",
+                "name": "name",
                 "type": "string"
             },
             {
                 "internalType": "string",
-                "name": "subdomain",
+                "name": "tld",
+                "type": "string"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "string",
+                "name": "name",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "tld",
                 "type": "string"
             },
             {
@@ -704,7 +980,7 @@
                 "type": "string"
             }
         ],
-        "name": "getSubdomainRecord",
+        "name": "getRecord",
         "outputs": [
             {
                 "internalType": "string",
@@ -719,29 +995,97 @@
         "inputs": [
             {
                 "internalType": "string",
-                "name": "domainName",
+                "name": "tld",
                 "type": "string"
+            }
+        ],
+        "name": "getTLDConfig",
+        "outputs": [
+            {
+                "internalType": "bool",
+                "name": "active",
+                "type": "bool"
+            },
+            {
+                "internalType": "uint256",
+                "name": "registrationDuration",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint256",
+                "name": "renewalFee",
+                "type": "uint256"
             },
             {
                 "internalType": "string",
-                "name": "subdomain",
+                "name": "displayPrefix",
                 "type": "string"
             }
         ],
-        "name": "getUnifiedRecords",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "string",
+                "name": "tld",
+                "type": "string"
+            }
+        ],
+        "name": "getTLDPriceTiers",
         "outputs": [
             {
-                "internalType": "string[]",
-                "name": "keys",
-                "type": "string[]"
-            },
-            {
-                "internalType": "string[]",
-                "name": "values",
-                "type": "string[]"
+                "components": [
+                    {
+                        "internalType": "uint8",
+                        "name": "maxLength",
+                        "type": "uint8"
+                    },
+                    {
+                        "internalType": "uint256",
+                        "name": "price",
+                        "type": "uint256"
+                    }
+                ],
+                "internalType": "struct BlockstarRegistryV3.PriceTier[]",
+                "name": "",
+                "type": "tuple[]"
             }
         ],
         "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "name": "hasUsedFreeClaim",
+        "outputs": [
+            {
+                "internalType": "bool",
+                "name": "",
+                "type": "bool"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address payable",
+                "name": "_treasury",
+                "type": "address"
+            }
+        ],
+        "name": "initialize",
+        "outputs": [],
+        "stateMutability": "nonpayable",
         "type": "function"
     },
     {
@@ -773,6 +1117,11 @@
             {
                 "internalType": "string",
                 "name": "name",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "tld",
                 "type": "string"
             }
         ],
@@ -806,9 +1155,27 @@
                 "internalType": "string",
                 "name": "",
                 "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "",
+                "type": "string"
             }
         ],
         "name": "nameToTokenId",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "nextTokenId",
         "outputs": [
             {
                 "internalType": "uint256",
@@ -859,7 +1226,7 @@
                 "type": "address"
             }
         ],
-        "name": "primaryNames",
+        "name": "primaryName",
         "outputs": [
             {
                 "internalType": "string",
@@ -873,8 +1240,45 @@
     {
         "inputs": [
             {
+                "internalType": "address",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "name": "primaryTLD",
+        "outputs": [
+            {
+                "internalType": "string",
+                "name": "",
+                "type": "string"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "proxiableUUID",
+        "outputs": [
+            {
+                "internalType": "bytes32",
+                "name": "",
+                "type": "bytes32"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
                 "internalType": "string",
                 "name": "name",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "tld",
                 "type": "string"
             }
         ],
@@ -884,32 +1288,47 @@
         "type": "function"
     },
     {
-        "inputs": [],
-        "name": "registrationFee",
-        "outputs": [
+        "inputs": [
             {
-                "internalType": "uint256",
-                "name": "",
-                "type": "uint256"
+                "internalType": "address",
+                "name": "domainOwner",
+                "type": "address"
+            },
+            {
+                "internalType": "string",
+                "name": "name",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "tld",
+                "type": "string"
             }
         ],
-        "stateMutability": "view",
+        "name": "registrarMint",
+        "outputs": [],
+        "stateMutability": "nonpayable",
         "type": "function"
     },
     {
         "inputs": [
             {
+                "internalType": "address",
+                "name": "domainOwner",
+                "type": "address"
+            },
+            {
                 "internalType": "string",
-                "name": "parentName",
+                "name": "name",
                 "type": "string"
             },
             {
                 "internalType": "string",
-                "name": "subdomain",
+                "name": "tld",
                 "type": "string"
             }
         ],
-        "name": "removeSubdomain",
+        "name": "relayerRegister",
         "outputs": [],
         "stateMutability": "nonpayable",
         "type": "function"
@@ -919,6 +1338,11 @@
             {
                 "internalType": "string",
                 "name": "name",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "tld",
                 "type": "string"
             }
         ],
@@ -929,46 +1353,9 @@
     },
     {
         "inputs": [],
-        "name": "renewalFee",
-        "outputs": [
-            {
-                "internalType": "uint256",
-                "name": "",
-                "type": "uint256"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [],
         "name": "renounceOwnership",
         "outputs": [],
         "stateMutability": "nonpayable",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "string",
-                "name": "name",
-                "type": "string"
-            },
-            {
-                "internalType": "string",
-                "name": "key",
-                "type": "string"
-            }
-        ],
-        "name": "resolve",
-        "outputs": [
-            {
-                "internalType": "string",
-                "name": "",
-                "type": "string"
-            }
-        ],
-        "stateMutability": "view",
         "type": "function"
     },
     {
@@ -1043,8 +1430,67 @@
     {
         "inputs": [
             {
+                "internalType": "address",
+                "name": "_auction",
+                "type": "address"
+            }
+        ],
+        "name": "setAuctionContract",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "d",
+                "type": "address"
+            }
+        ],
+        "name": "setDAO",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
                 "internalType": "string",
                 "name": "name",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "tld",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "description",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "image",
+                "type": "string"
+            }
+        ],
+        "name": "setMetadata",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "string",
+                "name": "name",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "tld",
                 "type": "string"
             }
         ],
@@ -1058,6 +1504,11 @@
             {
                 "internalType": "string",
                 "name": "name",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "tld",
                 "type": "string"
             },
             {
@@ -1079,121 +1530,68 @@
     {
         "inputs": [
             {
-                "internalType": "uint256",
-                "name": "_newFee",
-                "type": "uint256"
-            }
-        ],
-        "name": "setRegistrationFee",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "uint256",
-                "name": "_newFee",
-                "type": "uint256"
-            }
-        ],
-        "name": "setRenewalFee",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "string",
-                "name": "parentName",
-                "type": "string"
-            },
-            {
-                "internalType": "string",
-                "name": "subdomain",
-                "type": "string"
-            },
-            {
                 "internalType": "address",
-                "name": "newDelegate",
+                "name": "registrar",
                 "type": "address"
-            }
-        ],
-        "name": "setSubdomainDelegate",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "string",
-                "name": "parentName",
-                "type": "string"
             },
-            {
-                "internalType": "string",
-                "name": "subdomain",
-                "type": "string"
-            },
-            {
-                "internalType": "string",
-                "name": "key",
-                "type": "string"
-            },
-            {
-                "internalType": "string",
-                "name": "value",
-                "type": "string"
-            }
-        ],
-        "name": "setSubdomainRecord",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "bytes32",
-                "name": "",
-                "type": "bytes32"
-            }
-        ],
-        "name": "subdomainDelegates",
-        "outputs": [
-            {
-                "internalType": "address",
-                "name": "",
-                "type": "address"
-            }
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "string",
-                "name": "parentName",
-                "type": "string"
-            },
-            {
-                "internalType": "string",
-                "name": "subdomain",
-                "type": "string"
-            }
-        ],
-        "name": "subdomainExists",
-        "outputs": [
             {
                 "internalType": "bool",
-                "name": "",
+                "name": "authorized",
                 "type": "bool"
             }
         ],
-        "stateMutability": "view",
+        "name": "setRegistrar",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "relayer",
+                "type": "address"
+            },
+            {
+                "internalType": "bool",
+                "name": "authorized",
+                "type": "bool"
+            }
+        ],
+        "name": "setRelayer",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "string",
+                "name": "tld",
+                "type": "string"
+            },
+            {
+                "internalType": "bool",
+                "name": "active",
+                "type": "bool"
+            }
+        ],
+        "name": "setTLDActive",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address payable",
+                "name": "t",
+                "type": "address"
+            }
+        ],
+        "name": "setTreasury",
+        "outputs": [],
+        "stateMutability": "nonpayable",
         "type": "function"
     },
     {
@@ -1248,6 +1646,19 @@
         "type": "function"
     },
     {
+        "inputs": [],
+        "name": "totalSupply",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
         "inputs": [
             {
                 "internalType": "address",
@@ -1285,9 +1696,91 @@
     },
     {
         "inputs": [],
-        "name": "withdraw",
+        "name": "treasury",
+        "outputs": [
+            {
+                "internalType": "address payable",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "newImplementation",
+                "type": "address"
+            }
+        ],
+        "name": "upgradeTo",
         "outputs": [],
         "stateMutability": "nonpayable",
         "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "newImplementation",
+                "type": "address"
+            },
+            {
+                "internalType": "bytes",
+                "name": "data",
+                "type": "bytes"
+            }
+        ],
+        "name": "upgradeToAndCall",
+        "outputs": [],
+        "stateMutability": "payable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address payable",
+                "name": "to",
+                "type": "address"
+            },
+            {
+                "internalType": "uint256",
+                "name": "amount",
+                "type": "uint256"
+            }
+        ],
+        "name": "withdrawBST",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "token",
+                "type": "address"
+            },
+            {
+                "internalType": "address",
+                "name": "to",
+                "type": "address"
+            },
+            {
+                "internalType": "uint256",
+                "name": "amount",
+                "type": "uint256"
+            }
+        ],
+        "name": "withdrawERC20",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "stateMutability": "payable",
+        "type": "receive"
     }
 ]
