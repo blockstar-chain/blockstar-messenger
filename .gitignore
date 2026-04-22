@@ -22,6 +22,7 @@ frontend/build
 frontend/dist
 backend/build
 backend/dist
+backend/.env
 
 # Misc
 .DS_Store
