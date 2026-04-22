@@ -328,11 +328,11 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: |
-          if (Test-Path "package-lock.json") {
+          if [ -f "package-lock.json" ]; then
             npm ci --legacy-peer-deps
-          } else {
+          else
             npm install --legacy-peer-deps
-          }
+          fi
       - name: Install Electron dependencies
         working-directory: frontend
         run: npm install --save-dev electron electron-builder
