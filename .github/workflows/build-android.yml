@@ -34,7 +34,7 @@ jobs:
           npx cap sync android
       # 5) Setup Java + Android SDK
       - name: Set up Java 17
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
@@ -80,7 +80,7 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v5
         with:
           name: BlockStar-release-apk
           path: frontend/android/app/build/outputs/apk/release/app-release.apk
