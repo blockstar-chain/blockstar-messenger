@@ -506,7 +506,7 @@ jobs:
   # CREATE RELEASE (on tag push)
   # ═══════════════════════════════════════════════════════════════
   create-release:
-    needs: [build-windows, build-macos]
+    needs: [build-macos]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     
