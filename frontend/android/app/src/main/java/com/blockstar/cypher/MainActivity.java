@@ -13,6 +13,8 @@ import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.JSObject;
+import world.blockstar.cypher.wifidirect.WifiDirectPlugin;
+import world.blockstar.cypher.nsd.LocalMeshPlugin;
 
 public class MainActivity extends BridgeActivity {
     private static final String TAG = "MainActivity";
@@ -25,7 +27,11 @@ public class MainActivity extends BridgeActivity {
     private ActivityResultLauncher<String> notificationPermissionLauncher;
 
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
+     protected void onCreate(Bundle savedInstanceState) {
+        // Register local Capacitor plugins BEFORE the bridge starts.
+        registerPlugin(WifiDirectPlugin.class);
+        registerPlugin(LocalMeshPlugin.class);
+
         super.onCreate(savedInstanceState);
         
         Log.d(TAG, "═══════════════════════════════════════");

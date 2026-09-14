@@ -76,17 +76,6 @@
 	<string>BlockStar Cypher needs microphone access for audio and video calls.</string>
 	
 	<!-- ═══════════════════════════════════════ -->
-	<!-- LOCAL NETWORK PERMISSION -->
-	<!-- ═══════════════════════════════════════ -->
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>BlockStar Cypher uses local network access for mesh networking to communicate with nearby devices without internet.</string>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_blockstar-mesh._tcp</string>
-		<string>_blockstar-mesh._udp</string>
-	</array>
-	
-	<!-- ═══════════════════════════════════════ -->
 	<!-- PHOTO LIBRARY -->
 	<!-- ═══════════════════════════════════════ -->
 	<key>NSPhotoLibraryUsageDescription</key>
@@ -99,5 +88,14 @@
 	<!-- ═══════════════════════════════════════ -->
 	<key>NSFaceIDUsageDescription</key>
 	<string>BlockStar Cypher can use Face ID for secure wallet authentication.</string>
+
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Cypher uses the local network to connect nearby devices without internet.</string>
+	<key>NSBonjourServices</key>
+	<array>
+	<string>_bscypher._tcp</string>
+	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Cypher uses the microphone for walkie-talkie voice.</string>
 </dict>
 </plist>

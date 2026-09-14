@@ -127,44 +127,46 @@ class MeshNetworkService {
   private isInitialized = false;
   private isNative = false;
   private settings: MeshSettings = { ...DEFAULT_SETTINGS };
-  
+
   // Identity
   private myWalletAddress = '';
   private myPublicKey = '';
   private myUsername = '';
   private myAvatar = '';
-  
+
   // Network state
   private isServerOnline = true;
   private isMeshMode = false;
   private lastServerCheck = 0;
-  
+
   // Peers
   private discoveredPeers = new Map<string, MeshPeer>();
   private connectedPeers = new Map<string, MeshPeer>();
-  
+
   // WebRTC connections
   private peerConnections = new Map<string, RTCPeerConnection>();
   private dataChannels = new Map<string, RTCDataChannel>();
   private pendingConnections = new Map<string, RTCPeerConnection>();
-  
+
   // Message handling
   private messageQueue: MeshMessage[] = [];
   private processedMessages = new Set<string>();
   private routingTable = new Map<string, string[]>(); // destination -> path
-  
+
   // Timers
   private serverCheckInterval: NodeJS.Timeout | null = null;
   private bleScanInterval: NodeJS.Timeout | null = null;
   private peerCleanupInterval: NodeJS.Timeout | null = null;
-  
+
   // Event handlers
   private messageHandlers = new Set<MessageHandler>();
   private peerHandlers = new Set<PeerHandler>();
   private statusHandlers = new Set<StatusHandler>();
   private permissionHandlers = new Set<PermissionHandler>();
   private callSignalHandlers = new Set<CallSignalHandler>();
-  
+
+  private externalSenders?: Map<string, (raw: string) => void>;
+
   // BLE state
   private bleInitialized = false;
   private bleScanning = false;
@@ -344,24 +346,24 @@ class MeshNetworkService {
     try {
       // Request Bluetooth permissions
       await BleClient.initialize();
-      
+
       // Request location permission (required for BLE scanning on Android)
       // This is handled by the BLE plugin on Android
-      
+
       this.notifyPermissionChange('bluetooth', true);
       this.notifyPermissionChange('location', true);
-      
+
       return true;
     } catch (error: any) {
       console.error('Permission request failed:', error);
-      
+
       if (error.message?.includes('bluetooth')) {
         this.notifyPermissionChange('bluetooth', false);
       }
       if (error.message?.includes('location')) {
         this.notifyPermissionChange('location', false);
       }
-      
+
       return false;
     }
   }
@@ -396,9 +398,9 @@ class MeshNetworkService {
 
     try {
       console.log('📶 Initializing Bluetooth LE...');
-      
+
       await BleClient.initialize();
-      
+
       // Check if Bluetooth is enabled
       const enabled = await BleClient.isEnabled();
       if (!enabled) {
@@ -469,7 +471,7 @@ class MeshNetworkService {
     }
 
     if (this.bleScanning) {
-      BleClient.stopLEScan().catch(() => {});
+      BleClient.stopLEScan().catch(() => { });
       this.bleScanning = false;
       this.notifyStatusChange();
     }
@@ -480,7 +482,7 @@ class MeshNetworkService {
   private handleBLEDeviceDiscovered(result: ScanResult): void {
     const device = result.device;
     const rssi = result.rssi;
-    
+
     console.log('📶 BLE device discovered:', device.deviceId, 'RSSI:', rssi);
 
     // Try to read the device's BlockStar info from advertising data
@@ -496,7 +498,7 @@ class MeshNetworkService {
       const peerInfo = JSON.parse(peerInfoStr);
 
       const peerId = peerInfo.walletAddress.toLowerCase();
-      
+
       // Don't discover ourselves
       if (peerId === this.myWalletAddress) {
         return;
@@ -562,7 +564,7 @@ class MeshNetworkService {
       peer.connectionState = 'connected';
       this.connectedPeers.set(peer.walletAddress, peer);
       this.discoveredPeers.delete(peer.walletAddress);
-      
+
       this.notifyPeerChange(peer, 'connected');
       this.notifyStatusChange();
 
@@ -598,11 +600,11 @@ class MeshNetworkService {
     }
 
     const discoveryChannel = new BroadcastChannel('blockstar-mesh-discovery');
-    
+
     // Announce presence
     const announce = () => {
       if (!this.settings.enabled) return;
-      
+
       discoveryChannel.postMessage({
         type: 'announce',
         walletAddress: this.myWalletAddress,
@@ -665,9 +667,9 @@ class MeshNetworkService {
   async createConnectionOffer(): Promise<{ qrData: string; offer: ConnectionOffer }> {
     const peerConnection = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     const tempId = `pending_${Date.now()}`;
-    
+
     const iceCandidates: RTCIceCandidateInit[] = [];
-    
+
     peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
         iceCandidates.push(event.candidate.toJSON());
@@ -723,7 +725,7 @@ class MeshNetworkService {
     }
 
     const peerId = offer.peerInfo.walletAddress.toLowerCase();
-    
+
     const peerConnection = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     const iceCandidates: RTCIceCandidateInit[] = [];
 
@@ -738,7 +740,7 @@ class MeshNetworkService {
     };
 
     await peerConnection.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
-    
+
     for (const candidate of offer.iceCandidates) {
       await peerConnection.addIceCandidate(candidate);
     }
@@ -784,7 +786,7 @@ class MeshNetworkService {
       connectionType: 'webrtc',
       connectionState: 'connecting',
     };
-    
+
     this.discoveredPeers.set(peerId, peer);
     this.peerConnections.set(peerId, peerConnection);
     this.notifyStatusChange();
@@ -806,7 +808,7 @@ class MeshNetworkService {
     // Find the pending connection
     let peerConnection: RTCPeerConnection | undefined;
     let pendingId: string | undefined;
-    
+
     for (const [id, conn] of this.pendingConnections) {
       if (conn.signalingState === 'have-local-offer') {
         peerConnection = conn;
@@ -822,7 +824,7 @@ class MeshNetworkService {
 
     try {
       await peerConnection.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
-      
+
       for (const candidate of answer.iceCandidates) {
         await peerConnection.addIceCandidate(candidate);
       }
@@ -842,7 +844,7 @@ class MeshNetworkService {
         connectionType: 'webrtc',
         connectionState: 'connecting',
       };
-      
+
       this.discoveredPeers.set(peerId, peer);
       this.notifyStatusChange();
 
@@ -912,7 +914,7 @@ class MeshNetworkService {
     // Remove unnecessary lines and shorten
     return sdp
       .split('\n')
-      .filter(line => 
+      .filter(line =>
         line.startsWith('v=') ||
         line.startsWith('o=') ||
         line.startsWith('s=') ||
@@ -951,7 +953,7 @@ class MeshNetworkService {
 
     channel.onopen = () => {
       console.log(`📡 Data channel opened with: ${peerId}`);
-      
+
       // Move peer to connected
       const peer = this.discoveredPeers.get(peerId) || this.connectedPeers.get(peerId);
       if (peer) {
@@ -1021,7 +1023,7 @@ class MeshNetworkService {
 
         // Deliver regular message
         this.messageHandlers.forEach(handler => handler(message, peer!));
-        
+
         // Send ACK
         this.sendAck(message.id, fromPeer);
       } else {
@@ -1062,6 +1064,16 @@ class MeshNetworkService {
         return { sent: true, queued: false };
       } catch (e) {
         console.error('Failed to send direct message:', e);
+      }
+    }
+
+    const extSend = this.externalSenders?.get(to.toLowerCase());
+    if (extSend) {
+      try {
+        extSend(JSON.stringify(message));
+        return { sent: true, queued: false };
+      } catch (e) {
+        console.error('External transport send failed:', e);
       }
     }
 
@@ -1162,14 +1174,14 @@ class MeshNetworkService {
   private handleRoutingMessage(message: MeshMessage, fromPeer: string): void {
     try {
       const routeUpdate = JSON.parse(message.content);
-      
+
       // Update routing table with info from peer
       for (const [dest, hops] of Object.entries(routeUpdate as Record<string, string[]>)) {
         if (dest === this.myWalletAddress) continue;
-        
+
         const newPath = [fromPeer, ...hops];
         const existingPath = this.routingTable.get(dest);
-        
+
         if (!existingPath || newPath.length < existingPath.length) {
           this.routingTable.set(dest, newPath);
         }
@@ -1181,7 +1193,7 @@ class MeshNetworkService {
 
   private broadcastRoutingUpdate(): void {
     const routeInfo: Record<string, string[]> = {};
-    
+
     // Include direct connections
     this.dataChannels.forEach((_, peerId) => {
       routeInfo[peerId] = [];
@@ -1220,7 +1232,7 @@ class MeshNetworkService {
       try {
         // First check WebSocket connection (most reliable)
         const wsConnected = webSocketService.isConnected?.() ?? false;
-        
+
         if (wsConnected) {
           // WebSocket is connected, server is definitely online
           const wasOffline = !this.isServerOnline;
@@ -1232,18 +1244,18 @@ class MeshNetworkService {
             this.isMeshMode = false;
             this.syncQueuedMessages();
           }
-          
+
           this.notifyStatusChange();
           return;
         }
 
         // Fallback to ping if WebSocket not connected
         const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
-        const response = await fetch(`${API_URL}/api/ping`, { 
+        const response = await fetch(`${API_URL}/api/ping`, {
           method: 'GET',
           signal: AbortSignal.timeout(5000),
         });
-        
+
         const wasOffline = !this.isServerOnline;
         this.isServerOnline = response.ok;
         this.lastServerCheck = Date.now();
@@ -1273,7 +1285,7 @@ class MeshNetworkService {
     if (this.messageQueue.length === 0) return;
 
     console.log(`📤 Syncing ${this.messageQueue.length} queued messages`);
-    
+
     // TODO: Send queued messages to server
     this.messageQueue = [];
     this.notifyStatusChange();
@@ -1285,12 +1297,12 @@ class MeshNetworkService {
 
   private handlePeerDisconnect(peerId: string): void {
     const peer = this.connectedPeers.get(peerId);
-    
+
     // Clean up connection
     this.dataChannels.delete(peerId);
     this.peerConnections.get(peerId)?.close();
     this.peerConnections.delete(peerId);
-    
+
     // Move back to discovered
     if (peer) {
       peer.connectionState = 'disconnected';
@@ -1301,7 +1313,7 @@ class MeshNetworkService {
 
     // Remove from routing table
     this.routingTable.delete(peerId);
-    
+
     this.notifyStatusChange();
   }
 
@@ -1318,7 +1330,7 @@ class MeshNetworkService {
   private startPeerCleanup(): void {
     this.peerCleanupInterval = setInterval(() => {
       const now = Date.now();
-      
+
       // Clean up stale discovered peers
       this.discoveredPeers.forEach((peer, id) => {
         if (now - peer.lastSeen > PEER_TIMEOUT) {
@@ -1383,7 +1395,7 @@ class MeshNetworkService {
     callerAvatar?: string
   ): Promise<{ sent: boolean; queued: boolean; error?: string }> {
     console.log('📞 [Mesh] Sending call offer to:', to);
-    
+
     const callSignal: MeshCallSignal = {
       signalType: 'offer',
       callId,
@@ -1405,7 +1417,7 @@ class MeshNetworkService {
     answer: any
   ): Promise<{ sent: boolean; queued: boolean; error?: string }> {
     console.log('📞 [Mesh] Sending call answer to:', to);
-    
+
     const callSignal: MeshCallSignal = {
       signalType: 'answer',
       callId,
@@ -1424,7 +1436,7 @@ class MeshNetworkService {
     candidate: any
   ): Promise<{ sent: boolean; queued: boolean; error?: string }> {
     console.log('📞 [Mesh] Sending ICE candidate to:', to);
-    
+
     const callSignal: MeshCallSignal = {
       signalType: 'ice-candidate',
       callId,
@@ -1442,7 +1454,7 @@ class MeshNetworkService {
     callId: string
   ): Promise<{ sent: boolean; queued: boolean; error?: string }> {
     console.log('📞 [Mesh] Sending call end to:', to);
-    
+
     const callSignal: MeshCallSignal = {
       signalType: 'call-end',
       callId,
@@ -1509,13 +1521,13 @@ class MeshNetworkService {
    */
   canReachPeerForCall(walletAddress: string): boolean {
     const normalized = walletAddress.toLowerCase();
-    
+
     // Direct connection?
     const channel = this.dataChannels.get(normalized);
     if (channel?.readyState === 'open') {
       return true;
     }
-    
+
     // Routable?
     const route = this.routingTable.get(normalized);
     if (route && route.length > 0) {
@@ -1523,7 +1535,7 @@ class MeshNetworkService {
       const nextChannel = this.dataChannels.get(nextHop);
       return nextChannel?.readyState === 'open';
     }
-    
+
     return false;
   }
 
@@ -1569,6 +1581,65 @@ class MeshNetworkService {
 
   getAllPeers(): MeshPeer[] {
     return [...this.getConnectedPeers(), ...this.getDiscoveredPeers()];
+  }
+
+  // ============================================
+  // EXTERNAL TRANSPORTS (WiFi Direct, Local WiFi, ...)
+  // ============================================
+
+  /** Identity accessors so companion transports can build mesh messages. */
+  getIdentity(): { walletAddress: string; publicKey: string; username: string } {
+    return {
+      walletAddress: this.myWalletAddress,
+      publicKey: this.myPublicKey,
+      username: this.myUsername,
+    };
+  }
+
+  /**
+   * Ingest a raw mesh-message JSON string received over a NON-WebRTC transport
+   * (WiFi Direct socket, Local-WiFi socket, etc). Runs it through the exact same
+   * dedup + routing + delivery pipeline as data-channel messages, so multi-hop,
+   * ACKs, call-signals and the onMessage() handlers all keep working.
+   */
+  ingestExternalMessage(data: string, fromPeer: string): void {
+    this.handleDataChannelMessage(data, fromPeer.toLowerCase());
+  }
+
+  /**
+   * Register a discovered peer that is reachable over an external transport,
+   * so it shows up as connected and canReachPeerForCall() returns true.
+   * `sendFn` is how we push a raw string to that peer over its transport.
+   */
+  registerExternalPeer(
+    peer: { walletAddress: string; publicKey?: string; username?: string; connectionType: 'wifi-direct' | 'local' },
+    sendFn: (raw: string) => void
+  ): void {
+    const id = peer.walletAddress.toLowerCase();
+    this.externalSenders = this.externalSenders || new Map();
+    this.externalSenders.set(id, sendFn);
+
+    const p: any = {
+      id,
+      walletAddress: id,
+      publicKey: peer.publicKey || '',
+      username: peer.username,
+      distance: 0,
+      lastSeen: Date.now(),
+      connectionType: peer.connectionType,
+      connectionState: 'connected',
+    };
+    this.connectedPeers.set(id, p);
+    this.routingTable.set(id, [id]);
+    this.notifyPeerChange(p, 'connected');
+    this.notifyStatusChange();
+  }
+
+  /** Remove an external peer when its transport disconnects. */
+  unregisterExternalPeer(walletAddress: string): void {
+    const id = walletAddress.toLowerCase();
+    this.externalSenders?.delete(id);
+    this.handlePeerDisconnect(id);
   }
 
   isConnectedTo(walletAddress: string): boolean {
