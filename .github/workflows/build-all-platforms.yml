@@ -74,228 +74,228 @@ jobs:
   # ═══════════════════════════════════════════════════════════════
   # WINDOWS BUILD (Electron)
   # ═══════════════════════════════════════════════════════════════
-  # build-windows:
-  #   needs: build-frontend
-  #   runs-on: windows-latest
-  #   if: ${{ github.event.inputs.build_windows != 'false' }}
+  build-windows:
+    needs: build-frontend
+    runs-on: windows-latest
+    if: ${{ github.event.inputs.build_windows != 'false' }}
     
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v6
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
 
-  #     - name: Setup Node.js
-  #       uses: actions/setup-node@v6
-  #       with:
-  #         node-version: ${{ env.NODE_VERSION }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
-  #     - name: Download frontend build
-  #       uses: actions/download-artifact@v6
-  #       with:
-  #         name: frontend-build
-  #         path: frontend/out
+      - name: Download frontend build
+        uses: actions/download-artifact@v6
+        with:
+          name: frontend-build
+          path: frontend/out
 
-  #     - name: Verify downloaded build
-  #       working-directory: frontend
-  #       shell: pwsh
-  #       run: |
-  #         Write-Host "Checking downloaded files..."
-  #         Get-ChildItem out -Recurse | Select-Object FullName | Format-Table -AutoSize
-  #     - name: Install dependencies
-  #       working-directory: frontend
-  #       run: |
-  #         if (Test-Path "package-lock.json") {
-  #           npm ci --legacy-peer-deps
-  #         } else {
-  #           npm install --legacy-peer-deps
-  #         }
-  #       shell: pwsh
+      - name: Verify downloaded build
+        working-directory: frontend
+        shell: pwsh
+        run: |
+          Write-Host "Checking downloaded files..."
+          Get-ChildItem out -Recurse | Select-Object FullName | Format-Table -AutoSize
+      - name: Install dependencies
+        working-directory: frontend
+        run: |
+          if (Test-Path "package-lock.json") {
+            npm ci --legacy-peer-deps
+          } else {
+            npm install --legacy-peer-deps
+          }
+        shell: pwsh
 
-  #     - name: Install Electron dependencies
-  #       working-directory: frontend
-  #       run: npm install --save-dev electron electron-builder --legacy-peer-deps
+      - name: Install Electron dependencies
+        working-directory: frontend
+        run: npm install --save-dev electron electron-builder --legacy-peer-deps
         
-  #     - name: Create Electron files
-  #       working-directory: frontend
-  #       shell: pwsh
-  #       run: |
-  #         # Create electron directory
-  #         New-Item -ItemType Directory -Force -Path "electron"
+      - name: Create Electron files
+        working-directory: frontend
+        shell: pwsh
+        run: |
+          # Create electron directory
+          New-Item -ItemType Directory -Force -Path "electron"
           
-  #         # Create main.js with proper file loading
-  #         @"
-  #         const { app, BrowserWindow, shell, protocol } = require('electron');
-  #         const path = require('path');
-  #         const url = require('url');
-  #         const fs = require('fs');
-  #         let mainWindow;
-  #         protocol.registerSchemesAsPrivileged([
-  #           {
-  #             scheme: 'app',
-  #             privileges: {
-  #               standard: true,
-  #               secure: true,
-  #               supportFetchAPI: true,
-  #               corsEnabled: true
-  #             }
-  #           }
-  #         ]);
-  #         function createWindow() {
-  #           mainWindow = new BrowserWindow({
-  #             width: 1200,
-  #             height: 800,
-  #             minWidth: 800,
-  #             minHeight: 600,
-  #             webPreferences: {
-  #               nodeIntegration: false,
-  #               contextIsolation: true,
-  #               webSecurity: true,
-  #             },
-  #             icon: path.join(__dirname, '../public/icon.png'),
-  #             titleBarStyle: 'default',
-  #             show: false,
-  #           });
-  #           if (process.env.NODE_ENV === 'development') {
-  #             mainWindow.loadURL('http://localhost:3000');
-  #             mainWindow.webContents.openDevTools();
-  #           } else {
-  #             const indexPath = path.join(__dirname, '../out/index.html');
+          # Create main.js with proper file loading
+          @"
+          const { app, BrowserWindow, shell, protocol } = require('electron');
+          const path = require('path');
+          const url = require('url');
+          const fs = require('fs');
+          let mainWindow;
+          protocol.registerSchemesAsPrivileged([
+            {
+              scheme: 'app',
+              privileges: {
+                standard: true,
+                secure: true,
+                supportFetchAPI: true,
+                corsEnabled: true
+              }
+            }
+          ]);
+          function createWindow() {
+            mainWindow = new BrowserWindow({
+              width: 1200,
+              height: 800,
+              minWidth: 800,
+              minHeight: 600,
+              webPreferences: {
+                nodeIntegration: false,
+                contextIsolation: true,
+                webSecurity: true,
+              },
+              icon: path.join(__dirname, '../public/icon.png'),
+              titleBarStyle: 'default',
+              show: false,
+            });
+            if (process.env.NODE_ENV === 'development') {
+              mainWindow.loadURL('http://localhost:3000');
+              mainWindow.webContents.openDevTools();
+            } else {
+              const indexPath = path.join(__dirname, '../out/index.html');
               
-  #             if (fs.existsSync(indexPath)) {
-  #               mainWindow.loadURL(url.format({
-  #                 pathname: indexPath,
-  #                 protocol: 'file:',
-  #                 slashes: true
-  #               }));
-  #             } else {
-  #               console.error('index.html not found at:', indexPath);
-  #             }
-  #           }
-  #           mainWindow.webContents.setWindowOpenHandler(({ url: linkUrl }) => {
-  #             shell.openExternal(linkUrl);
-  #             return { action: 'deny' };
-  #           });
-  #           mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
-  #             console.error('Failed to load:', validatedURL, errorDescription);
-  #           });
-  #           mainWindow.once('ready-to-show', () => {
-  #             mainWindow.show();
-  #           });
-  #           mainWindow.on('closed', () => {
-  #             mainWindow = null;
-  #           });
-  #         }
-  #         app.whenReady().then(createWindow);
-  #         app.on('window-all-closed', () => {
-  #           if (process.platform !== 'darwin') {
-  #             app.quit();
-  #           }
-  #         });
-  #         app.on('activate', () => {
-  #           if (BrowserWindow.getAllWindows().length === 0) {
-  #             createWindow();
-  #           }
-  #         });
-  #         "@ | Out-File -FilePath "electron/main.js" -Encoding UTF8
-  #     - name: Generate Windows icon
-  #       working-directory: frontend
-  #       shell: pwsh
-  #       run: |
-  #         npm install --save-dev sharp
+              if (fs.existsSync(indexPath)) {
+                mainWindow.loadURL(url.format({
+                  pathname: indexPath,
+                  protocol: 'file:',
+                  slashes: true
+                }));
+              } else {
+                console.error('index.html not found at:', indexPath);
+              }
+            }
+            mainWindow.webContents.setWindowOpenHandler(({ url: linkUrl }) => {
+              shell.openExternal(linkUrl);
+              return { action: 'deny' };
+            });
+            mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+              console.error('Failed to load:', validatedURL, errorDescription);
+            });
+            mainWindow.once('ready-to-show', () => {
+              mainWindow.show();
+            });
+            mainWindow.on('closed', () => {
+              mainWindow = null;
+            });
+          }
+          app.whenReady().then(createWindow);
+          app.on('window-all-closed', () => {
+            if (process.platform !== 'darwin') {
+              app.quit();
+            }
+          });
+          app.on('activate', () => {
+            if (BrowserWindow.getAllWindows().length === 0) {
+              createWindow();
+            }
+          });
+          "@ | Out-File -FilePath "electron/main.js" -Encoding UTF8
+      - name: Generate Windows icon
+        working-directory: frontend
+        shell: pwsh
+        run: |
+          npm install --save-dev sharp
           
-  #         @"
-  #         const sharp = require('sharp');
-  #         const fs = require('fs');
-  #         const path = require('path');
+          @"
+          const sharp = require('sharp');
+          const fs = require('fs');
+          const path = require('path');
           
-  #         async function generateIcon() {
-  #           const pngPath = 'public/icon.png';
+          async function generateIcon() {
+            const pngPath = 'public/icon.png';
             
-  #           if (!fs.existsSync('public')) {
-  #             fs.mkdirSync('public', { recursive: true });
-  #           }
+            if (!fs.existsSync('public')) {
+              fs.mkdirSync('public', { recursive: true });
+            }
             
-  #           if (!fs.existsSync(pngPath)) {
-  #             console.log('Creating placeholder icon...');
-  #             const svg = Buffer.from(
-  #               '<svg width="256" height="256"><rect width="256" height="256" fill="#3B82F6"/><text x="128" y="140" text-anchor="middle" font-size="48" fill="white">BC</text></svg>'
-  #             );
-  #             await sharp(svg).resize(256, 256).png().toFile(pngPath);
-  #           }
+            if (!fs.existsSync(pngPath)) {
+              console.log('Creating placeholder icon...');
+              const svg = Buffer.from(
+                '<svg width="256" height="256"><rect width="256" height="256" fill="#3B82F6"/><text x="128" y="140" text-anchor="middle" font-size="48" fill="white">BC</text></svg>'
+              );
+              await sharp(svg).resize(256, 256).png().toFile(pngPath);
+            }
             
-  #           const metadata = await sharp(pngPath).metadata();
-  #           console.log('Icon size:', metadata.width, 'x', metadata.height);
+            const metadata = await sharp(pngPath).metadata();
+            console.log('Icon size:', metadata.width, 'x', metadata.height);
             
-  #           if (metadata.width < 256 || metadata.height < 256) {
-  #             console.log('Resizing icon to 256x256...');
-  #             await sharp(pngPath)
-  #               .resize(256, 256, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
-  #               .toFile('public/icon-256.png');
-  #             fs.copyFileSync('public/icon-256.png', pngPath);
-  #           }
+            if (metadata.width < 256 || metadata.height < 256) {
+              console.log('Resizing icon to 256x256...');
+              await sharp(pngPath)
+                .resize(256, 256, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+                .toFile('public/icon-256.png');
+              fs.copyFileSync('public/icon-256.png', pngPath);
+            }
             
-  #           console.log('Icon ready');
-  #         }
+            console.log('Icon ready');
+          }
           
-  #         generateIcon().catch(console.error);
-  #         "@ | Out-File -FilePath "generate-icon.js" -Encoding UTF8
+          generateIcon().catch(console.error);
+          "@ | Out-File -FilePath "generate-icon.js" -Encoding UTF8
           
-  #         node generate-icon.js
-  #     - name: Update package.json
-  #       working-directory: frontend
-  #       shell: pwsh
-  #       run: |
-  #         $pkg = Get-Content package.json | ConvertFrom-Json
-  #         $pkg.main = "electron/main.js"
+          node generate-icon.js
+      - name: Update package.json
+        working-directory: frontend
+        shell: pwsh
+        run: |
+          $pkg = Get-Content package.json | ConvertFrom-Json
+          $pkg.main = "electron/main.js"
           
-  #         if (-not $pkg.description) {
-  #           $pkg | Add-Member -NotePropertyName "description" -NotePropertyValue "BlockStar Cypher - Secure Messaging" -Force
-  #         }
-  #         if (-not $pkg.author) {
-  #           $pkg | Add-Member -NotePropertyName "author" -NotePropertyValue "BlockStar" -Force
-  #         }
-  #         if (-not $pkg.repository) {
-  #           $pkg | Add-Member -NotePropertyName "repository" -NotePropertyValue @{
-  #             type = "git"
-  #             url = "https://github.com/user/repo"
-  #           } -Force
-  #         }
+          if (-not $pkg.description) {
+            $pkg | Add-Member -NotePropertyName "description" -NotePropertyValue "BlockStar Cypher - Secure Messaging" -Force
+          }
+          if (-not $pkg.author) {
+            $pkg | Add-Member -NotePropertyName "author" -NotePropertyValue "BlockStar" -Force
+          }
+          if (-not $pkg.repository) {
+            $pkg | Add-Member -NotePropertyName "repository" -NotePropertyValue @{
+              type = "git"
+              url = "https://github.com/user/repo"
+            } -Force
+          }
           
-  #         $pkg | Add-Member -NotePropertyName "build" -NotePropertyValue @{
-  #           appId = "com.blockstar.cypher"
-  #           productName = "BlockStar Cypher"
-  #           directories = @{
-  #             output = "dist"
-  #           }
-  #           files = @(
-  #             "electron/**/*",
-  #             "out/**/*",
-  #             "public/**/*",
-  #             "!out/.next/cache/**/*"
-  #           )
-  #           win = @{
-  #             target = @("nsis", "portable")
-  #             icon = "public/icon.png"
-  #           }
-  #           publish = $null
-  #           generateUpdatesFilesForAllChannels = $false
-  #           compression = "normal"
-  #           asar = $true
-  #         } -Force
+          $pkg | Add-Member -NotePropertyName "build" -NotePropertyValue @{
+            appId = "com.blockstar.cypher"
+            productName = "BlockStar Cypher"
+            directories = @{
+              output = "dist"
+            }
+            files = @(
+              "electron/**/*",
+              "out/**/*",
+              "public/**/*",
+              "!out/.next/cache/**/*"
+            )
+            win = @{
+              target = @("nsis", "portable")
+              icon = "public/icon.png"
+            }
+            publish = $null
+            generateUpdatesFilesForAllChannels = $false
+            compression = "normal"
+            asar = $true
+          } -Force
           
-  #         $pkg | ConvertTo-Json -Depth 10 | Set-Content package.json
-  #     - name: Build Windows App
-  #       working-directory: frontend
-  #       run: npx electron-builder --win --publish never
-  #       env:
-  #         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          $pkg | ConvertTo-Json -Depth 10 | Set-Content package.json
+      - name: Build Windows App
+        working-directory: frontend
+        run: npx electron-builder --win --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  #     - name: Upload Windows Build
-  #       uses: actions/upload-artifact@v6
-  #       with:
-  #         name: windows-build
-  #         path: |
-  #           frontend/dist/*.exe
-  #         retention-days: 30
+      - name: Upload Windows Build
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-build
+          path: |
+            frontend/dist/*.exe
+          retention-days: 30
 
   # ═══════════════════════════════════════════════════════════════
   # MACOS BUILD (Electron)
@@ -506,7 +506,7 @@ jobs:
   # CREATE RELEASE (on tag push)
   # ═══════════════════════════════════════════════════════════════
   create-release:
-    needs: [build-macos]
+    needs: [build-macos , build-windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     

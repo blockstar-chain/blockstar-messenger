@@ -226,7 +226,7 @@ export default function MeshNetworkTab({
       {status?.enabled && (
         <div className="grid grid-cols-2 gap-3">
           <button
-            onClick={() => { setQrMode('generate'); handleGenerateQR(); }}
+            onClick={() => { setActiveTab('qr-connect'); setQrMode('generate'); handleGenerateQR(); }}
             className="bg-gray-800/50 hover:bg-gray-700/50 rounded-xl p-4 text-left"
           >
             <QrCode className="w-8 h-8 text-purple-400 mb-2" />
@@ -235,7 +235,7 @@ export default function MeshNetworkTab({
           </button>
           
           <button
-            onClick={() => setQrMode('scan')}
+            onClick={() => { setActiveTab('qr-connect'); setQrMode('scan'); }}
             className="bg-gray-800/50 hover:bg-gray-700/50 rounded-xl p-4 text-left"
           >
             <ScanLine className="w-8 h-8 text-blue-400 mb-2" />
@@ -423,6 +423,31 @@ export default function MeshNetworkTab({
             <p className="text-white font-medium">Scan QR</p>
             <p className="text-xs text-gray-400">Connect to peer</p>
           </button>
+        </div>
+      )}
+
+      {/* Generate Mode: loading / error fallback so it's never blank */}
+      {qrMode === 'generate' && !qrData && (
+        <div className="bg-gray-800/50 rounded-xl p-6 text-center">
+          {isGenerating ? (
+            <div className="flex flex-col items-center gap-3 text-gray-400">
+              <Loader2 className="w-8 h-8 text-purple-400 animate-spin" />
+              <span className="text-sm">Generating your connection QR…</span>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-red-400 text-sm flex items-center justify-center gap-2">
+                <AlertCircle className="w-4 h-4" />
+                {error || 'Could not generate QR code'}
+              </p>
+              <button
+                onClick={handleGenerateQR}
+                className="px-4 py-2 bg-purple-500 hover:bg-purple-600 rounded-lg text-white text-sm"
+              >
+                Try Again
+              </button>
+            </div>
+          )}
         </div>
       )}
 

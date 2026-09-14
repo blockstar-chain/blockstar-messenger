@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useAppStore } from '@/store';
 import { db, dbHelpers } from '@/lib/database';
 import { Conversation } from '@/types';
@@ -165,6 +165,11 @@ export default function Sidebar({
     offer?: any;
     viaMesh?: boolean;
   } | null>(null);
+
+  const meshPublicKey = useMemo(
+    () => encryptionService.getPublicKey(),
+    [currentUser?.walletAddress]
+  );
 
   // NOTE: useIncomingCallFromNotification is already used in MainLayout
   // We just get the utility functions here without setting up duplicate listeners
@@ -1324,10 +1329,10 @@ export default function Sidebar({
 
       // 2. Disconnect wallet - wrap in try/catch to handle network modal issues
       try {
-        if(isDesktop){
+        if (isDesktop) {
           await desktopWallet.disconnect();
         }
-        else{
+        else {
           await disconnect();
         }
       } catch (disconnectError) {
@@ -2436,7 +2441,7 @@ export default function Sidebar({
         isOpen={showMeshModal}
         onClose={() => setShowMeshModal(false)}
         walletAddress={currentUser?.walletAddress || ''}
-        publicKey={encryptionService.getPublicKey()}
+        publicKey={meshPublicKey}
         username={currentUser?.username}
         avatar={stats?.profile}
       />

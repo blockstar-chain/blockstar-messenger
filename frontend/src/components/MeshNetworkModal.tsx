@@ -1,10 +1,17 @@
 // frontend/src/components/MeshNetworkModal.tsx
 // Full-screen modal for mesh networking features
 // Shows MeshNetworkTab with all features: overview, peers, QR connect, messages
+//
+// FIX: publicKey is often passed as `encryptionService.getPublicKey()` — a NEW
+// Promise on every parent render. Previously this modal depended on `publicKey`
+// in its resolve effect, so every parent re-render re-ran it, flipped isLoading,
+// and unmounted/remounted MeshNetworkTab — wiping its tab/QR/settings state
+// ("flash then revert to Overview"). We now resolve the key ONCE per open and
+// ignore later prop-identity churn while the modal stays open.
 
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { X, Radio, Loader2 } from 'lucide-react';
 import MeshNetworkTab from './MeshNetworkTab';
 import { meshNetworkService } from '@/lib/mesh/MeshNetworkService';
@@ -30,39 +37,64 @@ export default function MeshNetworkModal({
   const [resolvedPublicKey, setResolvedPublicKey] = useState<string | Uint8Array | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Resolve publicKey if it's a Promise
+  // Keep the latest publicKey in a ref so the resolve effect can read it without
+  // depending on it (its identity changes every parent render when it's a Promise).
+  const publicKeyRef = useRef(publicKey);
+  publicKeyRef.current = publicKey;
+
+  // Guard so we resolve only once per "open" session.
+  const resolvedForOpen = useRef(false);
+
   useEffect(() => {
+    // Modal closed: reset for the next open.
     if (!isOpen) {
+      resolvedForOpen.current = false;
       setResolvedPublicKey(null);
+      setIsLoading(false);
       return;
     }
 
+    // Already resolved for this open session — don't thrash on re-renders.
+    if (resolvedForOpen.current) return;
+    resolvedForOpen.current = true;
+
+    let cancelled = false;
+    const key = publicKeyRef.current;
+
     const resolveKey = async () => {
-      if (!publicKey) {
+      if (!key) {
         setResolvedPublicKey(null);
         return;
       }
-
-      // Check if it's a Promise
-      if (publicKey instanceof Promise) {
+      if (key instanceof Promise) {
         setIsLoading(true);
         try {
-          const resolved = await publicKey;
-          setResolvedPublicKey(resolved);
+          const resolved = await key;
+          if (!cancelled) setResolvedPublicKey(resolved);
         } catch (e) {
           console.error('Failed to resolve publicKey:', e);
-          setResolvedPublicKey(null);
+          if (!cancelled) {
+            setResolvedPublicKey(null);
+            // Allow a retry on the next open if this attempt failed.
+            resolvedForOpen.current = false;
+          }
         } finally {
-          setIsLoading(false);
+          if (!cancelled) setIsLoading(false);
         }
       } else {
-        // It's already a string or Uint8Array
-        setResolvedPublicKey(publicKey);
+        // Already a string or Uint8Array
+        setResolvedPublicKey(key);
       }
     };
 
     resolveKey();
-  }, [isOpen, publicKey]);
+    return () => {
+      cancelled = true;
+    };
+    // Intentionally depends ONLY on isOpen — publicKey is read via ref so a new
+    // Promise identity from the parent can't remount the tab mid-session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   // Initialize mesh service when modal opens and key is resolved
   useEffect(() => {
