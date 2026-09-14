@@ -1,0 +1,182 @@
+# .github/workflows/ios.yml
+# BlockStar Cypher — iOS build (Capacitor + Xcode)
+#
+# Two jobs:
+#   1) ios-build-unsigned  — runs on every push / manually. NO secrets needed.
+#      Compiles the iOS app (incl. the LocalMesh plugin) so CI catches breakage.
+#      An unsigned build CANNOT be installed on a device — it's a compile gate.
+#   2) ios-testflight       — dormant until you set repo variable IOS_SIGN = true
+#      and add the signing secrets below. Produces a signed .ipa and uploads to
+#      TestFlight (the only way users can install an iOS app).
+#
+# ASSUMES: Capacitor app lives in `frontend/`, Xcode project at
+#          frontend/ios/App/App.xcworkspace, scheme "App". Adjust if different.
+#
+# IMPORTANT (one-time, in Xcode, then commit):
+#   - Add LocalMeshPlugin.swift + LocalMeshPlugin.m to the App target
+#     (drag into Xcode so both appear in Build Phases > Compile Sources).
+#   - Add Info.plist keys: NSLocalNetworkUsageDescription, NSBonjourServices
+#     (["_bscypher._tcp"]), NSMicrophoneUsageDescription.
+#   - Commit the whole `frontend/ios/` folder (project.pbxproj included), or CI
+#     will build a stock project without your plugin/permissions.
+
+name: iOS Build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  # ────────────────────────────────────────────────────────────────
+  # 1) Always-on compile gate (no secrets)
+  # ────────────────────────────────────────────────────────────────
+  ios-build-unsigned:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Your project has peer-dep conflicts (wagmi/accounts), so keep the flag.
+      # Better: commit an frontend/.npmrc with `legacy-peer-deps=true`.
+      - name: Install deps
+        run: npm install --legacy-peer-deps
+
+      # Match whatever your Android job runs to produce the Capacitor web assets.
+      - name: Build web
+        run: npm run build
+
+      - name: Add iOS platform if missing
+        run: |
+          if [ ! -d "ios" ]; then
+            echo "No ios/ folder committed — adding a stock one (NO plugin/Info.plist customizations)."
+            npx cap add ios
+          fi
+
+      - name: Capacitor sync (iOS)
+        run: npx cap sync ios
+
+      - name: CocoaPods install
+        working-directory: frontend/ios/App
+        run: pod install --repo-update
+
+      - name: Build (unsigned, device SDK)
+        working-directory: frontend/ios/App
+        run: |
+          xcodebuild \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            clean build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE_SPECIFIER=""
+
+  # ────────────────────────────────────────────────────────────────
+  # 2) Signed .ipa → TestFlight  (enable by setting repo variable IOS_SIGN=true)
+  # ────────────────────────────────────────────────────────────────
+  ios-testflight:
+    if: ${{ vars.IOS_SIGN == 'true' && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')) }}
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      # Secrets you must add in repo Settings > Secrets and variables > Actions:
+      #   IOS_CERTIFICATE_P12_BASE64   base64 of your Apple distribution .p12
+      #   IOS_CERTIFICATE_PASSWORD     password for that .p12
+      #   IOS_PROVISION_PROFILE_BASE64 base64 of your .mobileprovision
+      #   IOS_TEAM_ID                  10-char Apple Team ID
+      #   IOS_BUNDLE_ID                e.g. world.blockstar.cypher
+      #   APPSTORE_ISSUER_ID / APPSTORE_KEY_ID / APPSTORE_PRIVATE_KEY  (App Store Connect API key, for TestFlight upload)
+      IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+      IOS_BUNDLE_ID: ${{ secrets.IOS_BUNDLE_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps
+        run: npm install --legacy-peer-deps
+      - name: Build web
+        run: npm run build
+      - name: Capacitor sync (iOS)
+        run: npx cap sync ios
+      - name: CocoaPods install
+        working-directory: frontend/ios/App
+        run: pod install --repo-update
+
+      - name: Import signing certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+          p12-password: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+
+      - name: Install provisioning profile
+        run: |
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          echo "${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}" | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/build.mobileprovision
+
+      - name: Write ExportOptions.plist
+        working-directory: frontend/ios/App
+        run: |
+          cat > ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>${IOS_TEAM_ID}</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>uploadBitcode</key><false/>
+            <key>uploadSymbols</key><true/>
+          </dict></plist>
+          PLIST
+
+      - name: Archive
+        working-directory: frontend/ios/App
+        run: |
+          xcodebuild \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath $RUNNER_TEMP/App.xcarchive \
+            archive \
+            DEVELOPMENT_TEAM="$IOS_TEAM_ID" \
+            PRODUCT_BUNDLE_IDENTIFIER="$IOS_BUNDLE_ID"
+
+      - name: Export .ipa
+        working-directory: frontend/ios/App
+        run: |
+          xcodebuild \
+            -exportArchive \
+            -archivePath $RUNNER_TEMP/App.xcarchive \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath $RUNNER_TEMP/export
+
+      - name: Upload .ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cypher-ios-ipa
+          path: ${{ runner.temp }}/export/*.ipa
+
+      - name: Upload to TestFlight
+        uses: apple-actions/upload-testflight-build@v3
+        with:
+          app-path: ${{ runner.temp }}/export/App.ipa
+          issuer-id: ${{ secrets.APPSTORE_ISSUER_ID }}
+          api-key-id: ${{ secrets.APPSTORE_KEY_ID }}
+          api-private-key: ${{ secrets.APPSTORE_PRIVATE_KEY }}
