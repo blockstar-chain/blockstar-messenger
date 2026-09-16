@@ -1,10 +1,10 @@
 apply plugin: 'com.android.application'
 
 android {
-    namespace "world.blockstar.cypher"
+    namespace "site.blockstar.cypher"
     compileSdkVersion rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "world.blockstar.cypher"
+        applicationId "site.blockstar.cypher"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1

@@ -3,17 +3,17 @@
 <plist version="1.0">
 <dict>
 	<key>API_KEY</key>
-	<string>AIzaSyDOliu-Vdn0TLbVT8aW0FztlAmfD0CMXSw</string>
+	<string>AIzaSyBpeqeGYBDsD8b8M6TxSRa-g4NAJhL_gHU</string>
 	<key>GCM_SENDER_ID</key>
-	<string>888897781828</string>
+	<string>807246088894</string>
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>
-	<string>world.blockstar.cypher</string>
+	<string>site.blockstar.cypher</string>
 	<key>PROJECT_ID</key>
-	<string>blockstar-cypher</string>
+	<string>blockstar-chat</string>
 	<key>STORAGE_BUCKET</key>
-	<string>blockstar-cypher.firebasestorage.app</string>
+	<string>blockstar-chat.firebasestorage.app</string>
 	<key>IS_ADS_ENABLED</key>
 	<false></false>
 	<key>IS_ANALYTICS_ENABLED</key>
@@ -25,6 +25,6 @@
 	<key>IS_SIGNIN_ENABLED</key>
 	<true></true>
 	<key>GOOGLE_APP_ID</key>
-	<string>1:888897781828:ios:9ebfabb5448fdcfa48fc11</string>
+	<string>1:807246088894:ios:3e91a1643b57971b51acef</string>
 </dict>
 </plist>

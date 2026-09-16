@@ -13,7 +13,7 @@
 //   connect({host,port})      -> returns {connectionId}, emit "connected"
 //   send / broadcast          -> newline-framed JSON strings
 //   messageReceived           -> {connectionId, message}
-package world.blockstar.cypher.nsd;
+package site.blockstar.cypher.nsd;
 
 import android.content.Context;
 import android.net.nsd.NsdManager;

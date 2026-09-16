@@ -1,5 +1,5 @@
 // android/app/src/main/java/com/blockstar/cypher/IncomingCallPlugin.java
-package world.blockstar.cypher;
+package site.blockstar.cypher;
 
 import android.util.Log;
 

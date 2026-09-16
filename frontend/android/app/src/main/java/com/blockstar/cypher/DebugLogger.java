@@ -1,4 +1,4 @@
-package world.blockstar.cypher;
+package site.blockstar.cypher;
 
 import android.content.Context;
 import android.content.SharedPreferences;

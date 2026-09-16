@@ -28,7 +28,7 @@ public class LocalMeshPlugin: CAPPlugin {
 
     private let serviceType = "_bscypher._tcp"
     private let namePrefix = "bscypher-"
-    private let queue = DispatchQueue(label: "world.blockstar.cypher.localmesh")
+    private let queue = DispatchQueue(label: "site.blockstar.cypher.localmesh")
 
     private var listener: NWListener?
     private var browser: NWBrowser?

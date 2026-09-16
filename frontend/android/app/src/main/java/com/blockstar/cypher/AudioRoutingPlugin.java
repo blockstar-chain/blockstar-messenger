@@ -1,5 +1,5 @@
 // android/app/src/main/java/com/blockstar/cypher/AudioRoutingPlugin.java
-package world.blockstar.cypher;
+package site.blockstar.cypher;
 
 import android.content.Context;
 import android.media.AudioManager;

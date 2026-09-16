@@ -1,4 +1,4 @@
-package world.blockstar.cypher;
+package site.blockstar.cypher;
 
 import android.app.NotificationManager;
 import android.content.BroadcastReceiver;

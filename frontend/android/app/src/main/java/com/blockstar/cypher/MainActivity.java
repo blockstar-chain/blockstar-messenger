@@ -1,4 +1,4 @@
-package world.blockstar.cypher;
+package site.blockstar.cypher;
 
 import android.Manifest;
 import android.content.Intent;
@@ -13,8 +13,8 @@ import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.JSObject;
-import world.blockstar.cypher.wifidirect.WifiDirectPlugin;
-import world.blockstar.cypher.nsd.LocalMeshPlugin;
+import site.blockstar.cypher.wifidirect.WifiDirectPlugin;
+import site.blockstar.cypher.nsd.LocalMeshPlugin;
 
 public class MainActivity extends BridgeActivity {
     private static final String TAG = "MainActivity";

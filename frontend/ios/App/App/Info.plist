@@ -22,6 +22,35 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>BlockStar Cypher uses Bluetooth to enable mesh networking for offline communication at events and in areas without internet.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>BlockStar Cypher uses Bluetooth to enable mesh networking for offline communication.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_bscypher._tcp</string>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>BlockStar Cypher needs camera access for video calls and scanning QR codes.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>BlockStar Cypher can use Face ID for secure wallet authentication.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Cypher uses the local network to connect nearby devices without internet.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Cypher uses the microphone for walkie-talkie voice.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>BlockStar Cypher can save received images to your photo library.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>BlockStar Cypher needs access to your photos to send images in messages.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>voip</string>
+		<string>audio</string>
+		<string>remote-notification</string>
+		<string>fetch</string>
+		<string>bluetooth-central</string>
+		<string>bluetooth-peripheral</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
@@ -45,57 +74,12 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
-	
-	<!-- ═══════════════════════════════════════ -->
-	<!-- BACKGROUND MODES -->
-	<!-- ═══════════════════════════════════════ -->
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>voip</string>
-		<string>audio</string>
-		<string>remote-notification</string>
-		<string>fetch</string>
-		<string>bluetooth-central</string>
-		<string>bluetooth-peripheral</string>
-	</array>
-	
-	<!-- ═══════════════════════════════════════ -->
-	<!-- BLUETOOTH PERMISSIONS -->
-	<!-- ═══════════════════════════════════════ -->
-	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>BlockStar Cypher uses Bluetooth to enable mesh networking for offline communication at events and in areas without internet.</string>
-	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>BlockStar Cypher uses Bluetooth to enable mesh networking for offline communication.</string>
-	
-	<!-- ═══════════════════════════════════════ -->
-	<!-- CAMERA AND MICROPHONE PERMISSIONS -->
-	<!-- ═══════════════════════════════════════ -->
-	<key>NSCameraUsageDescription</key>
-	<string>BlockStar Cypher needs camera access for video calls and scanning QR codes.</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>BlockStar Cypher needs microphone access for audio and video calls.</string>
-	
-	<!-- ═══════════════════════════════════════ -->
-	<!-- PHOTO LIBRARY -->
-	<!-- ═══════════════════════════════════════ -->
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>BlockStar Cypher needs access to your photos to send images in messages.</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>BlockStar Cypher can save received images to your photo library.</string>
-	
-	<!-- ═══════════════════════════════════════ -->
-	<!-- FACE ID -->
-	<!-- ═══════════════════════════════════════ -->
-	<key>NSFaceIDUsageDescription</key>
-	<string>BlockStar Cypher can use Face ID for secure wallet authentication.</string>
-
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Cypher uses the local network to connect nearby devices without internet.</string>
-	<key>NSBonjourServices</key>
-	<array>
-	<string>_bscypher._tcp</string>
-	</array>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Cypher uses the microphone for walkie-talkie voice.</string>
+	<key>CFBundleURLTypes</key>
+   	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array><string>blockstarcypher</string></array>
+		</dict>
+   	</array>
 </dict>
 </plist>
