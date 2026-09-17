@@ -25,6 +25,7 @@ import {
 import { handleCallMissed } from '@/lib/missedCallService';
 import { useIncomingCallFromNotification, useMessageFromNotification } from '@/hooks/useIncomingCallFromNotification';
 import { Capacitor, registerPlugin } from '@capacitor/core';
+import { useNotificationPrompt } from '@/hooks/useNotificationPrompt';
 
 interface IncomingCallPlugin {
   setDebugUrl(options: { url: string }): Promise<{ success: boolean }>;
@@ -34,6 +35,7 @@ interface IncomingCallPlugin {
 }
 
 export default function MainLayout() {
+  useNotificationPrompt();
   const {
     currentUser,
     isAuthenticated,

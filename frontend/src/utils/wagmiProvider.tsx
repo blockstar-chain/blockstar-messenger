@@ -1,11 +1,5 @@
 "use client";
 // frontend/src/utils/wagmiProvider.tsx
-// FIX: on mobile (WalletConnect) there is no window.ethereum, so the old
-// switchToBlockStarChain()/addBlockStarChain() in blockchain.ts never ran and
-// wallets stayed on the wrong network. We now switch/add the chain through wagmi,
-// which works for BOTH injected (desktop) and WalletConnect (mobile) connectors,
-// and we trigger it automatically right after a wallet connects.
-
 import { WagmiProvider, createConfig } from "wagmi";
 import { switchChain } from "@wagmi/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -22,7 +16,7 @@ const metadata = {
 
 export const config = createConfig(
   getDefaultConfig({
-    chains: networks || [mainnet],
+    chains: networks,
     walletConnectProjectId: projectId || "",
     appName: metadata.name,
     enableAaveAccount: false,
@@ -33,8 +27,10 @@ export const config = createConfig(
 );
 
 /**
- * Ensure the connected wallet is on BlockStar Chain, adding it if the wallet
- * doesn't know it. Works over injected AND WalletConnect connectors.
+ * Switch the wallet to BlockStar Chain, adding it if unknown. Works over injected
+ * AND WalletConnect. CALL THIS ONLY right before an on-chain write that must run on
+ * BlockStar — NOT on connect (switching to an unsupported custom chain right after
+ * connect stops MetaMask from showing the signature prompt).
  */
 export async function ensureBlockStarChain(): Promise<void> {
   try {
@@ -48,7 +44,6 @@ export async function ensureBlockStarChain(): Promise<void> {
       },
     });
   } catch (e) {
-    // User may reject the add/switch; log but don't crash the connect flow.
     console.warn("ensureBlockStarChain: could not switch/add chain", e);
   }
 }
@@ -61,17 +56,13 @@ export const Web3Provider = ({ children }: { children: React.ReactNode }) => {
       <QueryClientProvider client={queryClient}>
         <ConnectKitProvider
           theme="midnight"
-          // As soon as a wallet connects (desktop or mobile), make sure it's on
-          // BlockStar Chain — this replaces the window.ethereum-only path.
-          onConnect={() => {
-            void ensureBlockStarChain();
-          }}
           options={{
-            initialChainId: blockstarNetwork.id,
-            // Only our chain is supported; don't nag with a "wrong network" wall
-            // before we've had a chance to switch.
+            // Connect + sign on mainnet (a chain wallets fully support) so the
+            // signature confirmation popup actually appears on iOS.
+            initialChainId: mainnet.id,
             enforceSupportedChains: false,
           }}
+          // NOTE: no onConnect chain switch. Do NOT auto-switch to BlockStar here.
         >
           {children}
         </ConnectKitProvider>

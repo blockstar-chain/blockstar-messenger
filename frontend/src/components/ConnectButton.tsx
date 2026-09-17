@@ -2,28 +2,28 @@
 
 /**
  * ConnectButton - Auto-switches between desktop and mobile/web
- * 
- * CRITICAL: This file REPLACES your existing ConnectButton.tsx
- * 
- * Make sure to:
- * 1. Delete or rename your old ConnectButton.tsx
- * 2. Clear build cache: rm -rf .next/ (or on Windows: rmdir /s .next)
- * 3. Rebuild: npm run build
+ *
+ * Desktop (Capacitor Electron build): uses `desktopWallet` (your custom
+ * WalletConnect/QR-based flow) because deep-link callbacks from a mobile
+ * wallet app back into an Electron window aren't reliable.
+ *
+ * Mobile (iOS/Android via Capacitor) & Web: uses ConnectKit, which handles
+ * deep links / in-app browser redirects correctly on those platforms.
  */
 
 import { trimAddress } from "@/utils/helpers";
 import { Wallet } from "lucide-react";
-import { useDesktopWallet, isDesktopApp } from "@/hooks/useDesktopWallet";
-import { useEffect, useState } from "react";
 import { ConnectKitButton } from "connectkit";
 
 interface ConnectButtonProps {
   className?: string;
-  isDesktop?: boolean,
-  desktopWallet: any,
-  address: any,
-  isConnected: any,
-  isConnecting: any
+  isDesktop?: boolean;
+  desktopWallet: {
+    open: () => void;
+  };
+  address?: string;
+  isConnected?: boolean;
+  isConnecting?: boolean;
 }
 
 export default function ConnectButton({
@@ -32,49 +32,43 @@ export default function ConnectButton({
   desktopWallet,
   address,
   isConnected,
-  isConnecting
-
-
+  isConnecting,
 }: ConnectButtonProps) {
+  // --- Desktop branch: fully separate login path ---
+  if (isDesktop) {
+    return (
+      <button
+        className={className}
+        onClick={() => desktopWallet.open()}
+        disabled={isConnecting}
+      >
+        {isConnected ? (
+          <>{trimAddress(address)}</>
+        ) : (
+          <>
+            <Wallet size={22} />
+            {isConnecting ? "Connecting..." : "Connect Wallet"}
+          </>
+        )}
+      </button>
+    );
+  }
 
-  // Reown/AppKit hooks (for mobile/web)
-
-
-
-  const handleClick = () => {
-
-    if (isDesktop) {
-      console.log('📱 Calling desktopWallet.open()...');
-      desktopWallet.open();
-    } else {
-      console.log('📱 Calling openAppKit()...');
-
-    }
-  };
-
-
-
+  // --- Mobile / Web branch: ConnectKit handles its own state ---
   return (
-    <>
-
-      <ConnectKitButton.Custom>
-        {({ isConnected, isConnecting, show, hide, address, ensName, chain }) => {
-          return (
-            <button className={className} onClick={show} >
-              {isConnected ? <>
-                {trimAddress(address)}
-              </> : <>
-                <Wallet size={22} />
-                Connect Wallet
-                {/* Debug indicator - remove in production */}
-                <span style={{ fontSize: '10px', marginLeft: '4px', opacity: 0.5 }}>
-                </span>
-              </>}
-            </button>
-          );
-        }}
-      </ConnectKitButton.Custom>
-    </>
-  )
-
+    <ConnectKitButton.Custom>
+      {({ isConnected: ckConnected, isConnecting: ckConnecting, show, address: ckAddress }) => (
+        <button className={className} onClick={show} disabled={ckConnecting}>
+          {ckConnected ? (
+            <>{trimAddress(ckAddress)}</>
+          ) : (
+            <>
+              <Wallet size={22} />
+              Connect Wallet
+            </>
+          )}
+        </button>
+      )}
+    </ConnectKitButton.Custom>
+  );
 }
