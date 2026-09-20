@@ -28,7 +28,7 @@ export default function AuthPage() {
 
   // Reown/wagmi (for mobile/web)
   const { address: appKitAddress } = useConnection();
-  const { signMessageAsync: wagmiSignMessage } = useSignMessage();
+  const signMessage = useSignMessage()
 
   // Detect platform
   useEffect(() => {
@@ -37,11 +37,6 @@ export default function AuthPage() {
 
   // Use appropriate address based on platform
   const address = isDesktop ? desktopWallet.address : appKitAddress;
-
-  // Use appropriate sign function based on platform
-  const signMessageAsync = isDesktop
-    ? desktopWallet.signMessageAsync
-    : wagmiSignMessage;
 
   const { setCurrentUser, setAuthenticated } = useAppStore();
   const [isConnecting, setIsConnecting] = useState(false);
@@ -79,8 +74,12 @@ export default function AuthPage() {
 
       // Initialize encryption with wallet-derived keys
       // This uses the platform-appropriate signMessageAsync
-      const signMessageFn = async (message: string) => {
-        return await signMessageAsync({ message });
+      const signMessageFn = async (message: string): Promise<string> => {
+        // Use the async variants and AWAIT them so the signature is actually returned.
+        // (signMessage.mutate is fire-and-forget and returns void — that was the bug.)
+        return isDesktop
+          ? await desktopWallet.signMessageAsync({ message })
+          : await signMessage.signMessageAsync({ message });
       };
 
       await encryptionService.initialize(address, signMessageFn);

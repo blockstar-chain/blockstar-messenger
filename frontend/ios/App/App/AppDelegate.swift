@@ -8,7 +8,7 @@ import AVFoundation
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate, PKPushRegistryDelegate, UNUserNotificationCenterDelegate {
 
-    var window: UIWindow?
+    
     
     // CallKit provider for incoming calls
     static var callKitProvider: CXProvider?
@@ -92,6 +92,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate, PKPushRegistryDelegate, U
                 UIApplication.shared.registerForRemoteNotifications()
             }
         }
+    }
+
+    func application(_ application: UIApplication,
+                     configurationForConnecting connectingSceneSession: UISceneSession,
+                     options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        return UISceneConfiguration(name: "Default Configuration",
+                                    sessionRole: connectingSceneSession.role)
     }
     
     // MARK: - PKPushRegistryDelegate (VoIP Push)
