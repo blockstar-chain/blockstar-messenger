@@ -84,18 +84,27 @@ export class BlockchainService {
         return null; // No NFT owned
       }
 
-      let response = await axios.get(`https://email-backend.blockstar.site/api/user/domains/primary/${address}`);
+      let response = await axios.get(`https://domains.blockstar.site/api/names?address=${address}`);
 
 
-      if (!response || !response.data || !response.data.success || !response.data.data) {
+      if (!response || !response.data || Number(response.data.count) <= 0) {
         return null;
       }
 
-      const tokenId = response.data.data?.tokenId;
-
+      
+      let primaryName = '';
       // Get token URI and metadata
-      const name = await this.nftContract.getPrimaryName(address);
+      let name = await this.nftContract.getPrimaryName(address);
+      if(!name[0] || !name[1]){
+        const getOwnedNames = await this.nftContract.getOwnedNames(address)
+        name = [getOwnedNames?.[0]?.[0] , getOwnedNames?.[1]?.[0]]
+      }
+      
 
+      if(!name || !name[0] || !name[1]){
+        return null;
+      }
+      let tokenId = await this.nftContract.nameToTokenId(name[0] , name[1])
 
       return {
         name: name[0]+"@"+name[1] || `@user${tokenId.toString()}`,
