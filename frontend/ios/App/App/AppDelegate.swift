@@ -172,6 +172,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate, PKPushRegistryDelegate, U
     // MARK: - Regular Push Notification Delegates
     
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        // REQUIRED: forward to the Capacitor PushNotifications plugin so its JS
+        // `registration` event fires and the token is POSTed to /api/push-token.
+        // Without this the token never reaches your backend and no push is sent.
+        NotificationCenter.default.post(
+            name: .capacitorDidRegisterForRemoteNotifications,
+            object: deviceToken
+        )
+
         let token = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
         print("📬 APNs Device Token: \(token)")
         
@@ -185,6 +193,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate, PKPushRegistryDelegate, U
     
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
         print("❌ Failed to register for remote notifications: \(error)")
+        NotificationCenter.default.post(
+            name: .capacitorDidFailToRegisterForRemoteNotifications,
+            object: error
+        )
     }
     
     // MARK: - UNUserNotificationCenterDelegate

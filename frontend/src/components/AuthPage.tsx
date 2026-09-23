@@ -17,26 +17,27 @@ import { saveUserSession } from '@/lib/persistentAuth';
 // Reown/wagmi hooks (for mobile/web)
 import { useConnection, useSignMessage } from 'wagmi';
 
-// Desktop wallet hook
-import { useDesktopWallet, isDesktopApp } from '@/hooks/useDesktopWallet';
+// Desktop wallet hook (Electron + iOS app on Mac)
+import { useDesktopWallet } from '@/hooks/useDesktopWallet';
+import { DesktopWaitingPanel } from './DesktopConnectModal';
 
 export default function AuthPage() {
-  const [isDesktop, setIsDesktop] = useState(false);
-
-  // Desktop wallet
+  // Desktop wallet (also performs platform detection)
   const desktopWallet = useDesktopWallet();
 
-  // Reown/wagmi (for mobile/web)
+  // null = still detecting; true = Electron or iOS app on Mac; false = phone/web
+  const isDesktop: boolean | null =
+    desktopWallet.platform === null ? null : desktopWallet.isDesktop;
+
+  // wagmi (mobile/web, and the QR option on desktop)
   const { address: appKitAddress } = useConnection();
-  const signMessage = useSignMessage()
+  const signMessage = useSignMessage();
 
-  // Detect platform
-  useEffect(() => {
-    setIsDesktop(isDesktopApp());
-  }, []);
-
-  // Use appropriate address based on platform
-  const address = isDesktop ? desktopWallet.address : appKitAddress;
+  // On desktop the user can connect through the browser flow OR the in-app QR,
+  // so use whichever is connected. Phones/web always use wagmi.
+  const address = isDesktop ? desktopWallet.address ?? appKitAddress : appKitAddress;
+  const connectedVia: 'desktop' | 'wagmi' =
+    isDesktop && desktopWallet.address ? 'desktop' : 'wagmi';
 
   const { setCurrentUser, setAuthenticated } = useAppStore();
   const [isConnecting, setIsConnecting] = useState(false);
@@ -75,11 +76,11 @@ export default function AuthPage() {
       // Initialize encryption with wallet-derived keys
       // This uses the platform-appropriate signMessageAsync
       const signMessageFn = async (message: string): Promise<string> => {
-        // Use the async variants and AWAIT them so the signature is actually returned.
-        // (signMessage.mutate is fire-and-forget and returns void — that was the bug.)
-        return isDesktop
+        // Await the async variant so the signature is actually returned
+        // (signMessage.mutate is fire-and-forget and returns void).
+        return connectedVia === 'desktop'
           ? await desktopWallet.signMessageAsync({ message })
-          : await signMessage.signMessageAsync({ message });
+          : await signMessage.mutateAsync({ message });
       };
 
       await encryptionService.initialize(address, signMessageFn);
@@ -212,7 +213,7 @@ export default function AuthPage() {
                 <h3 className="font-semibold text-white">Connect Wallet</h3>
                 <p className="text-sm text-secondary">
                   {isDesktop
-                    ? 'Connect MetaMask from your browser'
+                    ? 'BlockStar Wallet, a browser wallet, or your phone'
                     : 'Connect your Web3 wallet to get started'}
                 </p>
               </div>
@@ -241,7 +242,7 @@ export default function AuthPage() {
               <div className="flex-1">
                 <h3 className="font-semibold text-white">Initialize Encryption</h3>
                 <p className="text-sm text-secondary">
-                  {isDesktop
+                  {isDesktop && connectedVia === 'desktop'
                     ? 'Sign a message in your browser to set up encryption'
                     : 'Set up end-to-end encryption'}
                 </p>
@@ -259,15 +260,19 @@ export default function AuthPage() {
             isDesktop={isDesktop}
             desktopWallet={desktopWallet}
             address={address}
-            isConnected={isConnecting}
           />
         
 
-          {/* Desktop hint */}
-          {isDesktop && !address && (
-            <p className="text-xs text-center text-secondary mt-3">
-              💡 Your browser will open to connect MetaMask
-            </p>
+          {/* Desktop: signature step happens in the browser — show status + copy link */}
+          {isDesktop && desktopWallet.isSigning && (
+            <div className="mt-4 p-4 bg-dark-200 border border-midnight rounded-xl">
+              <DesktopWaitingPanel wallet={desktopWallet} mode="sign" />
+            </div>
+          )}
+
+          {/* Desktop: sign failed (e.g. wrong account) and flow reset */}
+          {isDesktop && !desktopWallet.isSigning && desktopWallet.error && currentStep === 'connect' && (
+            <p className="text-xs text-center text-red-400 mt-3">{desktopWallet.error}</p>
           )}
 
           {/* Info */}

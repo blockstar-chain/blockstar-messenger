@@ -1,28 +1,30 @@
 'use client';
 
 /**
- * ConnectButton - Auto-switches between desktop and mobile/web
+ * ConnectButton
  *
- * Desktop (Capacitor Electron build): uses `desktopWallet` (your custom
- * WalletConnect/QR-based flow) because deep-link callbacks from a mobile
- * wallet app back into an Electron window aren't reliable.
+ * Desktop (Electron, or the iOS app on a Mac): opens DesktopConnectModal with
+ *   BlockStar Wallet / Browser wallet / Mobile wallet (QR).
+ * Mobile + Web: ConnectKit modal (unchanged).
  *
- * Mobile (iOS/Android via Capacitor) & Web: uses ConnectKit, which handles
- * deep links / in-app browser redirects correctly on those platforms.
+ * While platform detection is still running, the button is shown disabled so the
+ * wrong modal can never flash open.
  */
 
-import { trimAddress } from "@/utils/helpers";
-import { Wallet } from "lucide-react";
-import { ConnectKitButton } from "connectkit";
+import React, { useState } from 'react';
+import { trimAddress } from '@/utils/helpers';
+import { Wallet } from 'lucide-react';
+import { ConnectKitButton, useModal } from 'connectkit';
+import DesktopConnectModal from './DesktopConnectModal';
+import type { DesktopWallet } from '@/hooks/useDesktopWallet';
 
 interface ConnectButtonProps {
   className?: string;
-  isDesktop?: boolean;
-  desktopWallet: {
-    open: () => void;
-  };
+  /** null while platform detection is still running */
+  isDesktop: boolean | null;
+  desktopWallet: DesktopWallet;
+  /** Address currently driving auth (desktop wallet or wagmi) */
   address?: string;
-  isConnected?: boolean;
   isConnecting?: boolean;
 }
 
@@ -31,30 +33,47 @@ export default function ConnectButton({
   isDesktop,
   desktopWallet,
   address,
-  isConnected,
   isConnecting,
 }: ConnectButtonProps) {
-  // --- Desktop branch: fully separate login path ---
-  if (isDesktop) {
+  const [modalOpen, setModalOpen] = useState(false);
+  const { setOpen: setConnectKitOpen } = useModal();
+
+  // Detection not finished yet
+  if (isDesktop === null) {
     return (
-      <button
-        className={className}
-        onClick={() => desktopWallet.open()}
-        disabled={isConnecting}
-      >
-        {isConnected ? (
-          <>{trimAddress(address)}</>
-        ) : (
-          <>
-            <Wallet size={22} />
-            {isConnecting ? "Connecting..." : "Connect Wallet"}
-          </>
-        )}
+      <button className={className} disabled>
+        <Wallet size={22} />
+        Loading…
       </button>
     );
   }
 
-  // --- Mobile / Web branch: ConnectKit handles its own state ---
+  // ─── Desktop ───
+  if (isDesktop) {
+    const busy = isConnecting || desktopWallet.isConnecting || desktopWallet.isSigning;
+    return (
+      <>
+        <button className={className} onClick={() => setModalOpen(true)} disabled={busy}>
+          {address ? (
+            <>{trimAddress(address)}</>
+          ) : (
+            <>
+              <Wallet size={22} />
+              {desktopWallet.isConnecting ? 'Connecting…' : 'Connect Wallet'}
+            </>
+          )}
+        </button>
+        <DesktopConnectModal
+          wallet={desktopWallet}
+          isOpen={modalOpen || desktopWallet.isConnecting}
+          onClose={() => setModalOpen(false)}
+          onUseQr={() => setConnectKitOpen(true)}
+        />
+      </>
+    );
+  }
+
+  // ─── Mobile / Web: ConnectKit ───
   return (
     <ConnectKitButton.Custom>
       {({ isConnected: ckConnected, isConnecting: ckConnecting, show, address: ckAddress }) => (

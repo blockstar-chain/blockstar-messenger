@@ -1,7 +1,7 @@
 // electron/main.js
 // Main process for Electron desktop app
 
-const { app, BrowserWindow, shell, ipcMain, Notification, protocol } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, Notification, protocol, clipboard } = require('electron');
 const path = require('path');
 const url = require('url');
 const fs = require('fs');
@@ -73,6 +73,18 @@ function createWindow() {
       console.error('Current directory:', __dirname);
       console.error('Parent directory contents:', fs.readdirSync(path.join(__dirname, '..')));
     }
+  }
+
+  // DevTools: F12 or Ctrl/Cmd+Shift+I. Enabled in dev, or in a packaged build when
+  // launched with CYPHER_DEBUG=1 (use this to diagnose wallet/platform detection).
+  if (isDev || process.env.CYPHER_DEBUG === '1') {
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+      const key = (input.key || '').toLowerCase();
+      if (input.type === 'keyDown' &&
+          (key === 'f12' || ((input.control || input.meta) && input.shift && key === 'i'))) {
+        mainWindow.webContents.toggleDevTools();
+      }
+    });
   }
 
   // Log loading errors for debugging
@@ -172,6 +184,12 @@ app.on('window-all-closed', () => {
 ipcMain.handle('wallet-open-browser', async (event, url) => {
   console.log('🔗 [Main] Opening browser:', url);
   try {
+    // Only allow web URLs and the BlockStar Browser scheme — never file:, custom
+    // handlers, etc. from the renderer.
+    const scheme = new URL(url).protocol;
+    if (!['https:', 'http:', 'blockstarbrowser:'].includes(scheme)) {
+      return { success: false, error: `Blocked URL scheme: ${scheme}` };
+    }
     await shell.openExternal(url);
     return { success: true };
   } catch (error) {
@@ -212,11 +230,12 @@ ipcMain.handle('wallet-start-server', async () => {
         const address = reqUrl.searchParams.get('address');
         const chainId = reqUrl.searchParams.get('chainId');
         const session = reqUrl.searchParams.get('session');
+        const rdns = reqUrl.searchParams.get('rdns') || '';
 
-        console.log('✅ [Main] Wallet connected:', { address, chainId, session });
+        console.log('✅ [Main] Wallet connected:', { address, chainId, session, rdns });
 
         if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('wallet-connected', { address, chainId, session });
+          mainWindow.webContents.send('wallet-connected', { address, chainId, session, rdns });
           mainWindow.focus();
         }
 
@@ -469,6 +488,43 @@ ipcMain.handle('wallet-stop-server', async () => {
   return { success: true };
 });
 
+
+// Open a URL inside BlockStar Browser (built-in BlockStar Wallet).
+// Uses the blockstarbrowser:// protocol registered by BlockStar Browser.
+ipcMain.handle('wallet-open-blockstar', async (event, targetUrl) => {
+  try {
+    if (new URL(targetUrl).protocol !== 'https:') {
+      return { success: false, installed: true, error: 'Only https URLs can be opened' };
+    }
+  } catch {
+    return { success: false, installed: true, error: 'Invalid URL' };
+  }
+
+  let handler = '';
+  try {
+    handler = app.getApplicationNameForProtocol('blockstarbrowser://');
+  } catch (e) {
+    handler = '';
+  }
+  if (!handler) {
+    console.log('🔗 [Main] BlockStar Browser not installed (no blockstarbrowser:// handler)');
+    return { success: false, installed: false };
+  }
+
+  try {
+    await shell.openExternal(`blockstarbrowser://open?url=${encodeURIComponent(targetUrl)}`);
+    console.log('🔗 [Main] Opened in BlockStar Browser via', handler);
+    return { success: true, installed: true };
+  } catch (error) {
+    return { success: false, installed: true, error: error.message };
+  }
+});
+
+// Clipboard (used by "Copy link"; navigator.clipboard is unreliable on file://)
+ipcMain.handle('clipboard-write', (event, text) => {
+  clipboard.writeText(String(text || ''));
+  return { success: true };
+});
 
 // Get app version
 ipcMain.handle('get-app-version', () => {

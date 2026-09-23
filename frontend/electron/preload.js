@@ -48,6 +48,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     console.log('[Preload] walletOpenBrowser called:', url);
     return ipcRenderer.invoke('wallet-open-browser', url);
   },
+
+  /**
+   * Open URL in BlockStar Browser (built-in BlockStar Wallet).
+   * Resolves { success, installed } — installed=false if BlockStar Browser isn't installed.
+   */
+  walletOpenBlockStar: (url) => ipcRenderer.invoke('wallet-open-blockstar', url),
+
+  /** Copy text to the system clipboard (used by "Copy link"). */
+  clipboardWrite: (text) => ipcRenderer.invoke('clipboard-write', text),
   
   /**
    * Start local callback server on port 47391

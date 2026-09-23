@@ -1329,11 +1329,11 @@ export default function Sidebar({
 
       // 2. Disconnect wallet - wrap in try/catch to handle network modal issues
       try {
-        if (isDesktop) {
-          await desktopWallet.disconnect();
-        }
-        else {
+        desktopWallet.disconnect();
+        try {
           await disconnect();
+        } catch (e) {
+          /* wagmi not connected — fine */
         }
       } catch (disconnectError) {
         console.warn('⚠️ Wallet disconnect error (may be network modal issue):', disconnectError);
