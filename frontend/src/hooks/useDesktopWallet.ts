@@ -36,9 +36,9 @@ import {
 // ═══════════════════════════════════════════════════════════════
 
 const AUTH_PAGE_URL =
-  process.env.NEXT_PUBLIC_WALLET_AUTH_URL || 'https://messenger.blockstar.world/wallet-auth.html';
+  process.env.NEXT_PUBLIC_WALLET_AUTH_URL || 'https://messenger.blockstar.world/walletauth';
 const SIGN_PAGE_URL =
-  process.env.NEXT_PUBLIC_WALLET_SIGN_URL || 'https://messenger.blockstar.world/wallet-sign.html';
+  process.env.NEXT_PUBLIC_WALLET_SIGN_URL || 'https://messenger.blockstar.world/walletsign';
 // Decimal chain id (was previously parsed as hex by mistake -> 21778).
 const DEFAULT_CHAIN_ID = parseInt(process.env.NEXT_PUBLIC_CHAIN_ID || '5512', 10) || 5512;
 
@@ -421,6 +421,7 @@ export function useDesktopWallet() {
         setPendingUrl(href);
         await openInTarget(href, target);
       } catch (e: any) {
+        console.log(e);
         setError(e?.message || 'Could not start wallet connection');
         await settle(false, e instanceof Error ? e : new Error(String(e)));
       }
