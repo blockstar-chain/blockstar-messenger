@@ -15,6 +15,22 @@ const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 let walletCallbackServer = null;
 const WALLET_CALLBACK_PORT = 47391;
 
+// ─── Diagnostics (why window.electronAPI is missing on Windows) ───
+// If "[Main diagnostics]" never appears in the DevTools console, the installed app is
+// NOT running this main.js (e.g. the CI build packs different Electron files).
+const MAIN_BUILD_TAG = 'cypher-main-v2-diag-2026-09-23';
+const PRELOAD_PATH = path.join(__dirname, 'preload.js');
+let lastPreloadError = null;
+
+function diagLog(line) {
+  try {
+    fs.appendFileSync(
+      path.join(app.getPath('userData'), 'cypher-main.log'),
+      `[${new Date().toISOString()}] ${line}\n`
+    );
+  } catch (e) { /* ignore */ }
+}
+
 // Register custom protocol before app is ready
 protocol.registerSchemesAsPrivileged([
   {
@@ -29,6 +45,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 function createWindow() {
+  diagLog(`createWindow: tag=${MAIN_BUILD_TAG} preload=${PRELOAD_PATH} exists=${fs.existsSync(PRELOAD_PATH)}`);
   // Create the browser window
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -38,7 +55,7 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js'),
+      preload: PRELOAD_PATH,
       webSecurity: true,
     },
     icon: path.join(__dirname, '../public/icon.png'),
@@ -86,6 +103,32 @@ function createWindow() {
       }
     });
   }
+
+  // Capture the real reason if the preload script fails to run
+  mainWindow.webContents.on('preload-error', (event, preloadPath, error) => {
+    lastPreloadError = `${preloadPath}: ${(error && error.stack) || error}`;
+    console.error('❌ [Main] Preload failed:', lastPreloadError);
+    diagLog('PRELOAD ERROR ' + lastPreloadError);
+  });
+
+  // After each page load, print diagnostics into the renderer's DevTools console
+  mainWindow.webContents.on('did-finish-load', () => {
+    const diag = {
+      tag: MAIN_BUILD_TAG,
+      electron: process.versions.electron,
+      platform: process.platform,
+      packaged: app.isPackaged,
+      dirname: __dirname,
+      preloadPath: PRELOAD_PATH,
+      preloadExists: fs.existsSync(PRELOAD_PATH),
+      preloadError: lastPreloadError,
+      logFile: path.join(app.getPath('userData'), 'cypher-main.log'),
+    };
+    diagLog('DIAG ' + JSON.stringify(diag));
+    mainWindow.webContents
+      .executeJavaScript(`console.log('[Main diagnostics]', ${JSON.stringify(JSON.stringify(diag, null, 2))})`)
+      .catch(() => {});
+  });
 
   // Log loading errors for debugging
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
