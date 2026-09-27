@@ -3,7 +3,8 @@
 
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import jsQR from 'jsqr';
 import {
   Radio,
   QrCode,
@@ -61,7 +62,16 @@ export default function MeshNetworkTab({
   const [scannedData, setScannedData] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [responseQR, setResponseQR] = useState('');
+  const [responseQRReady, setResponseQRReady] = useState(false);
   const [error, setError] = useState('');
+  const [cameraError, setCameraError] = useState('');
+  const [cameraStatus, setCameraStatus] = useState<'idle' | 'starting' | 'active' | 'denied' | 'unavailable'>('idle');
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const scanRafRef = useRef<number | null>(null);
+  const responseQRRef = useRef<HTMLDivElement>(null);
 
   // Initialize mesh service
   useEffect(() => {
@@ -101,30 +111,32 @@ export default function MeshNetworkTab({
     }
   };
 
-  // Process scanned QR
-  const handleProcessScan = async () => {
-    if (!scannedData.trim()) {
+  // Process scanned/pasted QR data (shared by camera auto-detect and manual paste)
+  const processQRData = async (data: string) => {
+    if (!data.trim()) {
       setError('Please enter QR data');
       return;
     }
 
     setIsProcessing(true);
     setError('');
-    
+
     try {
       // Check if it's an offer or answer
-      if (scannedData.includes('"t":"o"') || scannedData.includes('"t": "o"') || 
-          (scannedData.startsWith('BSM1:') && atob(scannedData.slice(5)).includes('"t":"o"'))) {
+      if (data.includes('"t":"o"') || data.includes('"t": "o"') ||
+          (data.startsWith('BSM1:') && atob(data.slice(5)).includes('"t":"o"'))) {
         // It's an offer, generate answer
-        const result = await meshNetworkService.processScannedOffer(scannedData);
+        const result = await meshNetworkService.processScannedOffer(data);
         if (result) {
           setResponseQR(result.qrData);
+          setResponseQRReady(true);
+          setScannedData('');
         } else {
           setError('Failed to process offer');
         }
       } else {
         // It's an answer
-        const success = await meshNetworkService.processScannedAnswer(scannedData);
+        const success = await meshNetworkService.processScannedAnswer(data);
         if (success) {
           setQrMode('none');
           setScannedData('');
@@ -139,6 +151,163 @@ export default function MeshNetworkTab({
       setIsProcessing(false);
     }
   };
+
+  // Manual "Process QR Data" button
+  const handleProcessScan = () => processQRData(scannedData);
+
+  // ------------------------------------------------------------------
+  // Camera scanning (getUserMedia + jsQR). jsQR is used instead of the
+  // browser BarcodeDetector API because BarcodeDetector isn't available on
+  // Safari/iOS/macOS, which was why "Scan QR" previously offered no camera
+  // option at all on those platforms.
+  // ------------------------------------------------------------------
+  const stopCamera = useCallback(() => {
+    if (scanRafRef.current !== null) {
+      cancelAnimationFrame(scanRafRef.current);
+      scanRafRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+  }, []);
+
+  const scanFrame = useCallback(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+
+    if (video && canvas && video.readyState === video.HAVE_ENOUGH_DATA) {
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (ctx) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        try {
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const code = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: 'attemptBoth',
+          });
+
+          if (code && code.data) {
+            stopCamera();
+            setCameraStatus('idle');
+            setScannedData(code.data);
+            void processQRData(code.data);
+            return;
+          }
+        } catch {
+          // Ignore transient decode errors and keep scanning
+        }
+      }
+    }
+
+    scanRafRef.current = requestAnimationFrame(scanFrame);
+  }, [stopCamera]);
+
+  const startCamera = useCallback(async () => {
+    setCameraError('');
+    setCameraStatus('starting');
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setCameraStatus('unavailable');
+      setCameraError('Camera not supported in this browser. Paste the QR data below instead.');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+      });
+      streamRef.current = stream;
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+
+      setCameraStatus('active');
+      scanRafRef.current = requestAnimationFrame(scanFrame);
+    } catch (err: any) {
+      if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
+        setCameraStatus('denied');
+        setCameraError('Camera access denied. Enable camera access in your browser/system settings, or paste the QR data below.');
+      } else if (err?.name === 'NotFoundError' || err?.name === 'DevicesNotFoundError') {
+        setCameraStatus('unavailable');
+        setCameraError('No camera found. Paste the QR data below instead.');
+      } else if (err?.name === 'NotReadableError' || err?.name === 'TrackStartError') {
+        setCameraStatus('unavailable');
+        setCameraError('Camera is in use by another app. Close it, then try again.');
+      } else if (err?.name === 'OverconstrainedError') {
+        // Retry without facingMode (common on desktop webcams)
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          streamRef.current = stream;
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            await videoRef.current.play();
+          }
+          setCameraStatus('active');
+          scanRafRef.current = requestAnimationFrame(scanFrame);
+        } catch {
+          setCameraStatus('unavailable');
+          setCameraError('Could not access camera. Paste the QR data below instead.');
+        }
+      } else {
+        setCameraStatus('unavailable');
+        setCameraError('Could not access camera. Paste the QR data below instead.');
+      }
+    }
+  }, [scanFrame]);
+
+  // Start the camera whenever we enter scan mode; stop it whenever we leave
+  // scan mode or the tab unmounts.
+  useEffect(() => {
+    if (qrMode === 'scan') {
+      setResponseQR('');
+      setResponseQRReady(false);
+      startCamera();
+    } else {
+      stopCamera();
+      setResponseQR('');
+      setResponseQRReady(false);
+    }
+    return () => stopCamera();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qrMode]);
+
+  // When a response QR is freshly generated, scroll it into view so the
+  // success isn't missed just because it renders below the fold.
+  useEffect(() => {
+    if (responseQRReady && responseQRRef.current) {
+      responseQRRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      const t = setTimeout(() => setResponseQRReady(false), 4000);
+      return () => clearTimeout(t);
+    }
+  }, [responseQRReady]);
+
+  // If a peer finishes connecting while we're still sitting on the
+  // Connect/Scan screen, jump back to the Peers list automatically. Without
+  // this, connectionState changes landed in the `peers` array (once
+  // onPeerChange fired) but nothing moved the user off the QR view, so it
+  // looked like nothing had happened until they closed and reopened the
+  // whole modal, which remounted the component and refetched the list.
+  const prevConnectedIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const currentConnectedIds = new Set(
+      peers.filter(p => p.connectionState === 'connected').map(p => p.id)
+    );
+    const justConnected = [...currentConnectedIds].some(id => !prevConnectedIdsRef.current.has(id));
+    prevConnectedIdsRef.current = currentConnectedIds;
+
+    if (justConnected && qrMode !== 'none') {
+      setQrMode('none');
+      setScannedData('');
+      setResponseQR('');
+      setResponseQRReady(false);
+      setActiveTab('peers');
+    }
+  }, [peers, qrMode]);
 
   // Copy QR data
   const handleCopyQR = () => {
@@ -504,20 +673,53 @@ export default function MeshNetworkTab({
             </button>
           </div>
 
-          {/* Camera placeholder - would need actual camera implementation */}
-          <div className="bg-gray-900 rounded-xl aspect-square flex items-center justify-center mb-4">
-            <div className="text-center">
-              <Camera className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-              <p className="text-gray-400 text-sm">Camera not available</p>
-              <p className="text-gray-500 text-xs">Paste QR data below</p>
-            </div>
+          {/* Live camera preview + QR auto-detect (falls back to paste below) */}
+          <div className="relative bg-gray-900 rounded-xl aspect-square flex items-center justify-center mb-4 overflow-hidden">
+            {(cameraStatus === 'denied' || cameraStatus === 'unavailable') ? (
+              <div className="text-center p-4">
+                <Camera className="w-12 h-12 text-gray-600 mx-auto mb-3" />
+                <p className="text-gray-400 text-sm mb-3">
+                  {cameraStatus === 'denied' ? 'Camera access needed' : 'Camera not available'}
+                </p>
+                <button
+                  onClick={startCamera}
+                  className="py-2 px-4 bg-purple-600 hover:bg-purple-700 rounded-lg text-white text-sm inline-flex items-center gap-2"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Try Again
+                </button>
+              </div>
+            ) : (
+              <>
+                <video
+                  ref={videoRef}
+                  className="w-full h-full object-cover"
+                  playsInline
+                  muted
+                />
+                <canvas ref={canvasRef} className="hidden" />
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="w-2/3 h-2/3 border-2 border-purple-500 rounded-2xl" />
+                </div>
+                {cameraStatus === 'starting' && (
+                  <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center">
+                    <Loader2 className="w-8 h-8 text-purple-400 animate-spin mb-2" />
+                    <p className="text-gray-300 text-sm">Requesting camera access…</p>
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           <div className="space-y-3">
+            {cameraError && (
+              <p className="text-yellow-400 text-xs text-center">{cameraError}</p>
+            )}
+
             <textarea
               value={scannedData}
               onChange={(e) => setScannedData(e.target.value)}
-              placeholder="Paste QR code data here..."
+              placeholder="Or paste QR code data here..."
               className="w-full h-24 bg-gray-700 rounded-lg p-3 text-white text-sm placeholder-gray-500 resize-none"
             />
             
@@ -546,7 +748,13 @@ export default function MeshNetworkTab({
 
           {/* Response QR */}
           {responseQR && (
-            <div className="mt-4 pt-4 border-t border-gray-700">
+            <div ref={responseQRRef} className="mt-4 pt-4 border-t border-gray-700">
+              {responseQRReady && (
+                <div className="mb-3 flex items-center gap-2 text-sm text-green-400 bg-green-500/10 border border-green-500/30 rounded-lg px-3 py-2">
+                  <CheckCircle className="w-4 h-4 flex-shrink-0" />
+                  <span>QR processed successfully — show this response to complete the connection.</span>
+                </div>
+              )}
               <h4 className="text-white font-medium mb-3">Your Response QR</h4>
               <p className="text-sm text-gray-400 mb-3">
                 Show this to the other person to complete the connection

@@ -68,7 +68,7 @@ export function initializeAPNs(): boolean {
         keyId: keyId,
         teamId: teamId,
       },
-      production: process.env.NODE_ENV === 'production',
+      production: process.env.APNS_PRODUCTION === 'true',
     });
 
     console.log('🍎 APNs Provider initialized');

@@ -667,6 +667,7 @@ class MeshNetworkService {
   async createConnectionOffer(): Promise<{ qrData: string; offer: ConnectionOffer }> {
     const peerConnection = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     const tempId = `pending_${Date.now()}`;
+    this.watchConnectionState(peerConnection, tempId);
 
     const iceCandidates: RTCIceCandidateInit[] = [];
 
@@ -727,6 +728,7 @@ class MeshNetworkService {
     const peerId = offer.peerInfo.walletAddress.toLowerCase();
 
     const peerConnection = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    this.watchConnectionState(peerConnection, peerId);
     const iceCandidates: RTCIceCandidateInit[] = [];
 
     peerConnection.onicecandidate = (event) => {
@@ -742,7 +744,13 @@ class MeshNetworkService {
     await peerConnection.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
 
     for (const candidate of offer.iceCandidates) {
-      await peerConnection.addIceCandidate(candidate);
+      try {
+        await peerConnection.addIceCandidate(candidate);
+      } catch (err) {
+        // Don't let one bad candidate abort the whole connection attempt —
+        // there are usually several candidates and only one needs to work.
+        console.warn('Skipping ICE candidate that failed to add:', err);
+      }
     }
 
     const sdpAnswer = await peerConnection.createAnswer();
@@ -789,6 +797,7 @@ class MeshNetworkService {
 
     this.discoveredPeers.set(peerId, peer);
     this.peerConnections.set(peerId, peerConnection);
+    this.notifyPeerChange(peer, 'discovered');
     this.notifyStatusChange();
 
     const qrDataResponse = this.encodeForQR(answer);
@@ -826,14 +835,34 @@ class MeshNetworkService {
       await peerConnection.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
 
       for (const candidate of answer.iceCandidates) {
-        await peerConnection.addIceCandidate(candidate);
+        try {
+          await peerConnection.addIceCandidate(candidate);
+        } catch (err) {
+          console.warn('Skipping ICE candidate that failed to add:', err);
+        }
       }
 
       // Move from pending to connected
       this.pendingConnections.delete(pendingId);
       this.peerConnections.set(peerId, peerConnection);
 
+      // The data channel was created in createConnectionOffer() and its
+      // onopen/onmessage/onclose handlers were bound to the temporary
+      // "pending_<timestamp>" id we used before we knew who'd scan the QR.
+      // Now that we know the real peer id, re-bind the channel's handlers
+      // to it — otherwise, when the channel opens, its onopen handler looks
+      // up a peer under the old temp id (which was never stored anywhere),
+      // finds nothing, and the peer here silently never gets marked
+      // 'connected' even though the underlying connection succeeded.
+      const dataChannel = this.dataChannels.get(pendingId);
+      if (dataChannel) {
+        this.dataChannels.delete(pendingId);
+        this.setupDataChannel(dataChannel, peerId);
+      }
+      this.watchConnectionState(peerConnection, peerId);
+
       // Store peer info
+      const alreadyOpen = dataChannel?.readyState === 'open';
       const peer: MeshPeer = {
         id: peerId,
         walletAddress: peerId,
@@ -842,10 +871,20 @@ class MeshNetworkService {
         distance: 0,
         lastSeen: Date.now(),
         connectionType: 'webrtc',
-        connectionState: 'connecting',
+        connectionState: alreadyOpen ? 'connected' : 'connecting',
       };
 
-      this.discoveredPeers.set(peerId, peer);
+      if (alreadyOpen) {
+        // Edge case: the channel finished opening in the brief window before
+        // we re-bound its handlers above, so onopen already fired (using the
+        // old temp id) and won't fire again. Place the peer directly into
+        // connectedPeers so the UI doesn't get stuck showing 'connecting'.
+        this.connectedPeers.set(peerId, peer);
+        this.notifyPeerChange(peer, 'connected');
+      } else {
+        this.discoveredPeers.set(peerId, peer);
+        this.notifyPeerChange(peer, 'discovered');
+      }
       this.notifyStatusChange();
 
       return true;
@@ -859,16 +898,45 @@ class MeshNetworkService {
   // QR ENCODING/DECODING
   // ============================================
 
+  // Ranks ICE candidates so the ones actually useful for connecting across
+  // different networks (relay, then server-reflexive) are kept ahead of
+  // local host candidates when we have to cap how many go into the QR code.
+  private candidatePriority(c: RTCIceCandidateInit): number {
+    const typ = /\styp\s+(\w+)/.exec(c.candidate || '')?.[1];
+    switch (typ) {
+      case 'relay': return 3;
+      case 'srflx': return 2;
+      case 'prflx': return 1;
+      case 'host':
+      default: return 0;
+    }
+  }
+
   private encodeForQR(data: ConnectionOffer): string {
     // Minify the data for smaller QR codes
     const minified = {
       t: data.type === 'offer' ? 'o' : 'a',
       s: this.minifySDP(data.sdp),
-      i: data.iceCandidates.slice(0, 3).map(c => ({
-        c: (c.candidate || '').replace('candidate:', '').slice(0, 100),
-        m: c.sdpMid,
-        l: c.sdpMLineIndex,
-      })),
+      // Prefer relay/srflx candidates over host ones (needed to punch
+      // through NAT between devices on different networks) rather than just
+      // keeping whichever candidates happened to be gathered first — ICE
+      // gathering has already fully completed by the time we get here, so
+      // this reorders the complete set rather than discarding late arrivals.
+      // Only a handful of candidates are kept: only one needs to actually
+      // work, and a bigger payload here means a denser, harder-to-scan QR
+      // code (a phone camera locking onto a QR code gets noticeably less
+      // reliable as the code gets larger/denser).
+      i: [...data.iceCandidates]
+        .sort((a, b) => this.candidatePriority(b) - this.candidatePriority(a))
+        .slice(0, 4)
+        .map(c => ({
+          // 150 chars comfortably covers real host/srflx/relay candidate
+          // lines (including extensions like generation/network-cost)
+          // without ballooning the QR payload.
+          c: (c.candidate || '').replace('candidate:', '').slice(0, 150),
+          m: c.sdpMid,
+          l: c.sdpMLineIndex,
+        })),
       p: {
         w: String(data.peerInfo.walletAddress || '').slice(2, 14),
         k: String(data.peerInfo.publicKey || '').slice(0, 24),
@@ -911,42 +979,127 @@ class MeshNetworkService {
   }
 
   private minifySDP(sdp: string): string {
-    // Remove unnecessary lines and shorten
-    return sdp
-      .split('\n')
-      .filter(line =>
-        line.startsWith('v=') ||
-        line.startsWith('o=') ||
-        line.startsWith('s=') ||
-        line.startsWith('t=') ||
-        line.startsWith('a=group') ||
-        line.startsWith('a=fingerprint') ||
-        line.startsWith('a=ice-ufrag') ||
-        line.startsWith('a=ice-pwd') ||
-        line.startsWith('m=application')
-      )
-      .join('\n')
-      .slice(0, 500);
+    // Previously this filtered SDP lines and then hard-truncated the result
+    // with `.slice(0, 500)`. That truncation could cut a line in half
+    // (e.g. leaving a partial "m=application" line), and restoreSDP() would
+    // then tack "a=setup:" / "a=mid:" / "a=sctp-port:" lines onto whatever
+    // fragment remained. The browser's SDP parser would reject the result
+    // ("Failed to execute 'setRemoteDescription' ... Invalid SDP line"),
+    // sometimes pointing at the appended a=sctp-port line itself since it
+    // no longer belonged to a valid m= section.
+    //
+    // Instead of shipping (a truncated copy of) the raw SDP text, we pull
+    // out only the handful of values that actually differ between peers and
+    // rebuild a known-good SDP template from them on the other end. This is
+    // both more robust (no way to produce invalid SDP) and more compact
+    // (smaller QR codes).
+    const ufrag = sdp.match(/a=ice-ufrag:(\S+)/)?.[1] || '';
+    const pwd = sdp.match(/a=ice-pwd:(\S+)/)?.[1] || '';
+    const fingerprint = sdp.match(/a=fingerprint:(\S+ \S+)/)?.[1] || '';
+    const setup = sdp.match(/a=setup:(\S+)/)?.[1] || 'actpass';
+    const mid = sdp.match(/a=mid:(\S+)/)?.[1] || '0';
+
+    return [ufrag, pwd, fingerprint, setup, mid].join('|');
   }
 
   private restoreSDP(minified: string): string {
-    // Add back required lines
-    let sdp = minified;
-    if (!sdp.includes('a=setup:')) {
-      sdp += '\na=setup:actpass';
-    }
-    if (!sdp.includes('a=mid:')) {
-      sdp += '\na=mid:0';
-    }
-    if (!sdp.includes('a=sctp-port:')) {
-      sdp += '\na=sctp-port:5000';
-    }
-    return sdp;
+    const [ufrag = '', pwd = '', fingerprint = '', setup = 'actpass', mid = '0'] =
+      minified.split('|');
+
+    // Rebuild a complete, valid, minimal SDP describing a single
+    // application (data channel) m-section. Building from a fixed template
+    // guarantees the browser can always parse it, regardless of how the
+    // original offer/answer SDP happened to be formatted.
+    const lines = [
+      'v=0',
+      `o=- ${Date.now()} 2 IN IP4 127.0.0.1`,
+      's=-',
+      't=0 0',
+      `a=group:BUNDLE ${mid}`,
+      'a=msid-semantic: WMS',
+      'm=application 9 UDP/DTLS/SCTP webrtc-datachannel',
+      'c=IN IP4 0.0.0.0',
+      'a=ice-options:trickle',
+      `a=ice-ufrag:${ufrag}`,
+      `a=ice-pwd:${pwd}`,
+      `a=fingerprint:${fingerprint}`,
+      `a=setup:${setup}`,
+      `a=mid:${mid}`,
+      'a=sctp-port:5000',
+      'a=max-message-size:262144',
+    ];
+
+    // WebRTC SDP is line-terminated with CRLF.
+    return lines.join('\r\n') + '\r\n';
   }
 
   // ============================================
   // DATA CHANNEL MANAGEMENT
   // ============================================
+
+  private connectionWatchTimeouts = new WeakMap<RTCPeerConnection, ReturnType<typeof setTimeout>>();
+
+  // Wires up diagnostic logging for a peer connection, and gives up after a
+  // generous timeout instead of leaving the UI showing "connecting" forever.
+  // Without this, an ICE failure (e.g. no viable path between the two
+  // networks — the most common cause is needing a TURN relay, since only
+  // STUN servers are configured) was completely silent: no error, no state
+  // change, just an infinite spinner.
+  //
+  // This can be called twice for the same RTCPeerConnection: once when it's
+  // first created (keyed by a temporary id, before we know who's connecting)
+  // and again once the real peer id is known. Each call cancels any timer
+  // from a previous call for the *same connection object* first, so the two
+  // calls don't race — the earlier version of this fired a stale 25s timeout
+  // (started the moment "Generate QR" was clicked) *before* the human had
+  // finished physically relaying the QR to the other device, which cleaned
+  // up state that the real-peer-id re-keying step needed.
+  private watchConnectionState(peerConnection: RTCPeerConnection, peerId: string): void {
+    // A QR offer/answer exchange is relayed by hand between two devices —
+    // generate, show, scan, generate a reply, scan/paste it back — which
+    // routinely takes well over a minute. Give it real room before giving up.
+    const CONNECT_TIMEOUT_MS = 120000;
+
+    const existingTimeout = this.connectionWatchTimeouts.get(peerConnection);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+    }
+
+    const timeoutId = setTimeout(() => {
+      if (peerConnection.connectionState !== 'connected') {
+        console.warn(
+          `⏱️ Connection to ${peerId} did not complete within ${CONNECT_TIMEOUT_MS / 1000}s ` +
+          `(iceConnectionState=${peerConnection.iceConnectionState}, connectionState=${peerConnection.connectionState}). ` +
+          `This usually means no direct or relayed path could be found between the two devices' networks — ` +
+          `a TURN server may be required in addition to STUN.`
+        );
+        this.handlePeerDisconnect(peerId);
+      }
+    }, CONNECT_TIMEOUT_MS);
+    this.connectionWatchTimeouts.set(peerConnection, timeoutId);
+
+    peerConnection.oniceconnectionstatechange = () => {
+      console.log(`🧊 ICE connection state for ${peerId}: ${peerConnection.iceConnectionState}`);
+      if (peerConnection.iceConnectionState === 'failed' || peerConnection.iceConnectionState === 'closed') {
+        clearTimeout(timeoutId);
+        this.handlePeerDisconnect(peerId);
+      }
+    };
+
+    peerConnection.onconnectionstatechange = () => {
+      console.log(`🔗 Connection state for ${peerId}: ${peerConnection.connectionState}`);
+      if (peerConnection.connectionState === 'connected') {
+        clearTimeout(timeoutId);
+      } else if (peerConnection.connectionState === 'failed' || peerConnection.connectionState === 'closed') {
+        clearTimeout(timeoutId);
+        this.handlePeerDisconnect(peerId);
+      }
+    };
+
+    peerConnection.onicecandidateerror = (event: any) => {
+      console.warn(`🧊 ICE candidate error for ${peerId}:`, event?.errorCode, event?.errorText, event?.url);
+    };
+  }
 
   private setupDataChannel(channel: RTCDataChannel, peerId: string): void {
     this.dataChannels.set(peerId, channel);
@@ -1296,12 +1449,14 @@ class MeshNetworkService {
   // ============================================
 
   private handlePeerDisconnect(peerId: string): void {
-    const peer = this.connectedPeers.get(peerId);
+    const peer = this.connectedPeers.get(peerId) || this.discoveredPeers.get(peerId);
 
     // Clean up connection
     this.dataChannels.delete(peerId);
     this.peerConnections.get(peerId)?.close();
     this.peerConnections.delete(peerId);
+    this.pendingConnections.get(peerId)?.close();
+    this.pendingConnections.delete(peerId);
 
     // Move back to discovered
     if (peer) {

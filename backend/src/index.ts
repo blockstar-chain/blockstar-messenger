@@ -885,7 +885,8 @@ app.get('/api/profile/resolve/:username', async (req, res) => {
 
     let profile = null;
     try {
-      profile = await profileResolver.resolveProfile(nftUsername);
+      // V3: Pass full username (with TLD) so resolver can extract name + tld
+      profile = await profileResolver.resolveProfile(username);
       console.log(`🔍 [Resolve] Profile result:`, profile ? `Found (wallet: ${profile.walletAddress})` : 'Not found');
     } catch (resolveError: any) {
       console.error('❌ [Resolve] Profile resolution error:', resolveError?.message || resolveError);
@@ -926,7 +927,8 @@ app.post('/api/profile/resolve/batch', async (req, res) => {
     }
 
     const nftUsernames = usernames.map(u => profileResolver.extractNftUsername(u));
-    const profiles = await profileResolver.resolveProfiles(nftUsernames);
+    // V3: Pass full usernames (with TLD) so resolver can extract name + tld
+    const profiles = await profileResolver.resolveProfiles(usernames);
 
     const results: Record<string, any> = {};
     profiles.forEach((profile, username) => {
@@ -971,7 +973,8 @@ app.post('/api/profile/resolve/wallets', async (req, res) => {
     if (usernamesMap.size > 0) {
       const usernames = Array.from(usernamesMap.keys());
       const nftUsernames = usernames.map(u => profileResolver.extractNftUsername(u));
-      const profiles = await profileResolver.resolveProfiles(nftUsernames);
+      // V3: Pass full usernames (with TLD) so resolver can extract name + tld
+      const profiles = await profileResolver.resolveProfiles(usernames);
 
       profiles.forEach((profile, username) => {
         const wallet = usernamesMap.get(username) || usernamesMap.get(username.toLowerCase());
@@ -991,7 +994,7 @@ app.post('/api/profile/resolve/wallets', async (req, res) => {
         results[wallet] = {
           profile: {
             username: user.username,
-            fullUsername: user.username.includes('@') ? user.username : `${user.username}@blockstar`,
+            fullUsername: user.username.includes('@') ? user.username : `${user.username}@${process.env.DEFAULT_TLD || 'bst'}`,
             walletAddress: user.wallet_address,
             avatar: null,
             records: {},
@@ -2235,6 +2238,35 @@ io.on('connection', (socket: Socket) => {
           console.error('Failed to queue offline message:', dbError);
         }
 
+                // Recipient is offline → send a push notification so they see the message.
+        try {
+          const tokens = await db.getPushTokens(recipientAddress);
+          console.log("push tokens" , tokens);
+          if (tokens && tokens.length) {
+            const senderName = (message.senderName as string) ||
+              `${address.slice(0, 6)}…${address.slice(-4)}`;
+            // SECURITY: messages are end-to-end encrypted — never put the content
+            // (which is ciphertext) in the notification. Show a generic body only.
+            const preview = 'Sent you a message';
+            for (const { push_token, platform } of tokens) {
+              try {
+                await pushService.sendMessageNotification(
+                  push_token,
+                  platform as 'ios' | 'android',
+                  senderName,
+                  preview,
+                  conversationId || ''
+                );
+              } catch (err) {
+                console.error(`Failed to send message push to ${platform}:`, err);
+              }
+            }
+            console.log(`📬 Message push sent to ${tokens.length} device(s) for ${recipientAddress}`);
+          }
+        } catch (pushErr) {
+          console.error('Failed to send message push:', pushErr);
+        }
+
         // Acknowledge to sender (will be delivered when recipient comes online)
         socket.emit('message:queued', {
           messageId: message.id,
@@ -2759,6 +2791,34 @@ io.on('connection', (socket: Socket) => {
             groupInfo  // group metadata
           );
           console.log(`   → Queued offline for ${recipientAddress}`);
+
+          // Push the offline group member (generic — never the encrypted content)
+          try {
+            const gTokens = await db.getPushTokens(recipientLower);
+            if (gTokens && gTokens.length) {
+              const senderName = (message.senderName as string) ||
+                `${address.slice(0, 6)}…${address.slice(-4)}`;
+              const groupName = (groupInfo && groupInfo.name) ? String(groupInfo.name) : '';
+              const body = groupName
+                ? `New message in ${groupName}`
+                : 'Sent a message to the group';
+              for (const { push_token, platform } of gTokens) {
+                try {
+                  await pushService.sendMessageNotification(
+                    push_token,
+                    platform as 'ios' | 'android',
+                    senderName,
+                    body,
+                    groupId
+                  );
+                } catch (err) {
+                  console.error(`Failed to send group message push to ${platform}:`, err);
+                }
+              }
+            }
+          } catch (pushErr) {
+            console.error('Failed to send group message push:', pushErr);
+          }
         }
       }
 

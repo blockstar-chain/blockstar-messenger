@@ -56,6 +56,7 @@
     "ogg-opus-decoder": "^1.7.5",
     "opus-recorder": "^8.0.5",
     "porto": "^0.2.37",
+    "jsqr": "^1.4.0",
     "qrcode": "^1.5.3",
     "qrcode.react": "^4.2.0",
     "react": "^18.2.0",

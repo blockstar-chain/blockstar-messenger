@@ -18,7 +18,7 @@ const RPC_URL = process.env.BLOCKCHAIN_RPC_URL || 'https://mainnet-rpc.blockstar
 const CONTRACT_ADDRESS = process.env.DOMAINS_CONTRACT_ADDRESS || '0x1E9248a78352150e8b2E7E728346EDd41A77FDeA';
 
 // BlockStar Domains V3 Contract ABI (minimal ABI for the methods we need)
-const DEFAULT_TLD = process.env.DEFAULT_TLD || 'blockstar';
+const DEFAULT_TLD = process.env.DEFAULT_TLD || 'bst';
 
 const CONTRACT_ABI = [
   // Get all records for a domain (V3: name + tld)
@@ -359,8 +359,8 @@ function parseRecords(
   metaImage: string
 ): BlockStarProfile {
   // Safely convert ethers Result objects to plain arrays
-  const keys: string[] = safeArrayFrom(records?.[0]);
-  const values: string[] = safeArrayFrom(records?.[1]);
+  const keys: string[] = safeArrayFrom(records?.keys || records?.[0]);
+  const values: string[] = safeArrayFrom(records?.values || records?.[1]);
   
   console.log(`🔍 Parsed ${keys.length} keys and ${values.length} values for ${domainName}.${tld}`);
   
