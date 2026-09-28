@@ -30,10 +30,15 @@ import {
   X,
   Copy,
   Camera,
+  ArrowLeft,
+  Lock,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
-import { meshNetworkService, MeshPeer, MeshNetworkStatus, MeshMessage } from '@/lib/mesh/MeshNetworkService';
+import { meshNetworkService, MeshPeer, MeshNetworkStatus } from '@/lib/mesh/MeshNetworkService';
 import MeshSettingsComponent from './MeshSettings';
+import { meshChat } from '@/lib/mesh/meshChat';
+import { startMeshTransports } from '@/lib/mesh/meshTransports';
+import WalkieTalkie from './WalkieTalkie';
 import { useAppStore } from '@/store';
 
 interface MeshNetworkTabProps {
@@ -53,7 +58,12 @@ export default function MeshNetworkTab({
 }: MeshNetworkTabProps) {
   const [status, setStatus] = useState<MeshNetworkStatus | null>(null);
   const [peers, setPeers] = useState<MeshPeer[]>([]);
-  const [messages, setMessages] = useState<MeshMessage[]>([]);
+  // Mesh chat (end-to-end encrypted; conversations live in meshChat for the session)
+  const [chatPeer, setChatPeer] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
+  const [, setChatVersion] = useState(0);
+  const chatEndRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<TabView>('overview');
   const [showSettings, setShowSettings] = useState(false);
   const [qrMode, setQrMode] = useState<'none' | 'generate' | 'scan'>('none');
@@ -77,14 +87,21 @@ export default function MeshNetworkTab({
   useEffect(() => {
     meshNetworkService.initialize(walletAddress, publicKey, username, avatar);
 
+    // Turn on the extra transports + walkie-talkie. Idempotent; each transport
+    // no-ops on platforms that don't support it (e.g. Wi-Fi Direct is Android-only).
+    void startMeshTransports({ username }).catch((e) =>
+      console.warn('[Mesh] Could not start extra transports:', e)
+    );
+
     // Subscribe to updates
     const unsubStatus = meshNetworkService.onStatusChange(setStatus);
     const unsubPeer = meshNetworkService.onPeerChange((peer, event) => {
       setPeers(meshNetworkService.getAllPeers());
     });
-    const unsubMessage = meshNetworkService.onMessage((message, peer) => {
-      setMessages(prev => [message, ...prev].slice(0, 100));
-    });
+    // Chat store keeps listening after this tab unmounts, so messages that arrive
+    // while the modal is closed aren't lost.
+    meshChat.start(walletAddress);
+    const unsubMessage = meshChat.subscribe(() => setChatVersion(v => v + 1));
 
     // Initial peer list
     setPeers(meshNetworkService.getAllPeers());
@@ -132,7 +149,7 @@ export default function MeshNetworkTab({
           setResponseQRReady(true);
           setScannedData('');
         } else {
-          setError('Failed to process offer');
+          setError(meshNetworkService.getLastQRError() || 'Failed to process offer');
         }
       } else {
         // It's an answer
@@ -142,7 +159,7 @@ export default function MeshNetworkTab({
           setScannedData('');
           setActiveTab('peers');
         } else {
-          setError('Failed to process answer');
+          setError(meshNetworkService.getLastQRError() || 'Failed to process answer');
         }
       }
     } catch (e: any) {
@@ -449,6 +466,12 @@ export default function MeshNetworkTab({
           </div>
         </div>
       )}
+
+      {/* Walkie-talkie: push-to-talk to everyone connected on the mesh */}
+      <div className="bg-gray-800/50 rounded-xl">
+        <h3 className="text-sm font-medium text-gray-300 px-4 pt-4">Walkie-talkie</h3>
+        <WalkieTalkie myAddress={walletAddress} myName={username} channel="main" />
+      </div>
     </div>
   );
 
@@ -491,7 +514,11 @@ export default function MeshNetworkTab({
                   </div>
                   <div className="flex items-center gap-2">
                     {getSignalIcon(peer)}
-                    <button className="p-2 hover:bg-gray-700 rounded-lg">
+                    <button
+                      onClick={() => openChat(peer.walletAddress)}
+                      className="p-2 hover:bg-gray-700 rounded-lg"
+                      aria-label={`Message ${peer.username || peer.walletAddress}`}
+                    >
                       <MessageSquare className="w-4 h-4 text-gray-400" />
                     </button>
                   </div>
@@ -775,44 +802,193 @@ export default function MeshNetworkTab({
     </div>
   );
 
+  // ─── Mesh chat helpers ───
+  const peerLabel = (addr: string) => {
+    const p = peers.find(x => x.walletAddress.toLowerCase() === addr.toLowerCase());
+    return p?.username || `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+  };
+  const isPeerConnected = (addr: string) =>
+    peers.some(p => p.walletAddress.toLowerCase() === addr.toLowerCase() && p.connectionState === 'connected');
+
+  const openChat = (addr: string) => {
+    setChatPeer(addr.toLowerCase());
+    setDraft('');
+    setActiveTab('messages');
+  };
+
+  const handleSend = async () => {
+    if (!chatPeer || !draft.trim() || sending) return;
+    const text = draft;
+    setDraft('');
+    setSending(true);
+    try {
+      await meshChat.send(chatPeer, text);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // Keep the newest message in view
+  useEffect(() => {
+    if (activeTab === 'messages' && chatPeer) {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  });
+
   // Render messages tab
-  const renderMessages = () => (
-    <div className="space-y-2">
-      {messages.length > 0 ? (
-        messages.map(msg => (
-          <div
-            key={msg.id}
-            className={`p-3 rounded-xl ${
-              msg.from === walletAddress.toLowerCase()
-                ? 'bg-purple-500/20 ml-8'
-                : 'bg-gray-800/50 mr-8'
-            }`}
-          >
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs text-gray-400">
-                {msg.from === walletAddress.toLowerCase() ? 'You' : msg.from.slice(0, 8)}
-              </span>
-              <span className="text-xs text-gray-500">
-                {new Date(msg.timestamp).toLocaleTimeString()}
-              </span>
-              {msg.hops.length > 1 && (
-                <span className="text-xs text-purple-400">
-                  ({msg.hops.length - 1} hops)
-                </span>
-              )}
+  const renderMessages = () => {
+    // ── Conversation view ──
+    if (chatPeer) {
+      const convo = meshChat.getConversation(chatPeer);
+      const online = isPeerConnected(chatPeer);
+      return (
+        <div className="flex flex-col -m-4" style={{ height: '62vh' }}>
+          <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-800">
+            <button
+              onClick={() => setChatPeer(null)}
+              className="p-1.5 hover:bg-gray-800 rounded-lg"
+              aria-label="Back to conversations"
+            >
+              <ArrowLeft className="w-4 h-4 text-gray-300" />
+            </button>
+            <div className="flex-1 min-w-0">
+              <p className="text-white font-medium truncate">{peerLabel(chatPeer)}</p>
+              <p className="text-xs flex items-center gap-1 text-gray-400">
+                <span className={`w-1.5 h-1.5 rounded-full ${online ? 'bg-green-400' : 'bg-gray-500'}`} />
+                {online ? 'Connected via mesh' : 'Not directly connected — will relay if a route exists'}
+              </p>
             </div>
-            <p className="text-white text-sm">{msg.content}</p>
           </div>
-        ))
-      ) : (
-        <div className="text-center py-8 text-gray-500">
-          <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-50" />
-          <p>No mesh messages yet</p>
-          <p className="text-xs">Messages sent via mesh will appear here</p>
+
+          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
+            <p className="text-[11px] text-gray-500 flex items-center justify-center gap-1 pb-1">
+              <Lock className="w-3 h-3" /> Messages are end-to-end encrypted
+            </p>
+            {convo.length === 0 && (
+              <p className="text-center text-sm text-gray-500 py-6">Say hello 👋</p>
+            )}
+            {convo.map(msg => (
+              <div key={msg.id} className={`flex ${msg.outgoing ? 'justify-end' : 'justify-start'}`}>
+                <div
+                  className={`max-w-[80%] px-3 py-2 rounded-2xl ${
+                    msg.outgoing ? 'bg-purple-500/25 rounded-br-md' : 'bg-gray-800/70 rounded-bl-md'
+                  }`}
+                >
+                  <p className="text-white text-sm whitespace-pre-wrap break-words">{msg.text}</p>
+                  <div className="flex items-center gap-1.5 mt-1 text-[10px] text-gray-400">
+                    <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    {msg.relays > 0 && <span className="text-purple-300">• via {msg.relays} relay{msg.relays > 1 ? 's' : ''}</span>}
+                    {msg.outgoing && msg.status === 'sending' && <span>• Sending…</span>}
+                    {msg.outgoing && msg.status === 'sent' && <CheckCircle className="w-3 h-3 text-green-400" />}
+                    {msg.outgoing && msg.status === 'queued' && <Clock className="w-3 h-3 text-yellow-400" />}
+                    {msg.status === 'failed' && <AlertCircle className="w-3 h-3 text-red-400" />}
+                    {!msg.encrypted && <span className="text-yellow-400">• Not encrypted</span>}
+                  </div>
+                  {msg.note && (
+                    <p className={`text-[10px] mt-0.5 ${msg.status === 'failed' ? 'text-red-400' : 'text-gray-400'}`}>
+                      {msg.note}
+                    </p>
+                  )}
+                </div>
+              </div>
+            ))}
+            <div ref={chatEndRef} />
+          </div>
+
+          <div className="flex items-center gap-2 px-3 py-3 border-t border-gray-800">
+            <input
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  void handleSend();
+                }
+              }}
+              placeholder="Type a message"
+              className="flex-1 min-w-0 bg-gray-800/70 border border-gray-700 rounded-xl px-3 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
+            />
+            <button
+              onClick={() => void handleSend()}
+              disabled={!draft.trim() || sending}
+              className="p-2.5 bg-purple-500 hover:bg-purple-600 disabled:opacity-40 rounded-xl"
+              aria-label="Send"
+            >
+              {sending ? <Loader2 className="w-4 h-4 text-white animate-spin" /> : <Send className="w-4 h-4 text-white" />}
+            </button>
+          </div>
         </div>
-      )}
-    </div>
-  );
+      );
+    }
+
+    // ── Conversation list ──
+    const conversations = meshChat.getConversations();
+    const connected = peers.filter(p => p.connectionState === 'connected');
+    const startable = connected.filter(p => !conversations.some(c => c.peer === p.walletAddress.toLowerCase()));
+
+    return (
+      <div className="space-y-4">
+        {conversations.length > 0 && (
+          <div className="space-y-2">
+            {conversations.map(c => (
+              <button
+                key={c.peer}
+                onClick={() => openChat(c.peer)}
+                className="w-full bg-gray-800/50 hover:bg-gray-800 rounded-xl p-3 flex items-center gap-3 text-left"
+              >
+                <div className="w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center flex-shrink-0">
+                  <User className="w-5 h-5 text-purple-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-white font-medium truncate">{peerLabel(c.peer)}</p>
+                    <span className="text-[10px] text-gray-500 flex-shrink-0">
+                      {new Date(c.last.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-400 truncate">
+                    {c.last.outgoing ? 'You: ' : ''}{c.last.text}
+                  </p>
+                </div>
+                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${isPeerConnected(c.peer) ? 'bg-green-400' : 'bg-gray-600'}`} />
+              </button>
+            ))}
+          </div>
+        )}
+
+        {startable.length > 0 && (
+          <div>
+            <h3 className="text-xs font-medium text-gray-400 mb-2">Start a chat</h3>
+            <div className="space-y-2">
+              {startable.map(p => (
+                <button
+                  key={p.walletAddress}
+                  onClick={() => openChat(p.walletAddress)}
+                  className="w-full bg-gray-800/30 hover:bg-gray-800 rounded-xl p-3 flex items-center gap-3 text-left"
+                >
+                  <User className="w-5 h-5 text-green-400" />
+                  <span className="text-white text-sm truncate flex-1">{peerLabel(p.walletAddress)}</span>
+                  <MessageSquare className="w-4 h-4 text-gray-400" />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {conversations.length === 0 && startable.length === 0 && (
+          <div className="text-center py-8 text-gray-500">
+            <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-50" />
+            <p>No mesh messages yet</p>
+            <p className="text-xs">Connect to someone nearby, then tap the message icon on their name</p>
+          </div>
+        )}
+
+        <p className="text-[11px] text-gray-500 flex items-center justify-center gap-1">
+          <Lock className="w-3 h-3" /> Mesh chats are end-to-end encrypted and kept until you close the app
+        </p>
+      </div>
+    );
+  };
 
   return (
     <div className="h-full flex flex-col">

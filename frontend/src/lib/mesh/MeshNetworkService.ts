@@ -937,10 +937,15 @@ class MeshNetworkService {
           m: c.sdpMid,
           l: c.sdpMLineIndex,
         })),
+      // Identity must be sent in FULL. Previously the address was cut to 12 hex
+      // chars (then zero-padded on decode -> a fake address, so messages were
+      // never delivered) and the public key to 24 chars (18 bytes -> "u coordinate
+      // of length 32 expected, got 18"). The QR is scanned in person, which also
+      // makes it the safest place to exchange the key.
       p: {
-        w: String(data.peerInfo.walletAddress || '').slice(2, 14),
-        k: String(data.peerInfo.publicKey || '').slice(0, 24),
-        u: String(data.peerInfo.username || '').slice(0, 12),
+        w: String(data.peerInfo.walletAddress || '').toLowerCase().replace(/^0x/, ''),
+        k: String(data.peerInfo.publicKey || '').replace(/=+$/, ''),
+        u: String(data.peerInfo.username || '').slice(0, 32),
       },
       e: Math.floor((data.expiresAt - Date.now()) / 1000),
     };
@@ -948,13 +953,39 @@ class MeshNetworkService {
     return 'BSM1:' + btoa(JSON.stringify(minified));
   }
 
+  /** Human-readable reason the last scanned QR code was rejected (or null). */
+  private lastQRError: string | null = null;
+
+  getLastQRError(): string | null {
+    return this.lastQRError;
+  }
+
   private decodeFromQR(qrData: string): ConnectionOffer | null {
+    this.lastQRError = null;
     try {
       if (!qrData.startsWith('BSM1:')) {
         return null;
       }
 
       const minified = JSON.parse(atob(qrData.slice(5)));
+
+      // Reject QR codes from older app versions (truncated identity) instead of
+      // creating a connection with a fake address and an unusable key.
+      const w = String(minified?.p?.w || '').toLowerCase();
+      let k = String(minified?.p?.k || '');
+      if (k.length % 4) k += '='.repeat(4 - (k.length % 4)); // restore base64 padding
+      let keyBytes = 0;
+      try {
+        keyBytes = atob(k).length;
+      } catch {
+        keyBytes = 0;
+      }
+      if (!/^[0-9a-f]{40}$/.test(w) || keyBytes !== 32) {
+        this.lastQRError =
+          'This QR code is from an older version of BlockStar Cypher. Please update the app on both phones and try again.';
+        console.error('QR identity invalid:', { addressChars: w.length, keyBytes });
+        return null;
+      }
 
       return {
         type: minified.t === 'o' ? 'offer' : 'answer',
@@ -965,8 +996,8 @@ class MeshNetworkService {
           sdpMLineIndex: c.l,
         })),
         peerInfo: {
-          walletAddress: '0x' + minified.p.w.padEnd(40, '0'),
-          publicKey: minified.p.k,
+          walletAddress: '0x' + w,
+          publicKey: k,
           username: minified.p.u,
         },
         timestamp: Date.now(),
@@ -1195,7 +1226,8 @@ class MeshNetworkService {
   async sendMessage(
     to: string,
     content: string,
-    type: MeshMessage['type'] = 'text'
+    type: MeshMessage['type'] = 'text',
+    opts: { encrypted?: boolean } = {}
   ): Promise<{ sent: boolean; queued: boolean; error?: string }> {
     const message: MeshMessage = {
       id: `${this.myWalletAddress}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -1206,7 +1238,8 @@ class MeshNetworkService {
       type,
       hops: [this.myWalletAddress],
       ttl: this.settings.maxHops,
-      encrypted: false, // TODO: Add encryption
+      // Text chat is end-to-end encrypted by meshChat.ts before it reaches here.
+      encrypted: !!opts.encrypted,
     };
 
     // Try direct send

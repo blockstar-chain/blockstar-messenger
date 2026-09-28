@@ -128,6 +128,12 @@ export class EncryptionService {
     await this.registerPublicKey();
   }
 
+
+  public isValidX25519PublicKey(b64?: string | null): b64 is string {
+    if (!b64) return false;
+    try { return base64ToUint8Array(b64.trim()).length === 32; } catch { return false; }
+  }
+
   /**
    * Derive DETERMINISTIC encryption keys from wallet signature
    * 
@@ -380,6 +386,8 @@ export class EncryptionService {
   ): Promise<{ encrypted: string; error?: string }> {
     // Fetch recipient's public key
     const recipientPublicKey = await this.fetchPublicKey(recipientAddress);
+
+    if (!this.isValidX25519PublicKey(recipientPublicKey)) throw new Error('Invalid public key');
     
     if (!recipientPublicKey) {
       return {
@@ -445,6 +453,9 @@ export class EncryptionService {
     }
   }
 
+
+  
+
   /**
    * Encrypt a message for a recipient using X25519 + AES-GCM
    * 
@@ -454,6 +465,7 @@ export class EncryptionService {
    * 3. Encrypt message with AES-GCM
    * 4. Prepend IV to ciphertext
    */
+  
   async encryptMessage(
     message: string,
     recipientPublicKey: string
@@ -465,8 +477,9 @@ export class EncryptionService {
     try {
       // Decode recipient's public key
       const recipientPubBytes = base64ToUint8Array(recipientPublicKey);
+      console.log('recipient key:', recipientPublicKey, 'bytes:', recipientPubBytes.length);
       
-      // Compute X25519 shared secret
+      // Compute X25519 shared secret 
       const sharedSecret = x25519.getSharedSecret(this.privateKey, recipientPubBytes);
       
       // Derive AES-256 key from shared secret using HKDF
