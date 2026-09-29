@@ -19,7 +19,7 @@ import { X, Star, Globe, Smartphone, Copy, Check, AlertTriangle, ExternalLink } 
 import type { DesktopWallet } from '@/hooks/useDesktopWallet';
 
 const BLOCKSTAR_BROWSER_DOWNLOAD_URL =
-  process.env.NEXT_PUBLIC_BLOCKSTAR_BROWSER_URL || 'https://blockstar.site';
+  process.env.NEXT_PUBLIC_BLOCKSTAR_BROWSER_URL || 'https://browser.blockstar.site';
 
 // ═══════════════════════════════════════════════════════════════
 // Waiting panel (connect or sign)
