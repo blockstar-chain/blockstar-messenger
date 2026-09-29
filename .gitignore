@@ -65,3 +65,11 @@ typechain-types/
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
+
+AuthKey_FS852U7B7B.p8
+CertificateSigningRequest.certSigningRequest
+Cypher_AppStore.mobileprovision
+distribution.cer
+GoogleService-Info.plist
+frontend/blockstar-cypher.keystore
+frontend/keystore_base64.txt

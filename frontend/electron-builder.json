@@ -3,12 +3,10 @@
   "appId": "com.blockstar.cypher",
   "productName": "BlockStar Cypher",
   "copyright": "Copyright © 2026 BlockStar",
-  
   "directories": {
     "output": "dist",
     "buildResources": "build"
   },
-  
   "files": [
     "electron/**/*",
     "out/**/*",
@@ -18,30 +16,27 @@
     "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
     "!**/node_modules/.bin"
   ],
-  
   "extraResources": [
     {
       "from": "public/",
       "to": "public/",
-      "filter": ["**/*"]
+      "filter": [
+        "**/*"
+      ]
     }
   ],
-
   "win": {
     "target": [
       {
         "target": "nsis",
-        "arch": ["x64"]
-      },
-      {
-        "target": "portable",
-        "arch": ["x64"]
+        "arch": [
+          "x64"
+        ]
       }
     ],
     "icon": "public/icon.ico",
     "artifactName": "${productName}-${version}-Windows.${ext}"
   },
-  
   "nsis": {
     "oneClick": false,
     "perMachine": false,
@@ -54,20 +49,21 @@
     "createStartMenuShortcut": true,
     "shortcutName": "BlockStar Cypher"
   },
-  
-  "portable": {
-    "artifactName": "${productName}-${version}-Portable.${ext}"
-  },
-
   "mac": {
     "target": [
       {
         "target": "dmg",
-        "arch": ["x64", "arm64"]
+        "arch": [
+          "x64",
+          "arm64"
+        ]
       },
       {
         "target": "zip",
-        "arch": ["x64", "arm64"]
+        "arch": [
+          "x64",
+          "arm64"
+        ]
       }
     ],
     "icon": "public/icon.icns",
@@ -78,7 +74,6 @@
     "entitlements": "build/entitlements.mac.plist",
     "entitlementsInherit": "build/entitlements.mac.plist"
   },
-  
   "dmg": {
     "contents": [
       {
@@ -97,27 +92,28 @@
       "height": 380
     }
   },
-
   "linux": {
     "target": [
       {
         "target": "AppImage",
-        "arch": ["x64"]
+        "arch": [
+          "x64"
+        ]
       },
       {
         "target": "deb",
-        "arch": ["x64"]
+        "arch": [
+          "x64"
+        ]
       }
     ],
     "icon": "public/icons",
     "category": "Network",
     "artifactName": "${productName}-${version}-Linux.${ext}"
   },
-  
   "appImage": {
     "artifactName": "${productName}-${version}.${ext}"
   },
-
   "publish": {
     "provider": "github",
     "owner": "your-org",
