@@ -83,6 +83,7 @@ class OpusEncoder implements VoiceEncoder {
       encoderSampleRate: 48000,
       encoderApplication: 2048, // OPUS_APPLICATION_VOIP
       encoderFrameSize: 20, // ms
+      encoderBitRate: 24000, // keep segments small for data-channel limits
       streamPages: false, // one complete Ogg (with headers) on stop
       // opus-recorder acquires the mic itself with these constraints:
       mediaTrackConstraints: {
@@ -133,13 +134,21 @@ async function getOpusDecoder(): Promise<any> {
   return sharedDecoder;
 }
 
-async function decodeOpus(bytes: Uint8Array): Promise<DecodedAudio> {
-  const decoder = await getOpusDecoder();
-  // ogg-opus-decoder keeps state across calls for a stream; for independent
-  // segments we reset so each self-contained Ogg decodes cleanly.
-  try { decoder.reset?.(); } catch {/* noop */}
-  const { channelData, sampleRate } = await decoder.decode(bytes);
-  return { channelData, sampleRate: sampleRate || 48000 };
+// Decodes must run one at a time: the shared wasm decoder is stateful.
+let decodeChain: Promise<unknown> = Promise.resolve();
+
+function decodeOpus(bytes: Uint8Array): Promise<DecodedAudio> {
+  const run = async (): Promise<DecodedAudio> => {
+    const decoder = await getOpusDecoder();
+    // Each segment is a COMPLETE Ogg/Opus file, so use decodeFile() (it flushes
+    // the last page and resets the decoder itself). decode() is the *streaming*
+    // call and holds data back until flush() -> silent/empty audio.
+    const { channelData, sampleRate } = await decoder.decodeFile(bytes);
+    return { channelData, sampleRate: sampleRate || 48000 };
+  };
+  const result = decodeChain.then(run, run);
+  decodeChain = result.catch(() => {});
+  return result;
 }
 
 // ============================================
@@ -208,9 +217,24 @@ class MediaRecorderEncoder implements VoiceEncoder {
 // PUBLIC FACTORY + PLAYBACK
 // ============================================
 
+let workerChecked = false;
+let workerOk = false;
+async function opusWorkerReachable(): Promise<boolean> {
+  if (workerChecked) return workerOk;
+  try {
+    const r = await fetch(OPUS_ENCODER_PATH, { method: 'GET' });
+    workerOk = r.ok;
+  } catch {
+    workerOk = false;
+  }
+  workerChecked = true;
+  if (!workerOk) console.warn('[voiceCodec] ' + OPUS_ENCODER_PATH + ' not found -> using MediaRecorder fallback');
+  return workerOk;
+}
+
 /** Create the best available encoder. Prefers cross-platform Opus. */
 export async function createEncoder(): Promise<VoiceEncoder> {
-  if (await opusSupported()) return new OpusEncoder();
+  if ((await opusSupported()) && (await opusWorkerReachable())) return new OpusEncoder();
   const mime = MediaRecorderEncoder.pickMime();
   if (!mime) throw new Error('No audio encoder available on this device');
   return new MediaRecorderEncoder(mime);
@@ -259,7 +283,7 @@ function schedulePcm(senderId: string, channelData: Float32Array[], sampleRate: 
 
   const channels = channelData.length || 1;
   const frames = channelData[0]?.length || 0;
-  if (frames === 0) return;
+  if (frames === 0) { console.warn('[voiceCodec] decoded 0 frames - nothing to play'); return; }
 
   const buffer = ctx.createBuffer(channels, frames, sampleRate);
   for (let c = 0; c < channels; c++) buffer.copyToChannel(channelData[c], c);

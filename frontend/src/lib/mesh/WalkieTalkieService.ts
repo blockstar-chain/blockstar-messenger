@@ -59,7 +59,7 @@ class WalkieTalkieService {
   private lastError: string | undefined;
 
   private encoder: VoiceEncoder | null = null;
-  private segmentMs = 0; // 0 = whole-utterance; >0 = near-live segments
+  private segmentMs = 2000; // >0 = short segments (keeps each data-channel message small)
   private segTimer: ReturnType<typeof setInterval> | null = null;
   private cutting = false;
   private seq = 0;
@@ -209,7 +209,9 @@ class WalkieTalkieService {
     };
     const payload = JSON.stringify(envelope);
     for (const peer of meshNetworkService.getConnectedPeers()) {
-      void meshNetworkService.sendMessage(peer.walletAddress, payload, 'voice');
+      void meshNetworkService.sendMessage(peer.walletAddress, payload, 'voice').then((r) => {
+        if (!r.sent) console.warn('[WalkieTalkie] send failed/queued for', peer.walletAddress, r);
+      });
     }
   }
 
