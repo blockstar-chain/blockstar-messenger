@@ -1200,12 +1200,13 @@ app.get('/api/conversations/:walletAddress', async (req, res) => {
 
         // Process lastMessage content for encrypted group messages
         let lastMessageContent = lastMessage?.content;
+        // For encrypted group messages, hand back THIS user's ciphertext so the
+        // client can decrypt the preview locally (server still can't read it).
+        let encryptedForMe: string | undefined;
         if (lastMessage && lastMessageContent === '__ENCRYPTED_GROUP__') {
           const msgAny = lastMessage as any;
           if (msgAny.encrypted_payloads && msgAny.encrypted_payloads[address]) {
-            // We have the user's encrypted payload, but can't decrypt on server
-            // Just indicate it's encrypted
-            lastMessageContent = '__ENCRYPTED_GROUP__';
+            encryptedForMe = msgAny.encrypted_payloads[address];
           }
         }
 
@@ -1224,7 +1225,9 @@ app.get('/api/conversations/:walletAddress', async (req, res) => {
           createdBy: convAny.created_by || '',
           lastMessage: lastMessage ? {
             id: lastMessage._id!.toString(),
+            clientId: lastMessage.client_id,
             content: lastMessageContent,
+            encryptedForMe,
             senderWallet: lastMessage.sender_wallet,
             timestamp: lastMessage.created_at.getTime(),
             type: lastMessage.message_type,
@@ -1768,6 +1771,57 @@ app.put('/api/groups/:groupId/avatar', async (req, res) => {
 });
 
 // ============================================
+// BLOCKING API
+// ============================================
+
+// List users blocked by walletAddress
+app.get('/api/blocks/:walletAddress', async (req, res) => {
+  try {
+    const blocks = await db.getBlockedUsers(req.params.walletAddress);
+    res.json({
+      success: true,
+      blocked: blocks.map(b => ({ walletAddress: b.blocked_wallet, blockedAt: b.created_at.getTime() })),
+    });
+  } catch (error) {
+    console.error('Error getting blocked users:', error);
+    res.status(500).json({ error: 'Failed to get blocked users' });
+  }
+});
+
+// Block a user
+app.post('/api/blocks', async (req, res) => {
+  try {
+    const { blockerWallet, blockedWallet } = req.body || {};
+    if (!blockerWallet || !blockedWallet) {
+      return res.status(400).json({ error: 'blockerWallet and blockedWallet are required' });
+    }
+    const ok = await db.blockUser(blockerWallet, blockedWallet);
+    if (!ok) return res.status(400).json({ error: 'Invalid block request' });
+
+    // If the blocked user is mid-ring with the blocker, nothing else to do here;
+    // future messages/calls are filtered in the socket handlers.
+    console.log(`🚫 ${blockerWallet.toLowerCase()} blocked ${blockedWallet.toLowerCase()}`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error blocking user:', error);
+    res.status(500).json({ error: 'Failed to block user' });
+  }
+});
+
+// Unblock a user
+app.delete('/api/blocks/:blockerWallet/:blockedWallet', async (req, res) => {
+  try {
+    const { blockerWallet, blockedWallet } = req.params;
+    await db.unblockUser(blockerWallet, blockedWallet);
+    console.log(`✅ ${blockerWallet.toLowerCase()} unblocked ${blockedWallet.toLowerCase()}`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error unblocking user:', error);
+    res.status(500).json({ error: 'Failed to unblock user' });
+  }
+});
+
+// ============================================
 // CONTACTS API
 // ============================================
 
@@ -2187,6 +2241,15 @@ io.on('connection', (socket: Socket) => {
 
       console.log(`Message from ${address} to ${recipientAddress}`);
 
+      // Blocked: recipient has blocked the sender. Drop silently — don't store,
+      // deliver, queue or push. The sender just sees the message as "sent"
+      // (single tick), so they can't tell they've been blocked.
+      if (await db.isBlocked(recipientAddress, address)) {
+        console.log(`🚫 Dropped message from ${address} — blocked by ${recipientAddress}`);
+        socket.emit('message:queued', { messageId: message.id, recipientAddress });
+        return;
+      }
+
       // Messages are sent as plaintext for reliable delivery
       const contentToStore = message.content;
 
@@ -2394,6 +2457,13 @@ io.on('connection', (socket: Socket) => {
       const recipient = recipientAddress.toLowerCase();
       const recipientSocketId = activeConnections.get(recipient);
       const finalCallId = callId || `${address}-${recipient}-${Date.now()}`;
+
+      // Blocked: behave like the recipient is unreachable (no ring, no push)
+      if (await db.isBlocked(recipient, address)) {
+        console.log(`🚫 Call from ${address} suppressed — blocked by ${recipient}`);
+        socket.emit('call:unavailable', { callId: finalCallId, recipientAddress: recipient, reason: 'offline' });
+        return;
+      }
 
       console.log('Call initiated:', {
         from: address,
@@ -2746,15 +2816,21 @@ io.on('connection', (socket: Socket) => {
       // For encrypted group messages, we store a marker and send individual payloads
       const isEncrypted = message.content === '__ENCRYPTED_GROUP__' && message.encryptedPayloads;
 
-      // Save message to database (store encrypted marker or plain text)
-      await db.saveMessage(
-        groupId,
-        address,
-        message.content,
-        message.type || 'text',
-        message.id,
-        isEncrypted ? message.encryptedPayloads : undefined // Store encrypted payloads
-      );
+      // Save message to database (store encrypted marker or plain text).
+      // A DB failure must NEVER block live delivery / push to the other members —
+      // that's exactly what caused group messages to arrive with no alert.
+      try {
+        await db.saveMessage(
+          groupId,
+          address,
+          message.content,
+          message.type || 'text',
+          message.id,
+          isEncrypted ? message.encryptedPayloads : undefined // Store encrypted payloads
+        );
+      } catch (dbErr) {
+        console.error(`Failed to save group message ${message.id} (continuing with delivery):`, dbErr);
+      }
 
       // Forward to all recipients with their specific encrypted content
       for (const recipientAddress of recipients) {

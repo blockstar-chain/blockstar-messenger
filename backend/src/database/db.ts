@@ -21,6 +21,18 @@ let sessionsCollection: Collection;
 let filesCollection: Collection;
 let contactsCollection: Collection;
 let pushTokensCollection: Collection;
+let blocksCollection: Collection;
+
+// Conversation IDs come in two shapes:
+//   - direct chats: a 24-char Mongo ObjectId hex string
+//   - groups: a client-generated string like "group_1791097179669_lvpsje95n"
+// `new ObjectId("group_...")` throws, so always build the filter through this helper.
+function conversationFilter(conversationId: string): Record<string, any> {
+  if (/^[0-9a-fA-F]{24}$/.test(conversationId)) {
+    return { $or: [{ _id: new ObjectId(conversationId) }, { group_id: conversationId }] };
+  }
+  return { group_id: conversationId };
+}
 
 // ============================================
 // DATABASE CONNECTION
@@ -41,6 +53,7 @@ export async function initializeDatabase(): Promise<boolean> {
     sessionsCollection = db.collection('sessions');
     filesCollection = db.collection('files');
     contactsCollection = db.collection('contacts');
+    blocksCollection = db.collection('blocks');
     pushTokensCollection = db.collection('push_tokens');
 
     // Create indexes for performance
@@ -80,6 +93,10 @@ async function createIndexes(): Promise<void> {
     // Contacts indexes
     await contactsCollection.createIndex({ owner_wallet: 1, contact_wallet: 1 }, { unique: true });
     await contactsCollection.createIndex({ owner_wallet: 1 });
+
+    // Blocks
+    await blocksCollection.createIndex({ blocker_wallet: 1, blocked_wallet: 1 }, { unique: true });
+    await blocksCollection.createIndex({ blocker_wallet: 1 });
 
     // Push tokens indexes
     await pushTokensCollection.createIndex({ wallet_address: 1 });
@@ -476,10 +493,15 @@ export async function saveMessage(
   message._id = result.insertedId;
 
   // Update conversation timestamp
-  await conversationsCollection.updateOne(
-    { _id: new ObjectId(conversationId) },
-    { $set: { updated_at: now } }
-  );
+  // Never let a timestamp bump break message delivery
+  try {
+    await conversationsCollection.updateOne(
+      conversationFilter(conversationId),
+      { $set: { updated_at: now } }
+    );
+  } catch (err) {
+    console.warn('saveMessage: could not bump conversation updated_at for', conversationId, err);
+  }
 
   return message;
 }
@@ -635,9 +657,13 @@ export async function getMessageById(
   messageId: string
 ): Promise<{ senderId: string; conversationId: string; content: string } | null> {
   try {
-    const message = await messagesCollection.findOne({
-      _id: new ObjectId(messageId)
-    }) as DBMessage | null;
+    // Clients send their own IDs (e.g. "1791097221134-8re5k2bfu"), so look up client_id first
+    let message = await messagesCollection.findOne({ client_id: messageId }) as DBMessage | null;
+    if (!message && /^[0-9a-fA-F]{24}$/.test(messageId)) {
+      message = await messagesCollection.findOne({
+        _id: new ObjectId(messageId)
+      }) as DBMessage | null;
+    }
 
     if (!message) return null;
 
@@ -825,7 +851,7 @@ export async function deleteConversation(conversationId: string): Promise<void> 
   try {
     // Try to delete by ObjectId first, then by string id
     try {
-      await conversationsCollection.deleteOne({ _id: new ObjectId(conversationId) });
+      await conversationsCollection.deleteOne(conversationFilter(conversationId));
     } catch {
       await conversationsCollection.deleteOne({ _id: conversationId } as any);
     }
@@ -1630,6 +1656,57 @@ export interface PushToken {
 /**
  * Save or update a push token for a user
  */
+// ============================================
+// BLOCKING
+// ============================================
+
+export interface DBBlock {
+  blocker_wallet: string;
+  blocked_wallet: string;
+  created_at: Date;
+}
+
+export async function blockUser(blockerWallet: string, blockedWallet: string): Promise<boolean> {
+  const blocker = blockerWallet.toLowerCase();
+  const blocked = blockedWallet.toLowerCase();
+  if (!blocker || !blocked || blocker === blocked) return false;
+  await blocksCollection.updateOne(
+    { blocker_wallet: blocker, blocked_wallet: blocked },
+    { $setOnInsert: { blocker_wallet: blocker, blocked_wallet: blocked, created_at: new Date() } },
+    { upsert: true }
+  );
+  return true;
+}
+
+export async function unblockUser(blockerWallet: string, blockedWallet: string): Promise<boolean> {
+  const result = await blocksCollection.deleteOne({
+    blocker_wallet: blockerWallet.toLowerCase(),
+    blocked_wallet: blockedWallet.toLowerCase(),
+  });
+  return result.deletedCount > 0;
+}
+
+export async function getBlockedUsers(blockerWallet: string): Promise<DBBlock[]> {
+  return (await blocksCollection
+    .find({ blocker_wallet: blockerWallet.toLowerCase() })
+    .sort({ created_at: -1 })
+    .toArray()) as unknown as DBBlock[];
+}
+
+/** True if `blockerWallet` has blocked `blockedWallet`. Fails open (false) on DB errors. */
+export async function isBlocked(blockerWallet: string, blockedWallet: string): Promise<boolean> {
+  try {
+    const hit = await blocksCollection.findOne(
+      { blocker_wallet: blockerWallet.toLowerCase(), blocked_wallet: blockedWallet.toLowerCase() },
+      { projection: { _id: 1 } }
+    );
+    return !!hit;
+  } catch (err) {
+    console.error('isBlocked check failed:', err);
+    return false;
+  }
+}
+
 export async function savePushToken(tokenData: PushToken): Promise<boolean> {
   const normalizedAddress = tokenData.wallet_address.toLowerCase();
 
@@ -1726,6 +1803,10 @@ export default {
   updateGroupAvatar,
   // Message operations
   saveMessage,
+  blockUser,
+  unblockUser,
+  getBlockedUsers,
+  isBlocked,
   getMessages,
   getMessageById,
   markMessageDelivered,

@@ -8,13 +8,14 @@ import { encryptionService } from '@/lib/encryption';
 import { voiceMessageService } from '@/lib/voice-message-service';
 import { notificationService } from '@/lib/notifications';
 import { Message, Conversation } from '@/types';
-import { Send, Phone, Video, MoreVertical, Menu, Paperclip, Mic, MicOff, Lock, LockOpen, Search, X, Bell, BellOff, Smile, Check, CheckCheck, Trash2, Shield, ShieldAlert, MessageSquare, Users, RefreshCw, Settings, UserPlus, VolumeX, Volume2, ChevronLeft } from 'lucide-react';
+import { Send, Phone, Video, MoreVertical, Menu, Paperclip, Mic, MicOff, Lock, LockOpen, Search, X, Bell, BellOff, Smile, Check, CheckCheck, Trash2, Shield, ShieldAlert, MessageSquare, Users, RefreshCw, Settings, UserPlus, VolumeX, Volume2, ChevronLeft, Ban } from 'lucide-react';
 import { generateMessageId, generateConversationId, formatMessageTime, truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
 import { resolveProfile, getProfileByWallet, type BlockStarProfile } from '@/lib/profileResolver';
 import toast from 'react-hot-toast';
 import EmojiPicker from './EmojiPicker';
 import GroupSettingsModal from './GroupSettingsModal';
 import UserProfileModal from './UserProfileModal';
+import { useBlockStore } from '@/store/blockStore';
 import { addToContacts, isContact } from './ContactsSection';
 import { isConversationDeleted, removeFromDeletedConversations } from './Sidebar';
 
@@ -164,6 +165,27 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
   const otherParticipant = !isGroupChat ? activeConversation?.participants.find(
     (p) => p.toLowerCase() !== currentUser?.walletAddress.toLowerCase()
   )?.toLowerCase() : null;
+
+  // Blocking (direct chats only)
+  const blockedList = useBlockStore((st) => st.blocked);
+  const isOtherBlocked = !!otherParticipant && blockedList.some((b) => b.walletAddress === otherParticipant);
+
+  const handleToggleBlock = async () => {
+    if (!currentUser || !otherParticipant) return;
+    setShowChatMenu(false);
+    const store = useBlockStore.getState();
+    if (isOtherBlocked) {
+      const ok = await store.unblock(currentUser.walletAddress, otherParticipant);
+      ok ? toast.success('User unblocked') : toast.error('Could not unblock user');
+      return;
+    }
+    const confirmed = window.confirm(
+      "Block this user?\n\nThey won't be able to message or call you. They won't be told they've been blocked."
+    );
+    if (!confirmed) return;
+    const ok = await store.block(currentUser.walletAddress, otherParticipant);
+    ok ? toast.success('User blocked') : toast.error('Could not block user');
+  };
 
   // Display profile - check cache as fallback if state is null
   // This ensures we show @name even if the state wasn't updated when cache was populated
@@ -613,6 +635,17 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         if (message.senderId.toLowerCase() === currentUser?.walletAddress.toLowerCase()) {
           console.log('Skipping own message:', message.id);
           // Don't cache encrypted content - we'll decrypt it when loading
+          return;
+        }
+
+        // Drop direct messages from users we've blocked. Group messages still show
+        // (same behaviour as WhatsApp/Signal — you can't silence one member of a group).
+        if (
+          !message.conversationId?.startsWith('group_') &&
+          !Array.isArray(message.recipientId) &&
+          useBlockStore.getState().isBlocked(message.senderId)
+        ) {
+          console.log('🚫 Ignoring message from blocked user:', message.senderId);
           return;
         }
 
@@ -1764,6 +1797,11 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
     // For direct calls, require otherParticipant
     if (!isGroup && !otherParticipant) return;
 
+    if (!isGroup && isOtherBlocked) {
+      toast.error('Unblock this user to call them');
+      return;
+    }
+
     try {
       console.log('========================================');
       console.log('INITIATING CALL');
@@ -2191,6 +2229,15 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                     Retry Decryption
                   </button>
                   <div className="border-t border-midnight my-1"></div>
+                  {!isGroupChat && otherParticipant && (
+                    <button
+                      onClick={handleToggleBlock}
+                      className="w-full px-4 py-3 text-left text-sm text-danger-500 hover:bg-danger-500/10 flex items-center gap-3 transition active:bg-danger-500/20"
+                    >
+                      <Ban size={16} />
+                      {isOtherBlocked ? 'Unblock User' : 'Block User'}
+                    </button>
+                  )}
                   <button
                     onClick={handleClearChat}
                     className="w-full px-4 py-3 text-left text-sm text-danger-500 hover:bg-danger-500/10 flex items-center gap-3 transition active:bg-danger-500/20"
@@ -2783,6 +2830,18 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt"
         />
 
+        {isOtherBlocked ? (
+          <div className="flex flex-col md:flex-row items-center justify-center gap-2 md:gap-4 py-1 text-sm text-secondary">
+            <span className="flex items-center gap-2"><Ban size={16} className="text-danger-500" /> You blocked this user.</span>
+            <button
+              type="button"
+              onClick={handleToggleBlock}
+              className="px-4 py-1.5 rounded-lg bg-dark-200 hover:bg-dark-100 text-white transition"
+            >
+              Unblock
+            </button>
+          </div>
+        ) : (
         <form onSubmit={handleSendMessage} className="flex items-center gap-2 md:gap-3">
           <button
             type="button"
@@ -2858,6 +2917,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
             <Send size={20} />
           </button>
         </form>
+        )}
       </div>
 
       {/* Group Settings Modal */}

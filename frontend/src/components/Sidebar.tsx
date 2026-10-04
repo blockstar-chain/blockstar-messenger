@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useAppStore } from '@/store';
 import { db, dbHelpers } from '@/lib/database';
 import { Conversation } from '@/types';
-import { Search, Plus, Settings, LogOut, X, MessageSquarePlus, Lock, ExternalLink, Globe, Mail, Twitter, MessageSquare, Trash2, Users, ExternalLinkIcon, BookUser, Radio, RefreshCw, Bell, Volume2 } from 'lucide-react';
+import { Search, Plus, Settings, LogOut, X, MessageSquarePlus, Lock, ExternalLink, Globe, Mail, Twitter, MessageSquare, Trash2, Users, ExternalLinkIcon, BookUser, Radio, RefreshCw, Bell, Volume2, Ban } from 'lucide-react';
 import { truncateAddress, formatTimestamp, getInitials, getAvatarColor, generateConversationId } from '@/utils/helpers';
 import { blockchainService } from '@/lib/blockchain';
 import { resolveProfile, resolveProfilesByWallets, getProfileByWallet, type BlockStarProfile } from '@/lib/profileResolver';
@@ -23,6 +23,8 @@ import MeshSettingsSection from './MeshSettingsSection';
 import MeshSettingsComponent from './MeshSettings';
 import NotificationSettingsPanel from './NotificationSettings';
 import RingtoneSettingsPanel from './RingtoneSettings';
+import BlockedUsersSettings from './BlockedUsersSettings';
+import { useBlockStore } from '@/store/blockStore';
 import { unregisterPushNotifications } from '@/lib/pushNotifications';
 import { clearUserSession } from '@/lib/persistentAuth';
 import IncomingCallModal from './IncomingCallModal';
@@ -119,6 +121,18 @@ export default function Sidebar({
   isMobile = false,
 }: SidebarProps) {
   const { currentUser, conversations, setActiveConversation, activeConversationId, setConversations, addConversation, setActiveCall, setCallModalOpen } = useAppStore();
+
+  // Load this account's block list (drives Block/Unblock UI + client-side filtering)
+  useEffect(() => {
+    const wallet = currentUser?.walletAddress?.toLowerCase();
+    if (!wallet) {
+      useBlockStore.getState().reset();
+      return;
+    }
+    if (useBlockStore.getState().owner !== wallet) {
+      useBlockStore.getState().load(wallet);
+    }
+  }, [currentUser?.walletAddress]);
   const [searchQuery, setSearchQuery] = useState('');
   const [filteredConversations, setFilteredConversations] = useState<Conversation[]>([]);
 
@@ -889,6 +903,39 @@ export default function Sidebar({
 
               // Check if we already have this conversation locally by ID
               let existingLocal = allConversations.find(c => c.id === serverConv.id);
+
+              // Encrypted group previews: decrypt this user's payload locally so the
+              // chat list shows the real text instead of "🔒 Encrypted message".
+              if (
+                serverConv.lastMessage &&
+                serverConv.lastMessage.content === '__ENCRYPTED_GROUP__'
+              ) {
+                const localLast: any = existingLocal?.lastMessage;
+                if (localLast && serverConv.lastMessage.clientId && localLast.id === serverConv.lastMessage.clientId
+                    && localLast.content && localLast.content !== '__ENCRYPTED_GROUP__') {
+                  // We already have this exact message decrypted locally
+                  serverConv.lastMessage.content = localLast.content;
+                } else if (
+                  serverConv.lastMessage.encryptedForMe &&
+                  (!serverConv.lastMessage.type || serverConv.lastMessage.type === 'text')
+                ) {
+                  try {
+                    const { decrypted, decryptionFailed } = await encryptionService.decryptFromSender(
+                      serverConv.lastMessage.encryptedForMe,
+                      serverConv.lastMessage.senderWallet
+                    );
+                    if (!decryptionFailed && decrypted) {
+                      serverConv.lastMessage.content = decrypted;
+                    }
+                  } catch {
+                    // leave the marker — Sidebar renders it as "🔒 Encrypted message"
+                  }
+                }
+              }
+              if (serverConv.lastMessage?.clientId) {
+                // Use the client-side ID so it lines up with locally stored messages
+                serverConv.lastMessage.id = serverConv.lastMessage.clientId;
+              }
 
               // REMOVED: Group deduplication by participants
               // We want to allow multiple groups with the same people
@@ -2432,6 +2479,15 @@ export default function Sidebar({
                   </div>
                   <span className="text-xs text-success-500 font-semibold px-2 py-1 bg-success-500/20 rounded">ACTIVE</span>
                 </div>
+              </div>
+
+              {/* Blocked Users Section */}
+              <div>
+                <h4 className="font-semibold text-white mb-3 flex items-center gap-2">
+                  <Ban size={18} className="text-danger-500" />
+                  Blocked Users
+                </h4>
+                <BlockedUsersSettings />
               </div>
 
               {/* Notifications Section */}

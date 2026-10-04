@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { X, Globe, Mail, Twitter, ExternalLink, Copy, Check, UserPlus, UserMinus, MessageSquare } from 'lucide-react';
+import { X, Globe, Mail, Twitter, ExternalLink, Copy, Check, UserPlus, UserMinus, MessageSquare, Ban } from 'lucide-react';
 import { resolveProfile, getProfileByWallet, cacheProfileByWallet, type BlockStarProfile } from '@/lib/profileResolver';
 import { truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
 import toast from 'react-hot-toast';
+import { useAppStore } from '@/store';
+import { useBlockStore } from '@/store/blockStore';
 
 interface UserProfileModalProps {
   isOpen: boolean;
@@ -28,6 +30,23 @@ export default function UserProfileModal({
   const [profile, setProfile] = useState<BlockStarProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  const currentUser = useAppStore((st) => st.currentUser);
+  const blockedList = useBlockStore((st) => st.blocked);
+  const isSelf = !!currentUser && currentUser.walletAddress.toLowerCase() === walletAddress?.toLowerCase();
+  const isBlocked = !!walletAddress && blockedList.some((b) => b.walletAddress === walletAddress.toLowerCase());
+
+  const handleToggleBlock = async () => {
+    if (!currentUser || !walletAddress || isSelf) return;
+    const store = useBlockStore.getState();
+    if (isBlocked) {
+      const ok = await store.unblock(currentUser.walletAddress, walletAddress);
+      ok ? toast.success('User unblocked') : toast.error('Could not unblock user');
+      return;
+    }
+    if (!window.confirm("Block this user?\n\nThey won't be able to message or call you. They won't be told they've been blocked.")) return;
+    const ok = await store.block(currentUser.walletAddress, walletAddress);
+    ok ? toast.success('User blocked') : toast.error('Could not block user');
+  };
 
   useEffect(() => {
     if (!isOpen || !walletAddress) return;
@@ -272,6 +291,20 @@ export default function UserProfileModal({
                   )
                 )}
               </div>
+
+              {!isSelf && currentUser && (
+                <button
+                  onClick={handleToggleBlock}
+                  className={`mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl transition text-sm ${
+                    isBlocked
+                      ? 'bg-dark-200 hover:bg-dark-100 text-white'
+                      : 'bg-danger-500/10 hover:bg-danger-500/20 text-danger-400'
+                  }`}
+                >
+                  <Ban size={16} />
+                  {isBlocked ? 'Unblock User' : 'Block User'}
+                </button>
+              )}
 
               {/* View on Explorer */}
               <a
