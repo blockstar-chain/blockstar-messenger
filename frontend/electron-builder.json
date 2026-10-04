@@ -57,18 +57,11 @@
           "x64",
           "arm64"
         ]
-      },
-      {
-        "target": "zip",
-        "arch": [
-          "x64",
-          "arm64"
-        ]
       }
     ],
+    "artifactName": "${productName}-${version}-macOS-${arch}.${ext}",
     "icon": "public/icon.icns",
     "category": "public.app-category.social-networking",
-    "artifactName": "${productName}-${version}-macOS-${arch}.${ext}",
     "hardenedRuntime": true,
     "gatekeeperAssess": false,
     "entitlements": "build/entitlements.mac.plist",
