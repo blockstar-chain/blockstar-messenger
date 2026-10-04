@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useAppStore } from '@/store';
 import { db, dbHelpers } from '@/lib/database';
 import { Conversation } from '@/types';
@@ -189,6 +189,47 @@ export default function Sidebar({
     // This instance shares listeners with MainLayout due to global flag
     enabled: !!currentUser?.walletAddress
   });
+
+  const count = useRef(0);
+
+  const [activeTlds, setActiveTlds]: any = useState([]);
+  const [selectedTld, setSelectedTld]: any = useState("bst");
+
+  useEffect(() => {
+    async function get() {
+      try {
+        const tlds = await blockchainService.getgetActiveTLDs();
+
+        console.log("Active TLDs:", tlds);
+
+        if (Array.isArray(tlds) && tlds.length > 0) {
+          setActiveTlds(tlds);
+
+          // Keep bst as default if available
+          const hasBst = tlds.some(
+            (tld) => tld.toLowerCase() === "bst"
+          );
+
+          setSelectedTld(hasBst ? "bst" : tlds[0]);
+        } else {
+          // API returned nothing
+          setActiveTlds(["bst"]);
+          setSelectedTld("bst");
+        }
+      } catch (error) {
+        console.error("Failed to load active TLDs:", error);
+
+        // Fallback
+        setActiveTlds(["bst"]);
+        setSelectedTld("bst");
+      }
+    }
+
+    if (count.current === 0) {
+      count.current = 1;
+      get();
+    }
+  }, []);
 
 
 
@@ -998,7 +1039,7 @@ export default function Sidebar({
         // V3: Keep the TLD if present (e.g., "ashish@bst" stays as-is)
         // Backend resolver will parse name + tld from the full string
 
-        const profile = await resolveProfile(nameToResolve);
+        const profile = await resolveProfile(nameToResolve , selectedTld);
 
         if (profile && profile.walletAddress) {
           targetAddress = profile.walletAddress.toLowerCase();
@@ -1949,25 +1990,46 @@ export default function Sidebar({
                       <p className="font-mono text-cyan-500">0x123...abcd</p>
                     </div>
 
-                    <input
-                      type="text"
-                      placeholder="@name or 0x..."
-                      value={newChatAddress}
-                      onChange={(e) => setNewChatAddress(e.target.value)}
-                      className="w-full px-4 py-3 bg-dark-200 border-2 border-gray-600 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/50 focus:shadow-[0_0_15px_rgba(0,102,255,0.3)] transition mb-4"
-                      onKeyDown={(e) => e.key === 'Enter' && handleStartNewChat()}
-                      onFocus={(e) => {
-                        // iOS keyboard scroll fix
-                        setTimeout(() => {
-                          e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        }, 100);
-                        setTimeout(() => {
-                          e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        }, 300);
-                      }}
-                      autoComplete="off"
-                      autoCapitalize="off"
-                    />
+                    <div className="flex gap-2 mb-4">
+                      <input
+                        type="text"
+                        placeholder="@name or 0x..."
+                        value={newChatAddress}
+                        onChange={(e) => setNewChatAddress(e.target.value)}
+                        className="flex-1 min-w-0 px-4 py-3 bg-dark-200 border-2 border-gray-600 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/50 focus:shadow-[0_0_15px_rgba(0,102,255,0.3)] transition"
+                        onKeyDown={(e) => e.key === 'Enter' && handleStartNewChat()}
+                        onFocus={(e) => {
+                          // iOS keyboard scroll fix
+                          setTimeout(() => {
+                            e.target.scrollIntoView({
+                              behavior: 'smooth',
+                              block: 'center'
+                            });
+                          }, 100);
+
+                          setTimeout(() => {
+                            e.target.scrollIntoView({
+                              behavior: 'smooth',
+                              block: 'center'
+                            });
+                          }, 300);
+                        }}
+                        autoComplete="off"
+                        autoCapitalize="off"
+                      />
+
+                      <select
+                        value={selectedTld}
+                        onChange={(e) => setSelectedTld(e.target.value)}
+                        className="w-24 px-2 py-3 bg-dark-200 border-2 border-gray-600 rounded-xl text-white focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/50 transition"
+                      >
+                        {activeTlds.map((tld:any) => (
+                          <option key={tld} value={tld}>
+                            @{tld}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </>
                 ) : (
                   <div className="max-h-48 overflow-y-auto space-y-1 mb-4">

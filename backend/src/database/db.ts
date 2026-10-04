@@ -414,6 +414,29 @@ export async function createGroupConversation(group: any): Promise<string> {
   return groupId;
 }
 
+
+export async function getGroupConversationId(
+  groupId: string
+): Promise<string | null> {
+  console.log(`🔍 Looking for group conversation: ${groupId}`);
+
+  const conversation = await conversationsCollection.findOne({
+    type: 'group',
+    group_id: groupId,
+  });
+
+  if (!conversation) {
+    console.log(`❌ No conversation found for group: ${groupId}`);
+    return null;
+  }
+
+  console.log(
+    `✅ Found group conversation: ${conversation._id} for group: ${groupId}`
+  );
+
+  return conversation._id!.toString();
+}
+
 // ============================================
 // MESSAGE OPERATIONS
 // ============================================
@@ -474,7 +497,7 @@ export async function saveMessage(
 
   const result = await messagesCollection.insertOne(message);
   message._id = result.insertedId;
-
+  console.log("conversationId" , conversationId)
   // Update conversation timestamp
   await conversationsCollection.updateOne(
     { _id: new ObjectId(conversationId) },
@@ -1765,4 +1788,6 @@ export default {
   getPushTokens,
   deletePushToken,
   deleteAllPushTokens,
+
+  getGroupConversationId
 };

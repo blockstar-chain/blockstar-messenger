@@ -272,6 +272,8 @@ export class GroupChatService {
         delivered: false,
         read: false,
         type,
+        senderName : currentUser.username
+
       };
 
       encryptedMessages.push(message);

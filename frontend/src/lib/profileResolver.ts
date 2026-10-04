@@ -166,19 +166,22 @@ export function clearExpiredProfiles(): void {
 /**
  * Resolve NFT domain profile by username
  */
-export async function resolveProfile(username: string): Promise<BlockStarProfile | null> {
-  const cacheKey = username.toLowerCase();
+export async function resolveProfile(username: string , tlds?: any): Promise<BlockStarProfile | null> {
+  // const cacheKey = username.toLowerCase();
   
-  console.log(`🔍 [ProfileResolver] Resolving: "${username}" (cacheKey: "${cacheKey}")`);
+  console.log(`🔍 [ProfileResolver] Resolving: "${username}")`);
   
   // Check local cache first
-  const cached = profileCache.get(cacheKey);
-  if (cached && cached.expires > Date.now()) {
-    console.log(`📋 [ProfileResolver] Cache hit for: ${username}`);
-    return cached.profile;
-  }
+  // const cached = profileCache.get(cacheKey);
+  // if (cached && cached.expires > Date.now()) {
+  //   console.log(`📋 [ProfileResolver] Cache hit for: ${username}`);
+  //   return cached.profile;
+  // }
   
   try {
+    if(tlds){
+      username = username + "." + tlds;
+    }
     const url = `${API_BASE}/api/profile/resolve/${encodeURIComponent(username)}`;
     console.log(`🌐 [ProfileResolver] Fetching: ${url}`);
     
@@ -200,7 +203,7 @@ export async function resolveProfile(username: string): Promise<BlockStarProfile
     
     if (data.success && data.profile) {
       // Cache by both username and wallet address
-      cacheProfile(data.profile);
+      // cacheProfile(data.profile);
       return data.profile;
     }
     

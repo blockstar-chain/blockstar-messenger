@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useAppStore } from '@/store';
 import { Search, UserPlus, X, Users, MessageSquare, Trash2, Star, StarOff, Pencil, RefreshCw } from 'lucide-react';
 import { truncateAddress, getInitials, getAvatarColor, generateConversationId } from '@/utils/helpers';
@@ -6,6 +6,8 @@ import { resolveProfile, resolveProfilesByWallets, getProfileByWallet, cacheProf
 import { db } from '@/lib/database';
 import UserProfileModal from './UserProfileModal';
 import toast from 'react-hot-toast';
+import { blockchainService } from '@/lib/blockchain';
+
 
 interface Contact {
   id: string;
@@ -49,11 +51,53 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
   const [loadingContacts, setLoadingContacts] = useState(true);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [showProfileModal, setShowProfileModal] = useState(false);
-  
+
   // Edit contact state
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [editNickname, setEditNickname] = useState('');
+
+  const count = useRef(0);
+
+  const [activeTlds, setActiveTlds]: any = useState([]);
+  const [selectedTld, setSelectedTld]: any = useState("bst");
+
+
+  useEffect(() => {
+    async function get() {
+      try {
+        const tlds = await blockchainService.getgetActiveTLDs();
+
+        console.log("Active TLDs:", tlds);
+
+        if (Array.isArray(tlds) && tlds.length > 0) {
+          setActiveTlds(tlds);
+
+          // Keep bst as default if available
+          const hasBst = tlds.some(
+            (tld) => tld.toLowerCase() === "bst"
+          );
+
+          setSelectedTld(hasBst ? "bst" : tlds[0]);
+        } else {
+          // API returned nothing
+          setActiveTlds(["bst"]);
+          setSelectedTld("bst");
+        }
+      } catch (error) {
+        console.error("Failed to load active TLDs:", error);
+
+        // Fallback
+        setActiveTlds(["bst"]);
+        setSelectedTld("bst");
+      }
+    }
+
+    if (count.current === 0) {
+      count.current = 1;
+      get();
+    }
+  }, []);
 
   // Update cached wallet address
   useEffect(() => {
@@ -68,30 +112,30 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
   // Load contacts from API
   const loadContacts = useCallback(async () => {
     if (!currentUser?.walletAddress) return;
-    
+
     setLoadingContacts(true);
-    
+
     try {
       const response = await fetch(`${API_URL}/api/contacts/${currentUser.walletAddress.toLowerCase()}`);
-      
+
       if (response.ok) {
         const data = await response.json();
-        
+
         if (data.success && data.contacts) {
           // First, collect all wallet addresses
           const walletAddresses = data.contacts.map((c: ServerContact) => c.contact_wallet.toLowerCase());
-          
+
           console.log(`📋 Loading ${walletAddresses.length} contacts, resolving profiles...`);
-          
+
           // Step 1: Try batch resolve (uses cache and bulk endpoint)
           const profilesMap = await resolveProfilesByWallets(walletAddresses);
-          
+
           // Step 2: For any missing profiles, try fetching from backend profile endpoint
           const missingWallets = walletAddresses.filter((w: string) => !profilesMap.has(w));
-          
+
           if (missingWallets.length > 0) {
             console.log(`📋 ${missingWallets.length} profiles not in cache, fetching from backend...`);
-            
+
             // Fetch profiles individually from backend (they might have nftName stored)
             await Promise.all(missingWallets.map(async (wallet: string) => {
               try {
@@ -114,7 +158,7 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
               }
             }));
           }
-          
+
           // Convert server format to client format with resolved profiles
           const contactsWithProfiles = data.contacts.map((serverContact: ServerContact) => {
             const wallet = serverContact.contact_wallet.toLowerCase();
@@ -125,23 +169,23 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
               addedAt: serverContact.added_at,
               isFavorite: serverContact.is_favorite,
             };
-            
+
             // Get profile from the batch result
             const profile = profilesMap.get(wallet) || null;
-            
+
             return { ...contact, profile };
           });
-          
+
           const withProfiles = contactsWithProfiles.filter((c: Contact) => c.profile).length;
           console.log(`📋 Loaded ${contactsWithProfiles.length} contacts, ${withProfiles} with @names`);
-          
+
           // Sort contacts alphabetically by display name (nickname > @username > wallet address)
           const sortedContacts = contactsWithProfiles.sort((a: Contact, b: Contact) => {
             const nameA = (a.nickname || a.profile?.username || a.walletAddress).toLowerCase();
             const nameB = (b.nickname || b.profile?.username || b.walletAddress).toLowerCase();
             return nameA.localeCompare(nameB);
           });
-          
+
           setContacts(sortedContacts);
           setFilteredContacts(sortedContacts);
         }
@@ -162,7 +206,7 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
   // Filter contacts based on search
   useEffect(() => {
     let result = contacts;
-    
+
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       result = contacts.filter(
@@ -172,14 +216,14 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
           contact.profile?.username?.toLowerCase().includes(query)
       );
     }
-    
+
     // Always sort alphabetically by display name
     const sorted = [...result].sort((a, b) => {
       const nameA = (a.nickname || a.profile?.username || a.walletAddress).toLowerCase();
       const nameB = (b.nickname || b.profile?.username || b.walletAddress).toLowerCase();
       return nameA.localeCompare(nameB);
     });
-    
+
     setFilteredContacts(sorted);
   }, [searchQuery, contacts]);
 
@@ -197,7 +241,7 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
     if (!normalizedAddress.startsWith('0x')) {
       // It's an @name - need to resolve to wallet address
       toast.loading('Looking up @name...', { id: 'contact-lookup' });
-      
+
       try {
         // Extract the name part (handle "@david", "david@blockstar" or just "david")
         let nameToResolve = normalizedAddress;
@@ -208,7 +252,7 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
           nameToResolve = nameToResolve.split('@')[0];
         }
 
-        resolvedProfile = await resolveProfile(nameToResolve);
+        resolvedProfile = await resolveProfile(nameToResolve , selectedTld);
 
         if (resolvedProfile && resolvedProfile.walletAddress) {
           normalizedAddress = resolvedProfile.walletAddress.toLowerCase();
@@ -262,7 +306,7 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
       }
 
       const data = await response.json();
-      
+
       if (data.success && data.contact) {
         // Use resolved profile if we have it, otherwise try to fetch
         let profile: BlockStarProfile | null = resolvedProfile;
@@ -405,18 +449,18 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
 
     const myAddress = currentUser.walletAddress.toLowerCase();
     const contactAddress = contact.walletAddress.toLowerCase();
-    
+
     // IMPORTANT: Call backend to get/create conversation - this also unhides if previously deleted
     const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
     let conversationId: string;
-    
+
     try {
       const response = await fetch(`${API_URL}/api/conversations/direct`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user1: myAddress, user2: contactAddress }),
       });
-      
+
       if (response.ok) {
         const data = await response.json();
         if (data.success && data.conversation) {
@@ -432,7 +476,7 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
       console.warn('Could not reach server for conversation, using local ID:', error);
       conversationId = generateConversationId(myAddress, contactAddress);
     }
-    
+
     // Remove from deleted list if it was there (user is re-opening a deleted chat)
     // Import this at the top of the file
     const { removeFromDeletedConversations } = await import('./Sidebar');
@@ -440,7 +484,7 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
 
     // Check if conversation already exists in state
     const existingConv = conversations.find(c => c.id === conversationId);
-    
+
     if (existingConv) {
       setActiveConversation(conversationId);
       onConversationSelect?.();
@@ -604,11 +648,10 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                     <button
                       onClick={() => handleToggleFavorite(contact)}
-                      className={`p-2 rounded-lg transition ${
-                        contact.isFavorite
-                          ? 'text-yellow-500 hover:bg-yellow-500/20'
-                          : 'text-muted hover:text-white hover:bg-dark-200'
-                      }`}
+                      className={`p-2 rounded-lg transition ${contact.isFavorite
+                        ? 'text-yellow-500 hover:bg-yellow-500/20'
+                        : 'text-muted hover:text-white hover:bg-dark-200'
+                        }`}
                       title={contact.isFavorite ? 'Remove from favorites' : 'Add to favorites'}
                     >
                       {contact.isFavorite ? (
@@ -669,22 +712,37 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
                 <label className="block text-sm font-medium text-secondary mb-2">
                   Wallet Address or @name *
                 </label>
-                <input
-                  type="text"
-                  value={newContactAddress}
-                  onChange={(e) => setNewContactAddress(e.target.value)}
-                  placeholder="@name or 0x..."
-                  className="w-full px-4 py-3 bg-dark-200 border border-midnight rounded-xl text-white placeholder-muted focus:outline-none focus:border-primary-500"
-                  onFocus={(e) => {
-                    // iOS keyboard scroll fix
-                    setTimeout(() => {
-                      e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    }, 100);
-                    setTimeout(() => {
-                      e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    }, 300);
-                  }}
-                />
+                <div className="flex gap-2 mb-4">
+
+                  <input
+                    type="text"
+                    value={newContactAddress}
+                    onChange={(e) => setNewContactAddress(e.target.value)}
+                    placeholder="@name or 0x..."
+                    className="flex-1 min-w-0 px-4 py-3 bg-dark-200 border-2 border-gray-600 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/50 focus:shadow-[0_0_15px_rgba(0,102,255,0.3)] transition"
+                    onFocus={(e) => {
+                      // iOS keyboard scroll fix
+                      setTimeout(() => {
+                        e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      }, 100);
+                      setTimeout(() => {
+                        e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      }, 300);
+                    }}
+                  />
+
+                  <select
+                    value={selectedTld}
+                    onChange={(e) => setSelectedTld(e.target.value)}
+                    className="w-24 px-2 py-3 bg-dark-200 border-2 border-gray-600 rounded-xl text-white focus:outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/50 transition"
+                  >
+                    {activeTlds.map((tld:any) => (
+                      <option key={tld} value={tld}>
+                        @{tld}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div>
@@ -842,9 +900,9 @@ export const addToContacts = async (address: string): Promise<boolean> => {
     console.error('No current user wallet available');
     return false;
   }
-  
+
   const normalizedAddress = address.toLowerCase();
-  
+
   try {
     const response = await fetch(`${API_URL}/api/contacts`, {
       method: 'POST',

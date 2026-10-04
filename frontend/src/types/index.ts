@@ -21,6 +21,7 @@ export interface Message {
   delivered: boolean;
   read: boolean;
   type: 'text' | 'image' | 'file' | 'voice' | 'audio' | 'video' | 'location' | 'system';
+  senderName ? : String;
   
   // System message fields
   isSystemMessage?: boolean;

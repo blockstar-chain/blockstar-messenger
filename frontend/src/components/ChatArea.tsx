@@ -43,7 +43,7 @@ try {
 // Save decrypted content to both in-memory and localStorage
 const saveDecryptedContent = (messageId: string, content: string) => {
   decryptedContentCache.set(messageId, content);
-  
+
   // Persist to localStorage (limit to last 500 messages to prevent bloat)
   try {
     const cacheObj: Record<string, string> = {};
@@ -64,17 +64,17 @@ const saveDecryptedContent = (messageId: string, content: string) => {
 const renderTextWithLinks = (text: string): React.ReactNode => {
   // URL regex pattern that matches http, https, and www links
   const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
-  
+
   const parts = text.split(urlRegex);
   const matches = text.match(urlRegex) || [];
-  
+
   if (matches.length === 0) {
     return text;
   }
-  
+
   const result: React.ReactNode[] = [];
   let matchIndex = 0;
-  
+
   parts.forEach((part, index) => {
     if (part) {
       // Check if this part is a URL
@@ -102,7 +102,7 @@ const renderTextWithLinks = (text: string): React.ReactNode => {
       }
     }
   });
-  
+
   return result;
 };
 
@@ -151,15 +151,15 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId);
   const conversationMessages = activeConversationId ? messages.get(activeConversationId) || [] : [];
-  
-  const filteredMessages = searchQuery 
-    ? conversationMessages.filter(msg => 
-        msg.content.toLowerCase().includes(searchQuery.toLowerCase())
-      )
+
+  const filteredMessages = searchQuery
+    ? conversationMessages.filter(msg =>
+      msg.content.toLowerCase().includes(searchQuery.toLowerCase())
+    )
     : conversationMessages;
-  const isGroupChat = activeConversation?.type === 'group' || 
-                      (activeConversation?.participants && activeConversation.participants.length > 2) ||
-                      !!(activeConversation as any)?.groupName;
+  const isGroupChat = activeConversation?.type === 'group' ||
+    (activeConversation?.participants && activeConversation.participants.length > 2) ||
+    !!(activeConversation as any)?.groupName;
   const groupConv = activeConversation as any; // Type assertion for group properties
   const otherParticipant = !isGroupChat ? activeConversation?.participants.find(
     (p) => p.toLowerCase() !== currentUser?.walletAddress.toLowerCase()
@@ -193,7 +193,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
     const minutes = Math.floor(diff / 60000);
     const hours = Math.floor(diff / 3600000);
     const days = Math.floor(diff / 86400000);
-    
+
     if (minutes < 1) return 'Just now';
     if (minutes < 60) return `${minutes}m ago`;
     if (hours < 24) return `${hours}h ago`;
@@ -263,10 +263,10 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         setIsUserContact(false);
         return;
       }
-      
+
       // Check if this user is in contacts
       setIsUserContact(isContact(otherParticipant));
-      
+
       try {
         // First check local wallet cache (populated when @name was resolved)
         const cachedProfile = getProfileByWallet(otherParticipant);
@@ -274,11 +274,11 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           setContactProfile(cachedProfile);
           return;
         }
-        
+
         // Try to resolve by looking up if they have an NFT name in our database
         const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
         const response = await fetch(`${API_URL}/api/profile/${otherParticipant}`);
-        
+
         if (response.ok) {
           const data = await response.json();
           if (data.success && data.profile?.nftName) {
@@ -287,13 +287,13 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
             return;
           }
         }
-        
+
         setContactProfile(null);
       } catch (error) {
         setContactProfile(null);
       }
     };
-    
+
     loadContactProfile();
   }, [otherParticipant]);
 
@@ -303,20 +303,20 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
       if (isGroupChat) {
         // Group chats: Check if we have keys for ALL members (not just any)
         setEncryptionStatus('checking');
-        
+
         const participants = activeConversation?.participants || [];
         const otherParticipants = participants.filter(
           p => p.toLowerCase() !== currentUser?.walletAddress.toLowerCase()
         );
-        
+
         if (otherParticipants.length === 0) {
           setEncryptionStatus('unencrypted');
           return;
         }
-        
+
         let allHaveKeys = true;
         let checkedCount = 0;
-        
+
         for (const participant of otherParticipants) {
           try {
             const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
@@ -335,25 +335,25 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
             allHaveKeys = false;
           }
         }
-        
+
         // Encrypted if all other participants have keys
         const isEncrypted = allHaveKeys && checkedCount === otherParticipants.length;
         console.log(`🔐 Group encryption check: ${checkedCount}/${otherParticipants.length} members have keys, encrypted: ${isEncrypted}`);
         setEncryptionStatus(isEncrypted ? 'encrypted' : 'unencrypted');
         return;
       }
-      
+
       if (!otherParticipant) {
         setEncryptionStatus('checking');
         return;
       }
-      
+
       setEncryptionStatus('checking');
-      
+
       try {
         const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
         const response = await fetch(`${API_URL}/api/keys/${otherParticipant}`);
-        
+
         if (response.ok) {
           const data = await response.json();
           if (data.publicKey) {
@@ -369,7 +369,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         setEncryptionStatus('unencrypted');
       }
     };
-    
+
     checkEncryptionStatus();
   }, [otherParticipant, isGroupChat, activeConversation?.participants]);
 
@@ -377,26 +377,26 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
   useEffect(() => {
     const loadMemberProfiles = async () => {
       if (!isGroupChat || !activeConversation) return;
-      
+
       const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
       const newProfiles = new Map<string, BlockStarProfile | null>();
-      
+
       for (const participant of activeConversation.participants) {
         const normalizedAddress = participant.toLowerCase();
-        
+
         // FIRST check local wallet cache (may have been populated since last load)
         const cachedProfile = getProfileByWallet(normalizedAddress);
         if (cachedProfile) {
           newProfiles.set(normalizedAddress, cachedProfile);
           continue;
         }
-        
+
         // Then check if already loaded (and no cache available)
         if (memberProfiles.has(normalizedAddress)) {
           newProfiles.set(normalizedAddress, memberProfiles.get(normalizedAddress) || null);
           continue;
         }
-        
+
         try {
           const response = await fetch(`${API_URL}/api/profile/${normalizedAddress}`);
           if (response.ok) {
@@ -412,10 +412,10 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           newProfiles.set(normalizedAddress, null);
         }
       }
-      
+
       setMemberProfiles(newProfiles);
     };
-    
+
     loadMemberProfiles();
   }, [isGroupChat, activeConversation?.id, activeConversation?.participants.length]);
 
@@ -427,7 +427,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         await loadMessages(true);
       }
     };
-    
+
     window.addEventListener('blockstar:refresh', handleRefresh);
     return () => window.removeEventListener('blockstar:refresh', handleRefresh);
   }, [activeConversationId]);
@@ -471,21 +471,21 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
       const address = data.address.toLowerCase();
       const prevStatusInfo = userStatuses.get(address);
       const prevStatus = prevStatusInfo?.status;
-      
+
       setUserStatuses((prev) => {
         const newMap = new Map(prev);
-        newMap.set(address, { 
-          status: data.status, 
+        newMap.set(address, {
+          status: data.status,
           lastSeen: data.lastSeen || (data.status === 'offline' ? Date.now() : null)
         });
         return newMap;
       });
-      
+
       // When user comes online, clear their key cache so we can refetch
       if (data.status === 'online' && prevStatus !== 'online') {
         encryptionService.clearKeyCache(address);
         console.log('🔑 User came online, cleared key cache for', address);
-        
+
         // Re-check encryption status if this is our chat partner
         if (address === otherParticipant?.toLowerCase() && encryptionStatus === 'unencrypted') {
           // Re-check after a short delay to allow key registration
@@ -523,12 +523,12 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
     const handleFocus = () => {
       // Immediate scroll attempt
       inputEl.scrollIntoView({ behavior: 'instant', block: 'center' });
-      
+
       // Also scroll after keyboard starts animating (100ms)
       setTimeout(() => {
         inputEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }, 100);
-      
+
       // And again after keyboard is fully open (300ms)
       setTimeout(() => {
         inputEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -544,7 +544,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
     };
 
     inputEl.addEventListener('focus', handleFocus);
-    
+
     if ('visualViewport' in window && window.visualViewport) {
       window.visualViewport.addEventListener('resize', handleViewportResize);
     }
@@ -564,24 +564,24 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         // Handle special system messages for group invites (from offline queue)
         if (message.type === 'system:group_invite' && message.groupInfo) {
           const groupName = message.groupInfo.groupName?.trim();
-          
+
           // Validate group name before processing
           if (!groupName || groupName === 'Group Chat') {
             console.log('⚠️ Ignoring group invite - no valid group name:', message.groupInfo.id);
             return;
           }
-          
+
           console.log('📢 Processing offline group invite:', groupName);
-          
+
           const { conversations, addConversation } = useAppStore.getState();
-          
+
           // Check if group already exists
           const existingGroup = conversations.find(c => c.id === message.groupInfo.id);
           if (existingGroup) {
             console.log('Group already exists, skipping invite');
             return;
           }
-          
+
           // Create the group from the invite
           const newGroup: Conversation = {
             id: message.groupInfo.id,
@@ -595,20 +595,20 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
             createdAt: Date.now(),
             updatedAt: Date.now(),
           };
-          
+
           await db.conversations.put(newGroup);
           addConversation(newGroup);
-          
+
           toast.success(`You were added to group "${groupName}"`, { duration: 4000 });
           return; // Don't process as regular message
         }
-        
+
         // Skip if we've already processed this message
         if (decryptedContentCache.has(message.id)) {
           console.log('Skipping already processed message:', message.id);
           return;
         }
-        
+
         // Skip messages we sent ourselves (they're already in our store)
         if (message.senderId.toLowerCase() === currentUser?.walletAddress.toLowerCase()) {
           console.log('Skipping own message:', message.id);
@@ -617,7 +617,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         }
 
         let displayContent = message.content;
-        
+
         // Only try to decrypt text messages, not voice/file messages
         if (message.type === 'text' || !message.type) {
           try {
@@ -637,18 +637,18 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         } else {
           saveDecryptedContent(message.id, displayContent);
         }
-        
+
         const senderId = message.senderId.toLowerCase();
-        const recipientId = (typeof message.recipientId === 'string' 
-          ? message.recipientId 
+        const recipientId = (typeof message.recipientId === 'string'
+          ? message.recipientId
           : message.recipientId?.[0] || currentUser?.walletAddress).toLowerCase();
-        
+
         // Use message's conversationId (for groups) or generate one (for direct)
         const conversationId = message.conversationId || generateConversationId(senderId, recipientId);
         const isGroupMessage = Array.isArray(message.recipientId) || message.conversationId?.startsWith('group_');
-        
-        const displayMessage: Message = { 
-          ...message, 
+
+        const displayMessage: Message = {
+          ...message,
           content: displayContent,
           conversationId,
           senderId,
@@ -656,14 +656,14 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           delivered: true,
           type: message.type || 'text', // Explicitly preserve message type
         };
-        
+
         await dbHelpers.saveMessage(displayMessage);
-        
+
         const { conversations, addConversation, updateConversation, activeConversationId: currentActiveId } = useAppStore.getState();
-        
+
         // For direct messages, check if conversation exists by ID or by participants
         let conv = conversations.find(c => c.id === conversationId);
-        
+
         // If not found by ID, try to find by participants (only for direct messages)
         if (!conv) {
           if (isGroupMessage) {
@@ -677,40 +677,40 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
             conv = conversations.find(c => {
               if (c.type !== 'direct') return false;
               const convParticipants = (c.participants || []).map(p => p.toLowerCase()).sort();
-              return convParticipants.length === 2 && 
-                convParticipants[0] === participants[0] && 
+              return convParticipants.length === 2 &&
+                convParticipants[0] === participants[0] &&
                 convParticipants[1] === participants[1];
             });
-            
+
             if (conv) {
               console.log(`📨 Found existing direct conversation by participants: ${conv.id}`);
               displayMessage.conversationId = conv.id;
             }
           }
         }
-        
+
         const isActiveConversation = currentActiveId === conversationId || currentActiveId === conv?.id;
-        
+
         // Check if this conversation was deleted by the user
         // If so, remove from deleted list so it reappears with the new message
         // Check multiple ID formats (server ObjectId, client-generated ID, etc.)
         const idsToCheck = new Set<string>();
         if (conversationId) idsToCheck.add(conversationId);
         if (conv?.id) idsToCheck.add(conv.id);
-        
+
         // For direct messages, also check client-generated ID format
         if (!isGroupMessage) {
           const clientStyleId = generateConversationId(senderId, recipientId);
           idsToCheck.add(clientStyleId);
         }
-        
+
         for (const idToCheck of idsToCheck) {
           if (isConversationDeleted(idToCheck, currentUser?.walletAddress)) {
             console.log('📬 New message for deleted conversation, restoring:', idToCheck);
             removeFromDeletedConversations(idToCheck, currentUser?.walletAddress);
           }
         }
-        
+
         if (!conv) {
           // Conversation doesn't exist yet
           if (isGroupMessage) {
@@ -719,7 +719,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
             const groupName = message.groupInfo?.groupName?.trim();
             if (message.groupInfo && groupName && groupName !== 'Group Chat') {
               console.log(`📨 Creating group from message groupInfo: ${groupName}`);
-              
+
               const newGroup: Conversation = {
                 id: conversationId,
                 type: 'group',
@@ -733,17 +733,17 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                 updatedAt: Date.now(),
                 lastMessage: displayMessage,
               };
-              
+
               await db.conversations.put(newGroup);
               addConversation(newGroup);
               conv = newGroup;
             } else {
               // No groupInfo available - wait for group:created event
               console.log(`📨 Received message for unknown group ${conversationId}, waiting for group:created event`);
-              
+
               // Save message to IndexedDB so it appears when group is created
               await dbHelpers.saveMessage(displayMessage);
-              
+
               // Don't add to UI yet - the group:created handler will load conversations
               // which will pick up this message
               return;
@@ -759,7 +759,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
               updatedAt: Date.now(),
               lastMessage: displayMessage,
             };
-            
+
             await db.conversations.put(newConv);
             addConversation(newConv);
           }
@@ -769,18 +769,18 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
             lastMessage: displayMessage,
             updatedAt: Date.now()
           };
-          
+
           if (!isActiveConversation) {
             updates.unreadCount = (conv.unreadCount || 0) + 1;
           }
-          
+
           useAppStore.getState().updateConversation(conv.id, updates);
           await db.conversations.update(conv.id, updates);
         }
-        
+
         addMessage(displayMessage);
         webSocketService.markDelivered(message.id);
-        
+
         // Trigger notification for incoming messages
         // Get sender name for notification
         let senderName = truncateAddress(senderId);
@@ -792,11 +792,11 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         } catch (e) {
           // Use address if profile fetch fails
         }
-        
+
         // Get group name if it's a group message
         const groupConv = isGroupMessage ? conversations.find(c => c.id === conversationId) : null;
         const groupName = groupConv ? (groupConv as any).groupName : undefined;
-        
+
         // Send notification
         notificationService.notifyNewMessage(
           senderName,
@@ -825,7 +825,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
       if (activeConversationId) {
         const msgs = messages.get(activeConversationId);
         if (msgs) {
-          const updatedMsgs = msgs.map(msg => 
+          const updatedMsgs = msgs.map(msg =>
             msg.id === data.messageId ? { ...msg, delivered: true } : msg
           );
           setMessages(activeConversationId, updatedMsgs);
@@ -841,7 +841,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
 
     try {
       const myAddress = currentUser.walletAddress.toLowerCase();
-      
+
       // Clear cache if force refresh requested
       if (forceRefresh) {
         dbHelpers.clearMessageCache(activeConversationId);
@@ -849,14 +849,14 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
       
       // Pass wallet address to get user-specific encrypted content for group messages
       let msgs = await dbHelpers.getConversationMessages(activeConversationId, myAddress);
-      
+
       // Process read states for all messages based on readBy array
       // This works whether messages came from cache or fresh API fetch
       msgs = msgs.map(msg => {
         const msgWithReadBy = msg as Message & { readBy?: string[] };
         const readBy = msgWithReadBy.readBy || [];
         const isMySentMessage = msg.senderId.toLowerCase() === myAddress;
-        
+
         let isRead = false;
         if (isMySentMessage) {
           // My outgoing message - check if recipient (anyone other than me) has read it
@@ -865,7 +865,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           // Incoming message - check if I've already read it
           isRead = readBy.some((r: string) => r.toLowerCase() === myAddress);
         }
-        
+
         // Parse system message content to extract metadata
         // System messages store their metadata as JSON in the content field
         if (msg.type === 'system' && msg.content) {
@@ -888,34 +888,34 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
             // Not JSON, leave as is
           }
         }
-        
+
         return { ...msg, read: isRead };
       });
-      
+
       // Try to decrypt messages
       // In ECDH, the shared secret is derived from your private key + other party's public key
       // So for BOTH sent and received messages, we need the OTHER participant's public key
-      
+
       // Only attempt decryption if encryption service is ready
       const canDecrypt = encryptionService.isReady();
       if (!canDecrypt) {
         console.warn('⚠️ Encryption service not ready, messages may appear encrypted');
       }
-      
+
       for (const msg of msgs) {
         if (!decryptedContentCache.has(msg.id) && (msg.type === 'text' || !msg.type)) {
           // Skip decryption if encryption service isn't ready
           if (!canDecrypt) continue;
-          
+
           try {
             // Determine the other party's address for key derivation
             const isMySentMessage = msg.senderId.toLowerCase() === myAddress;
-            
+
             // Handle recipientId being string or string[]
-            let recipientAddr = Array.isArray(msg.recipientId) 
-              ? msg.recipientId[0] 
+            let recipientAddr = Array.isArray(msg.recipientId)
+              ? msg.recipientId[0]
               : msg.recipientId;
-            
+
             // If recipientId is missing (common when loading from server), derive from conversation participants
             if (!recipientAddr && activeConversation?.participants) {
               const otherParticipants = activeConversation.participants.filter(
@@ -925,16 +925,16 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                 recipientAddr = otherParticipants[0];
               }
             }
-            
-            const otherPartyAddress = isMySentMessage 
+
+            const otherPartyAddress = isMySentMessage
               ? recipientAddr  // For sent messages, use recipient's key
               : msg.senderId;  // For received messages, use sender's key
-            
+
             if (!otherPartyAddress) {
               console.warn('Cannot decrypt: no other party address for message', msg.id);
               continue;
             }
-            
+
             const { decrypted, wasEncrypted, decryptionFailed } = await encryptionService.decryptFromSender(
               msg.content,
               otherPartyAddress
@@ -945,17 +945,17 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                 saveDecryptedContent(msg.id, decrypted);
               }
             }
-          } catch {}
+          } catch { }
         } else if (decryptedContentCache.has(msg.id)) {
           msg.content = decryptedContentCache.get(msg.id)!;
         }
       }
-      
+
       // Update cache with processed messages
       for (const msg of msgs) {
         await dbHelpers.saveMessage(msg);
       }
-      
+
       // Populate reactions from loaded messages
       const newReactions = new Map<string, Array<{ emoji: string; userId: string }>>();
       for (const msg of msgs) {
@@ -968,7 +968,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         }
       }
       setMessageReactions(newReactions);
-      
+
       setMessages(activeConversationId, msgs);
     } catch (error) {
       console.error('Error loading messages:', error);
@@ -983,9 +983,9 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
 
   const handleToggleMute = () => {
     if (!activeConversationId) return;
-    
+
     const newMuted = !isMuted;
-    
+
     if (newMuted) {
       notificationService.muteConversation(activeConversationId);
       toast.success('Notifications muted for this chat');
@@ -993,14 +993,14 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
       notificationService.unmuteConversation(activeConversationId);
       toast.success('Notifications unmuted for this chat');
     }
-    
+
     setIsMuted(newMuted);
     setShowChatMenu(false);
   };
 
   const handleClearChat = async () => {
     if (!activeConversationId) return;
-    
+
     if (confirm('Are you sure you want to clear all messages in this chat?')) {
       try {
         await db.messages.where('conversationId').equals(activeConversationId).delete();
@@ -1015,12 +1015,12 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
 
   const handleRetryDecryption = async () => {
     if (!activeConversationId) return;
-    
+
     // Check if this is a group chat
-    const isGroup = isGroupChat || 
-                    (activeConversation?.participants && activeConversation.participants.length > 2) ||
-                    !!(activeConversation as any)?.groupName;
-    
+    const isGroup = isGroupChat ||
+      (activeConversation?.participants && activeConversation.participants.length > 2) ||
+      !!(activeConversation as any)?.groupName;
+
     if (isGroup) {
       // For groups, clear key cache for all participants except self
       const myAddress = currentUser?.walletAddress.toLowerCase();
@@ -1033,51 +1033,51 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
       // For direct chats, clear key cache for the other participant
       encryptionService.clearKeyCache(otherParticipant);
     }
-    
+
     // Clear decrypted content cache for this conversation
     const msgs = messages.get(activeConversationId) || [];
     msgs.forEach(msg => decryptedContentCache.delete(msg.id));
-    
+
     // Clear the message cache to force refetch from server
     dbHelpers.clearMessageCache(activeConversationId);
-    
+
     // Reload messages
     toast.loading('Retrying decryption...', { id: 'retry-decrypt' });
     await loadMessages();
     toast.success('Decryption retried!', { id: 'retry-decrypt' });
-    
+
     setShowChatMenu(false);
   };
 
   const handleDeleteMessage = async (messageId: string) => {
     if (!activeConversationId) return;
-    
+
     try {
       console.log(`🗑️ Deleting message: ${messageId} from conversation: ${activeConversationId}`);
-      
+
       // Delete from local database (IndexedDB)
       await db.messages.delete(messageId);
       console.log(`🗑️ Deleted from IndexedDB`);
-      
+
       // Update UI immediately
       const msgs = messages.get(activeConversationId) || [];
       const updatedMsgs = msgs.filter(m => m.id !== messageId);
       setMessages(activeConversationId, updatedMsgs);
       decryptedContentCache.delete(messageId);
       console.log(`🗑️ Removed from UI state`);
-      
+
       // CRITICAL: Also clear the message from the API cache
       // This prevents the message from reappearing when navigating away and back
       dbHelpers.removeMessageFromCache(activeConversationId, messageId);
       console.log(`🗑️ Removed from API cache`);
-      
+
       // Sync deletion to server - MUST succeed for persistent deletion
       const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
       try {
         const response = await fetch(`${API_URL}/api/messages/${messageId}`, {
           method: 'DELETE',
         });
-        
+
         const result = await response.json();
         if (response.ok && result.success) {
           console.log(`✅ Server confirmed message deletion: ${messageId}`);
@@ -1089,13 +1089,13 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         console.warn('Could not sync message deletion to server:', syncError);
         // Still show success to user since local delete worked
       }
-      
+
       toast.success('Message deleted');
     } catch (error) {
       console.error('Failed to delete message:', error);
       toast.error('Failed to delete message');
     }
-    
+
     setShowMessageMenu(false);
     setSelectedMessageId(null);
   };
@@ -1103,7 +1103,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
   const handleMessageContextMenu = (e: React.MouseEvent, messageId: string, isSender: boolean) => {
     e.preventDefault();
     if (!isSender) return;
-    
+
     setSelectedMessageId(messageId);
     setMessageMenuPosition({ x: e.clientX, y: e.clientY });
     setShowMessageMenu(true);
@@ -1111,17 +1111,17 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
 
   // Quick emoji reactions
   const quickReactions = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
-  
+
   const handleAddReaction = async (messageId: string, emoji: string) => {
     if (!currentUser?.walletAddress) return;
-    
+
     const userId = currentUser.walletAddress.toLowerCase();
-    
+
     // Update local state
     setMessageReactions(prev => {
       const newMap = new Map(prev);
       const existing = newMap.get(messageId) || [];
-      
+
       // Check if user already reacted with this emoji
       const existingReaction = existing.find(r => r.userId === userId && r.emoji === emoji);
       if (existingReaction) {
@@ -1131,10 +1131,10 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         // Add reaction
         newMap.set(messageId, [...existing, { emoji, userId }]);
       }
-      
+
       return newMap;
     });
-    
+
     // Send to server
     try {
       webSocketService.emit('message:reaction', {
@@ -1146,22 +1146,22 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
     } catch (error) {
       console.error('Error sending reaction:', error);
     }
-    
+
     setShowReactionPicker(null);
   };
 
   // Listen for reaction updates
   useEffect(() => {
-    const unsubscribe = webSocketService.on('message:reaction', (data: { 
-      messageId: string; 
-      emoji: string; 
+    const unsubscribe = webSocketService.on('message:reaction', (data: {
+      messageId: string;
+      emoji: string;
       userId: string;
       action: 'add' | 'remove';
       reactions?: Array<{ emoji: string; userId: string }>;
     }) => {
       setMessageReactions(prev => {
         const newMap = new Map(prev);
-        
+
         // If server sent full reactions list, use it directly
         if (data.reactions) {
           newMap.set(data.messageId, data.reactions.map(r => ({
@@ -1171,7 +1171,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         } else {
           // Fallback to add/remove logic
           const existing = newMap.get(data.messageId) || [];
-          
+
           if (data.action === 'remove') {
             newMap.set(data.messageId, existing.filter(r => !(r.userId === data.userId && r.emoji === data.emoji)));
           } else {
@@ -1181,11 +1181,11 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
             }
           }
         }
-        
+
         return newMap;
       });
     });
-    
+
     return () => unsubscribe();
   }, []);
 
@@ -1195,7 +1195,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
       // Stop recording
       try {
         const voiceMessage = await voiceMessageService.stopRecording();
-        
+
         // Clear recording timer
         if (recordingIntervalRef.current) {
           clearInterval(recordingIntervalRef.current);
@@ -1203,11 +1203,11 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         }
         setIsRecording(false);
         setRecordingDuration(0);
-        
+
         // Upload voice message as file
         const file = await voiceMessageService.voiceMessageToFile(voiceMessage);
         await uploadVoiceMessage(file, voiceMessage.duration);
-        
+
       } catch (error) {
         console.error('Error stopping recording:', error);
         toast.error('Failed to save voice message');
@@ -1220,12 +1220,12 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         await voiceMessageService.startRecording();
         setIsRecording(true);
         setRecordingDuration(0);
-        
+
         // Start duration timer
         recordingIntervalRef.current = setInterval(() => {
           setRecordingDuration(prev => prev + 1);
         }, 1000);
-        
+
         toast.success('Recording started...', { duration: 1500 });
       } catch (error) {
         console.error('Error starting recording:', error);
@@ -1245,38 +1245,40 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
     toast('Recording cancelled', { icon: '🗑️' });
   };
 
+
+
   const uploadVoiceMessage = async (file: File, duration: number) => {
     if (!currentUser || !activeConversationId) return;
-    
+
     // Check if this is a group chat
-    const isGroup = isGroupChat || 
-                    (activeConversation?.participants && activeConversation.participants.length > 2) ||
-                    !!(activeConversation as any)?.groupName;
-    
+    const isGroup = isGroupChat ||
+      (activeConversation?.participants && activeConversation.participants.length > 2) ||
+      !!(activeConversation as any)?.groupName;
+
     // For direct chats, require otherParticipant
     if (!isGroup && !otherParticipant) return;
-    
+
     setIsSending(true);
     const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
-    
+
     try {
       // Upload file to server
       const formData = new FormData();
       formData.append('file', file);
       formData.append('senderWallet', currentUser.walletAddress);
       formData.append('conversationId', activeConversationId);
-      
+
       const uploadResponse = await fetch(`${API_URL}/api/upload`, {
         method: 'POST',
         body: formData,
       });
-      
+
       if (!uploadResponse.ok) throw new Error('Upload failed');
-      
+
       const { file: uploadedFile } = await uploadResponse.json();
-      
+
       console.log('Voice file uploaded:', uploadedFile);
-      
+
       // Create message content with file info
       const content = JSON.stringify({
         type: 'voice',
@@ -1285,16 +1287,16 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         url: uploadedFile.url,
         duration: duration,
       });
-      
+
       const messageId = generateMessageId();
       const senderId = currentUser.walletAddress.toLowerCase();
-      
+
       if (isGroup) {
         // Group chat voice message
         const recipients = activeConversation?.participants.filter(
           p => p.toLowerCase() !== senderId
         ) || [];
-        
+
         const message: Message = {
           id: messageId,
           conversationId: activeConversationId,
@@ -1305,12 +1307,13 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           type: 'voice',
           delivered: false,
           read: false,
+          senderName: currentUser.username
         };
-        
+
         await dbHelpers.saveMessage(message);
         addMessage(message);
         saveDecryptedContent(messageId, content);
-        
+
         // Send to group
         webSocketService.emit('group:message', {
           groupId: activeConversationId,
@@ -1329,14 +1332,15 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           type: 'voice',
           delivered: false,
           read: false,
+          senderName: currentUser.username
         };
-        
+
         await dbHelpers.saveMessage(message);
         addMessage(message);
         saveDecryptedContent(messageId, content);
         webSocketService.sendMessage(message);
       }
-      
+
       toast.success('Voice message sent!');
     } catch (error) {
       console.error('Error sending voice message:', error);
@@ -1364,16 +1368,16 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
 
   const markMessagesAsRead = useCallback((messageIds: string[]) => {
     if (!currentUser) return;
-    
+
     const unreadIds = messageIds.filter(id => !readMessageIds.has(id));
     if (unreadIds.length === 0) return;
-    
+
     console.log('📖 Marking messages as read:', unreadIds);
-    
+
     unreadIds.forEach(messageId => {
       webSocketService.markRead(messageId);
     });
-    
+
     setReadMessageIds(prev => {
       const newSet = new Set(prev);
       unreadIds.forEach(id => newSet.add(id));
@@ -1383,11 +1387,11 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
 
   useEffect(() => {
     if (!currentUser || !activeConversationId) return;
-    
+
     const unreadMessages = conversationMessages.filter(
       msg => msg.senderId.toLowerCase() !== currentUser.walletAddress.toLowerCase() && !msg.read
     );
-    
+
     if (unreadMessages.length > 0) {
       const timer = setTimeout(() => {
         markMessagesAsRead(unreadMessages.map(msg => msg.id));
@@ -1399,11 +1403,11 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
   useEffect(() => {
     const unsubscribe = webSocketService.on('message:read', (data: { messageId: string; readBy: string; readAt: number }) => {
       console.log('📖 Received read receipt:', data);
-      
+
       // Update in database cache first (works across all conversations)
       // Pass the reader's address so readBy array is updated
       dbHelpers.updateMessageRead(data.messageId, data.readBy);
-      
+
       if (activeConversationId) {
         const msgs = messages.get(activeConversationId);
         if (msgs) {
@@ -1448,12 +1452,12 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
       toast.error('Please select a conversation first');
       return;
     }
-    
+
     // Check if this is a group chat
-    const isGroup = isGroupChat || 
-                    (activeConversation?.participants && activeConversation.participants.length > 2) ||
-                    !!(activeConversation as any)?.groupName;
-    
+    const isGroup = isGroupChat ||
+      (activeConversation?.participants && activeConversation.participants.length > 2) ||
+      !!(activeConversation as any)?.groupName;
+
     // For direct chats, require otherParticipant
     if (!isGroup && !otherParticipant) {
       toast.error('Please select a conversation first');
@@ -1465,7 +1469,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
 
     try {
       const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
-      
+
       const formData = new FormData();
       formData.append('file', file);
 
@@ -1477,7 +1481,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
       if (!response.ok) throw new Error('Upload failed');
 
       const data = await response.json();
-      
+
       const senderId = currentUser.walletAddress.toLowerCase();
 
       let messageType: Message['type'] = 'file';
@@ -1494,13 +1498,13 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
       });
 
       const messageId = generateMessageId();
-      
+
       if (isGroup) {
         // Group chat file upload
         const recipients = activeConversation?.participants.filter(
           p => p.toLowerCase() !== senderId
         ) || [];
-        
+
         const message: Message = {
           id: messageId,
           conversationId: activeConversationId,
@@ -1511,6 +1515,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           delivered: false,
           read: false,
           type: messageType,
+          senderName: currentUser.username
         };
 
         saveDecryptedContent(messageId, fileInfo);
@@ -1526,7 +1531,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
       } else {
         // Direct chat file upload
         const recipientId = otherParticipant!.toLowerCase();
-        
+
         const message: Message = {
           id: messageId,
           conversationId: activeConversationId,
@@ -1537,6 +1542,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           delivered: false,
           read: false,
           type: messageType,
+          senderName: currentUser.username
         };
 
         saveDecryptedContent(messageId, fileInfo);
@@ -1560,31 +1566,31 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
     e.preventDefault();
 
     if (!messageText.trim() || !currentUser || !activeConversationId) {
-      console.log('❌ Send blocked - missing:', { 
-        text: !!messageText.trim(), 
-        user: !!currentUser, 
-        convId: !!activeConversationId 
+      console.log('❌ Send blocked - missing:', {
+        text: !!messageText.trim(),
+        user: !!currentUser,
+        convId: !!activeConversationId
       });
       return;
     }
-    
+
     // IMPORTANT: If user is sending a message to a conversation they previously deleted,
     // remove it from the deleted list so it won't disappear after logout
     removeFromDeletedConversations(activeConversationId, currentUser.walletAddress);
-    
+
     // Determine if this is a group chat - check type or fall back to participant count
-    const isGroup = activeConversation?.type === 'group' || 
-                    (activeConversation?.participants && activeConversation.participants.length > 2) ||
-                    !!(activeConversation as any)?.groupName;
-    
-    console.log('📤 Sending message:', { 
-      isGroup, 
+    const isGroup = activeConversation?.type === 'group' ||
+      (activeConversation?.participants && activeConversation.participants.length > 2) ||
+      !!(activeConversation as any)?.groupName;
+
+    console.log('📤 Sending message:', {
+      isGroup,
       type: activeConversation?.type,
       participants: activeConversation?.participants?.length,
       groupName: (activeConversation as any)?.groupName,
-      otherParticipant 
+      otherParticipant
     });
-    
+
     // For direct chats, require otherParticipant. For groups, we'll handle multiple recipients
     if (!isGroup && !otherParticipant) {
       console.log('❌ Send blocked - no recipient for direct chat');
@@ -1597,25 +1603,25 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
     try {
       const senderId = currentUser.walletAddress.toLowerCase();
       const messageId = generateMessageId();
-      
+
       let messageContent = plainText;
-      
+
       if (isGroup) {
         // Group chat: Pairwise E2E encryption - encrypt for each recipient
         const recipients = activeConversation?.participants.filter(
           p => p.toLowerCase() !== senderId
         ) || [];
-        
+
         console.log('📢 Group message to recipients:', recipients);
-        
+
         // Encrypt message for each recipient (pairwise encryption)
         const encryptedPayloads: Record<string, string> = {};
         let hasEncryption = false;
-        
+
         for (const recipient of recipients) {
           const recipientLower = recipient.toLowerCase();
           const { encrypted, error } = await encryptionService.encryptForRecipient(plainText, recipientLower);
-          
+
           if (encrypted && !error) {
             encryptedPayloads[recipientLower] = encrypted;
             hasEncryption = true;
@@ -1625,7 +1631,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
             console.log(`⚠️ Could not encrypt for ${recipientLower}:`, error);
           }
         }
-        
+
         // IMPORTANT: Also encrypt for the sender so they can decrypt their own messages later
         // This is needed when messages are loaded from the server after cache is cleared
         if (hasEncryption) {
@@ -1634,12 +1640,12 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           encryptedPayloads[senderId] = plainText;
           console.log('📢 Added sender payload for self-decryption');
         }
-        
+
         // Update encryption status based on results
         if (hasEncryption) {
           setEncryptionStatus('encrypted');
         }
-        
+
         const message: Message = {
           id: messageId,
           conversationId: activeConversationId,
@@ -1650,14 +1656,15 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           delivered: false,
           read: false,
           type: 'text',
+          senderName: currentUser.username
         };
 
         saveDecryptedContent(messageId, plainText);
-        
+
         const localMessage = { ...message };
         await dbHelpers.saveMessage(localMessage);
         addMessage(localMessage);
-        
+
         // Update conversation with last message for sorting
         useAppStore.getState().updateConversation(activeConversationId, {
           lastMessage: localMessage,
@@ -1687,7 +1694,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           recipients,
           groupInfo, // Include group metadata for recipients
         });
-        
+
         console.log('✅ Group message sent with E2E encryption for', Object.keys(encryptedPayloads).length, 'recipients');
       } else {
         // Direct chat: encrypt for recipient
@@ -1697,9 +1704,9 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         if (error) {
           // Only show toast once per conversation session, not on every message
           if (encryptionStatus !== 'unencrypted') {
-            toast(error.replace(' - message sent unencrypted', ''), { 
+            toast(error.replace(' - message sent unencrypted', ''), {
               icon: '🔓',
-              duration: 4000 
+              duration: 4000
             });
             setEncryptionStatus('unencrypted');
           }
@@ -1717,6 +1724,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           delivered: false,
           read: false,
           type: 'text',
+          senderName: currentUser.username
         };
 
         saveDecryptedContent(messageId, plainText);
@@ -1724,7 +1732,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         const localMessage = { ...message, content: plainText };
         await dbHelpers.saveMessage(localMessage);
         addMessage(localMessage);
-        
+
         // Update conversation with last message for sorting
         useAppStore.getState().updateConversation(activeConversationId, {
           lastMessage: localMessage,
@@ -1749,9 +1757,9 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
     if (!currentUser) return;
 
     // Check if this is a group call
-    const isGroup = isGroupChat || 
-                    (activeConversation?.participants && activeConversation.participants.length > 2) ||
-                    !!(activeConversation as any)?.groupName;
+    const isGroup = isGroupChat ||
+      (activeConversation?.participants && activeConversation.participants.length > 2) ||
+      !!(activeConversation as any)?.groupName;
 
     // For direct calls, require otherParticipant
     if (!isGroup && !otherParticipant) return;
@@ -1762,18 +1770,18 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
       console.log('Call type:', type);
       console.log('Is group call:', isGroup);
       console.log('========================================');
-      
+
       toast.loading(`Starting ${type} call...`, { id: 'call-init' });
-      
+
       const stream = await webRTCService.initializeLocalStream(type === 'audio');
-      
+
       // Check audio tracks
       const audioTracks = stream.getAudioTracks();
       console.log('Local audio tracks:', audioTracks.length);
       audioTracks.forEach((t, i) => {
         console.log('Track ' + i + ':', { enabled: t.enabled, muted: t.muted, readyState: t.readyState });
       });
-      
+
       if (audioTracks.length > 0 && audioTracks[0].muted) {
         toast.dismiss('call-init');
         toast.error('🎤 Your microphone is muted! Please unmute and try again.', { duration: 5000 });
@@ -1862,12 +1870,12 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         // DIRECT CALL (existing logic)
         const callId = `${currentUser.walletAddress.toLowerCase()}-${otherParticipant}-${Date.now()}`;
         console.log('Generated call ID:', callId);
-        
+
         let offerSent = false;
-        
+
         // Get caller name for display on recipient side
         const callerName = currentUser.username?.replace('@', '') || '';
-        
+
         webRTCService.createCall(
           callId,
           type === 'audio',
@@ -1911,16 +1919,16 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
       console.error('Call initiation error:', error);
       console.error('Error name:', error.name);
       console.error('Error message:', error.message);
-      
+
       // Show user-friendly error message
       // The webRTCService now returns properly formatted error messages
       const errorMessage = error.message || 'Failed to start call';
-      
+
       // Check if it's a permission error and show appropriate message
-      if (errorMessage.toLowerCase().includes('permission denied') || 
-          errorMessage.toLowerCase().includes('permission') ||
-          error.name === 'NotAllowedError') {
-        
+      if (errorMessage.toLowerCase().includes('permission denied') ||
+        errorMessage.toLowerCase().includes('permission') ||
+        error.name === 'NotAllowedError') {
+
         // Show a more detailed toast with instructions for mobile
         if (isNative) {
           if (platform === 'android') {
@@ -1958,7 +1966,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           <div className="absolute top-1/3 left-1/3 w-96 h-96 bg-primary-500/5 rounded-full blur-3xl"></div>
           <div className="absolute bottom-1/3 right-1/3 w-96 h-96 bg-cyan-500/5 rounded-full blur-3xl"></div>
         </div>
-        
+
         <div className="relative z-10 text-center">
           <div className="w-24 h-24 bg-card border border-midnight rounded-2xl flex items-center justify-center mb-6 mx-auto">
             <MessageSquare size={40} className="text-primary-500" />
@@ -1990,14 +1998,13 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
             >
               <ChevronLeft size={22} className="text-secondary" />
             </button>
-            
+
             {/* Clickable Avatar */}
-            <div 
-              className={`w-10 h-10 md:w-10 md:h-10 rounded-full flex items-center justify-center text-white font-semibold overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary-500 transition flex-shrink-0 ${
-                isGroupChat 
+            <div
+              className={`w-10 h-10 md:w-10 md:h-10 rounded-full flex items-center justify-center text-white font-semibold overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary-500 transition flex-shrink-0 ${isGroupChat
                   ? 'bg-gradient-to-br from-purple-500/50 to-pink-500/50'
                   : 'bg-gradient-to-br from-primary-500/50 to-cyan-500/50'
-              }`}
+                }`}
               onClick={() => {
                 if (!isGroupChat && otherParticipant) {
                   setShowProfileModal(true);
@@ -2009,27 +2016,27 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
             >
               {isGroupChat ? (
                 (groupConv?.groupAvatar || groupConv?.avatar) ? (
-                  <img 
-                    src={groupConv.groupAvatar || groupConv.avatar} 
-                    alt={groupConv.groupName || 'Group'} 
+                  <img
+                    src={groupConv.groupAvatar || groupConv.avatar}
+                    alt={groupConv.groupName || 'Group'}
                     className="w-full h-full object-cover"
                   />
                 ) : (
                   <Users size={20} />
                 )
               ) : displayProfile?.avatar ? (
-                <img 
-                  src={displayProfile.avatar} 
-                  alt={displayProfile.username || 'Avatar'} 
+                <img
+                  src={displayProfile.avatar}
+                  alt={displayProfile.username || 'Avatar'}
                   className="w-full h-full object-cover"
                 />
               ) : (
                 getInitials(displayProfile?.username || otherParticipant || '')
               )}
             </div>
-            
+
             {/* Clickable Name */}
-            <div 
+            <div
               className="cursor-pointer hover:opacity-80 transition min-w-0 flex-1"
               onClick={() => {
                 if (!isGroupChat && otherParticipant) {
@@ -2057,22 +2064,21 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
               <div className="flex items-center gap-1 md:gap-2 text-xs md:text-sm flex-wrap">
                 {!isGroupChat && (
                   <>
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                      getStatus(otherParticipant || '') === 'online' 
-                        ? 'bg-success-500 shadow-glow-green' 
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${getStatus(otherParticipant || '') === 'online'
+                        ? 'bg-success-500 shadow-glow-green'
                         : 'bg-muted'
-                    }`} />
+                      }`} />
                     <span className="text-secondary truncate">
-                      {getStatus(otherParticipant || '') === 'online' 
-                        ? 'Online' 
+                      {getStatus(otherParticipant || '') === 'online'
+                        ? 'Online'
                         : (() => {
-                            // Show last seen time if available
-                            const lastSeenTime = getLastSeen(otherParticipant || '');
-                            if (lastSeenTime) {
-                              return `Last seen ${formatLastSeen(lastSeenTime)}`;
-                            }
-                            return 'Offline';
-                          })()
+                          // Show last seen time if available
+                          const lastSeenTime = getLastSeen(otherParticipant || '');
+                          if (lastSeenTime) {
+                            return `Last seen ${formatLastSeen(lastSeenTime)}`;
+                          }
+                          return 'Offline';
+                        })()
                       }
                     </span>
                     <span className="text-muted hidden md:inline">•</span>
@@ -2116,7 +2122,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                 <UserPlus size={20} />
               </button>
             )}
-            
+
             {/* Group Settings Button (only for group chats) */}
             {isGroupChat && (
               <button
@@ -2141,7 +2147,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
             >
               <Video size={20} />
             </button>
-            
+
             <div className="relative" ref={menuRef}>
               <button
                 onClick={() => setShowChatMenu(!showChatMenu)}
@@ -2149,7 +2155,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
               >
                 <MoreVertical size={20} />
               </button>
-              
+
               {showChatMenu && (
                 <div className="absolute right-0 mt-2 w-56 bg-card border border-midnight rounded-xl shadow-lg py-1 z-50">
                   {/* Video call option visible in menu on mobile */}
@@ -2243,8 +2249,8 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
             <div className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-xs px-3 md:px-4 py-1.5 rounded-full flex items-center gap-2">
               <LockOpen size={12} />
               <span className="hidden md:inline">
-                {isGroupChat 
-                  ? 'Group messages are not yet encrypted' 
+                {isGroupChat
+                  ? 'Group messages are not yet encrypted'
                   : 'Messages not encrypted - recipient needs to set up encryption'}
               </span>
               <span className="md:hidden">Not Encrypted</span>
@@ -2266,18 +2272,18 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
             // Handle system messages (missed calls, etc.)
             if (message.type === 'system' || message.isSystemMessage) {
               // Determine the system message type - check both direct property and metadata
-              const sysType = message.systemMessageType || 
+              const sysType = message.systemMessageType ||
                 (message.metadata as any)?.systemMessageType;
-              const callType = message.callType || 
+              const callType = message.callType ||
                 (message.metadata as any)?.callType || 'audio';
-              
+
               return (
                 <div key={message.id} className="flex justify-center my-4">
                   {(sysType === 'missed_call' || (!sysType && message.type === 'system')) && (
                     <div className="flex items-center gap-2 px-4 py-2 bg-red-500/20 rounded-full border border-red-500/40">
                       <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
-                        <line x1="1" y1="1" x2="23" y2="23"/>
+                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+                        <line x1="1" y1="1" x2="23" y2="23" />
                       </svg>
                       <span className="text-sm font-medium text-red-400">
                         Missed {callType === 'video' ? 'video' : 'voice'} call
@@ -2290,9 +2296,9 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                   {sysType === 'call_declined' && (
                     <div className="flex items-center gap-2 px-4 py-2 bg-orange-500/20 rounded-full border border-orange-500/40">
                       <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-orange-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
-                        <line x1="23" y1="1" x2="17" y2="7"/>
-                        <line x1="17" y1="1" x2="23" y2="7"/>
+                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+                        <line x1="23" y1="1" x2="17" y2="7" />
+                        <line x1="17" y1="1" x2="23" y2="7" />
                       </svg>
                       <span className="text-sm font-medium text-orange-400">
                         {callType === 'video' ? 'Video' : 'Voice'} call declined
@@ -2305,7 +2311,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                   {sysType === 'call_ended' && (
                     <div className="flex items-center gap-2 px-4 py-2 bg-green-500/20 rounded-full border border-green-500/40">
                       <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-green-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
+                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
                       </svg>
                       <span className="text-sm font-medium text-green-400">
                         {callType === 'video' ? 'Video' : 'Voice'} call ended
@@ -2318,7 +2324,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                 </div>
               );
             }
-            
+
             const isSender = message.senderId.toLowerCase() === currentUser?.walletAddress.toLowerCase();
             const showAvatar = index === 0 || filteredMessages[index - 1].senderId !== message.senderId;
 
@@ -2328,7 +2334,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
               if (message.content !== '[object Object]') {
                 try {
                   fileInfo = JSON.parse(message.content);
-                } catch {}
+                } catch { }
               }
             }
 
@@ -2339,14 +2345,14 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                   <div className="p-3 bg-red-500/20 rounded-lg">
                     <p className="text-sm opacity-70">
                       {message.type === 'image' ? '🖼️ Image unavailable' :
-                       message.type === 'video' ? '🎥 Video unavailable' :
-                       message.type === 'audio' ? '🔊 Audio unavailable' :
-                       '📎 File unavailable'}
+                        message.type === 'video' ? '🎥 Video unavailable' :
+                          message.type === 'audio' ? '🔊 Audio unavailable' :
+                            '📎 File unavailable'}
                     </p>
                   </div>
                 );
               }
-              
+
               // Helper to ensure URL uses HTTPS for non-localhost
               const ensureHttpsUrl = (url: string) => {
                 if (!url) return url;
@@ -2362,13 +2368,13 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                 }
                 return url;
               };
-              
+
               if (message.type === 'image' && fileInfo) {
                 const imageUrl = ensureHttpsUrl(fileInfo.url);
                 return (
                   <div className="max-w-xs">
-                    <img 
-                      src={imageUrl} 
+                    <img
+                      src={imageUrl}
                       alt={fileInfo.filename}
                       className="rounded-lg max-w-full cursor-pointer hover:opacity-90 transition"
                       onClick={() => window.open(imageUrl, '_blank')}
@@ -2401,7 +2407,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
               // Voice message type - check both type field and content format
               if (message.type === 'voice' || (message.content && message.content.startsWith && message.content.startsWith('{"type":"voice"'))) {
                 let voiceInfo: { type: string; fileId: string; filename: string; url: string; duration: number } | null = null;
-                
+
                 // Handle corrupted data - [object Object] was stored instead of JSON string
                 if (!message.content || message.content === '[object Object]') {
                   // Show placeholder for corrupted voice message
@@ -2414,7 +2420,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                     </div>
                   );
                 }
-                
+
                 try {
                   voiceInfo = JSON.parse(message.content);
                   // Verify it's actually a voice message
@@ -2425,18 +2431,18 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                   // Content might be encrypted or malformed - don't log repeatedly
                   // console.warn('Failed to parse voice message JSON:', parseError);
                 }
-                
+
                 if (voiceInfo && voiceInfo.url) {
                   const formatVoiceDuration = (seconds: number) => {
                     const mins = Math.floor(seconds / 60);
                     const secs = Math.floor(seconds % 60);
                     return `${mins}:${secs.toString().padStart(2, '0')}`;
                   };
-                  
+
                   // Fix URL - ensure it uses the correct API URL with HTTPS
                   let audioUrl = voiceInfo.url;
                   const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
-                  
+
                   // If URL contains localhost or is relative, fix it
                   if (audioUrl.includes('localhost:3001') || audioUrl.startsWith('/uploads/')) {
                     const filename = audioUrl.split('/uploads/').pop() || voiceInfo.filename;
@@ -2445,12 +2451,12 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                     // Relative URL without /uploads/
                     audioUrl = `${API_URL}/uploads/${audioUrl}`;
                   }
-                  
+
                   // Ensure HTTPS for non-localhost URLs
                   if (!audioUrl.includes('localhost') && audioUrl.startsWith('http://')) {
                     audioUrl = audioUrl.replace('http://', 'https://');
                   }
-                  
+
                   return (
                     <div className="min-w-[220px] max-w-[280px]">
                       <div className="flex items-center gap-3 mb-2">
@@ -2462,11 +2468,11 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                           <p className="text-xs opacity-70">{formatVoiceDuration(voiceInfo.duration || 0)}</p>
                         </div>
                       </div>
-                      <audio 
-                        src={audioUrl} 
-                        controls 
+                      <audio
+                        src={audioUrl}
+                        controls
                         preload="auto"
-                        className="w-full h-10" 
+                        className="w-full h-10"
                         style={{ filter: isSender ? 'invert(1) hue-rotate(180deg)' : 'none' }}
                         crossOrigin="anonymous"
                         onError={(e) => {
@@ -2485,7 +2491,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                     </div>
                   );
                 }
-                
+
                 // Fallback if parsing fails - show message type and that it's encrypted
                 if (message.type === 'voice') {
                   return (
@@ -2495,7 +2501,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                     </div>
                   );
                 }
-                
+
                 return <p className="break-words text-sm italic">Voice message (unable to load)</p>;
               }
 
@@ -2530,11 +2536,11 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                       const secs = Math.floor(seconds % 60);
                       return `${mins}:${secs.toString().padStart(2, '0')}`;
                     };
-                    
+
                     // Fix URL - ensure it uses the correct API URL
                     let audioUrl = parsed.url;
                     const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
-                    
+
                     // If URL contains localhost or is relative, fix it
                     if (audioUrl.includes('localhost:3001') || audioUrl.startsWith('/uploads/')) {
                       const filename = audioUrl.split('/uploads/').pop() || parsed.filename;
@@ -2542,12 +2548,12 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                     } else if (!audioUrl.startsWith('http') && !audioUrl.startsWith('blob:')) {
                       audioUrl = `${API_URL}/uploads/${audioUrl}`;
                     }
-                    
+
                     // Ensure HTTPS for non-localhost URLs
                     if (!audioUrl.includes('localhost') && audioUrl.startsWith('http://')) {
                       audioUrl = audioUrl.replace('http://', 'https://');
                     }
-                    
+
                     return (
                       <div className="min-w-[220px] max-w-[280px]">
                         <div className="flex items-center gap-3 mb-2">
@@ -2559,11 +2565,11 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                             <p className="text-xs opacity-70">{formatVoiceDuration(parsed.duration || 0)}</p>
                           </div>
                         </div>
-                        <audio 
-                          src={audioUrl} 
-                          controls 
+                        <audio
+                          src={audioUrl}
+                          controls
                           preload="auto"
-                          className="w-full h-10" 
+                          className="w-full h-10"
                           style={{ filter: isSender ? 'invert(1) hue-rotate(180deg)' : 'none' }}
                           crossOrigin="anonymous"
                           onError={(e) => {
@@ -2592,7 +2598,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                       </a>
                     );
                   }
-                } catch {}
+                } catch { }
               }
 
               // Handle encrypted group message marker that couldn't be decrypted
@@ -2604,11 +2610,11 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                   </div>
                 );
               }
-              
+
               // Handle encrypted direct messages that couldn't be decrypted
               // They appear as base64 strings (no spaces, mostly alphanumeric with +/=)
-              const looksEncrypted = /^[A-Za-z0-9+/=]{20,}$/.test(message.content) && 
-                                    !message.content.includes(' ');
+              const looksEncrypted = /^[A-Za-z0-9+/=]{20,}$/.test(message.content) &&
+                !message.content.includes(' ');
               if (looksEncrypted) {
                 return (
                   <div className="flex items-center gap-2 text-muted italic">
@@ -2637,10 +2643,10 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                     {(() => {
                       // For group chats, get sender profile from memberProfiles
                       // For direct chats, use displayProfile (the other participant)
-                      const senderProfile = isGroupChat 
+                      const senderProfile = isGroupChat
                         ? memberProfiles.get(message.senderId.toLowerCase())
                         : displayProfile;
-                      
+
                       if (senderProfile?.avatar) {
                         return <img src={senderProfile.avatar} alt="" className="w-full h-full object-cover" />;
                       }
@@ -2663,7 +2669,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                       </button>
                     </div>
                   )}
-                  
+
                   {/* Reaction picker */}
                   {showReactionPicker === message.id && (
                     <div className={`absolute ${isSender ? 'right-0' : 'left-0'} -top-10 z-20 bg-card border border-midnight rounded-full px-2 py-1 flex gap-1 shadow-lg`}>
@@ -2680,11 +2686,10 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                   )}
 
                   <div
-                    className={`max-w-md px-4 py-2.5 rounded-2xl ${
-                      isSender
+                    className={`max-w-md px-4 py-2.5 rounded-2xl ${isSender
                         ? 'bg-gradient-to-br from-primary-500 to-primary-600 text-white'
                         : 'bg-card border border-midnight text-white'
-                    } ${selectedMessageId === message.id ? 'ring-2 ring-primary-400' : ''}`}
+                      } ${selectedMessageId === message.id ? 'ring-2 ring-primary-400' : ''}`}
                   >
                     {/* Show sender name in group chats for received messages */}
                     {isGroupChat && !isSender && showAvatar && (
@@ -2719,7 +2724,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                       )}
                     </div>
                   </div>
-                  
+
                   {/* Display reactions */}
                   {messageReactions.get(message.id)?.length > 0 && (
                     <div className={`flex flex-wrap gap-1 mt-1 ${isSender ? 'justify-end' : 'justify-start'}`}>
@@ -2732,11 +2737,10 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                         <button
                           key={emoji}
                           onClick={() => handleAddReaction(message.id, emoji)}
-                          className={`px-1.5 py-0.5 rounded-full text-xs flex items-center gap-1 transition ${
-                            messageReactions.get(message.id)?.find(r => r.emoji === emoji && r.userId === currentUser?.walletAddress.toLowerCase())
+                          className={`px-1.5 py-0.5 rounded-full text-xs flex items-center gap-1 transition ${messageReactions.get(message.id)?.find(r => r.emoji === emoji && r.userId === currentUser?.walletAddress.toLowerCase())
                               ? 'bg-primary-500/30 border border-primary-500/50'
                               : 'bg-dark-200 border border-midnight hover:bg-dark-100'
-                          }`}
+                            }`}
                         >
                           <span>{emoji}</span>
                           {count > 1 && <span className="text-muted">{count}</span>}
@@ -2778,35 +2782,35 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           className="hidden"
           accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt"
         />
-        
+
         <form onSubmit={handleSendMessage} className="flex items-center gap-2 md:gap-3">
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="p-2.5 hover:bg-dark-200 rounded-xl transition text-secondary hover:text-white active:bg-dark-100 flex-shrink-0"
+            className="p-1 md:p-2.5 hover:bg-dark-200 rounded-xl transition text-secondary hover:text-white active:bg-dark-100 flex-shrink-0"
             title="Attach file"
           >
             <Paperclip size={20} />
           </button>
-          
-          <div className="relative hidden md:block">
-            <button
-              type="button"
-              onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-              className={`p-2.5 hover:bg-dark-200 rounded-xl transition ${showEmojiPicker ? 'bg-dark-200 text-white' : 'text-secondary hover:text-white'}`}
-              title="Add emoji"
-            >
-              <Smile size={20} />
-            </button>
-            {showEmojiPicker && (
-              <EmojiPicker
-                onEmojiSelect={handleEmojiSelect}
-                onClose={() => setShowEmojiPicker(false)}
-                position="top"
-              />
-            )}
-          </div>
-          
+
+
+          <button
+            type="button"
+            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+            className={`p-1 md:p-2.5 hover:bg-dark-200 rounded-xl transition ${showEmojiPicker ? 'bg-dark-200 text-white' : 'text-secondary hover:text-white'}`}
+            title="Add emoji"
+          >
+            <Smile size={20} />
+          </button>
+          {showEmojiPicker && (
+            <EmojiPicker
+              onEmojiSelect={handleEmojiSelect}
+              onClose={() => setShowEmojiPicker(false)}
+              position="top"
+            />
+          )}
+
+
           {isRecording ? (
             // Recording UI
             <div className="flex-1 flex items-center gap-2 md:gap-3 px-3 md:px-4 py-2.5 md:py-3 bg-danger-500/20 border border-danger-500/50 rounded-xl">
@@ -2838,11 +2842,10 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
             type="button"
             onClick={handleVoiceRecordToggle}
             disabled={isSending}
-            className={`p-2.5 rounded-xl transition flex-shrink-0 ${
-              isRecording 
-                ? 'bg-danger-500 text-white hover:bg-danger-600 animate-pulse' 
+            className={`p-1 md:p-2.5 rounded-xl transition flex-shrink-0 ${isRecording
+                ? 'bg-danger-500 text-white hover:bg-danger-600 animate-pulse'
                 : 'hover:bg-dark-200 text-secondary hover:text-white active:bg-dark-100'
-            }`}
+              }`}
             title={isRecording ? "Stop recording" : "Voice message"}
           >
             {isRecording ? <MicOff size={20} /> : <Mic size={20} />}
@@ -2850,7 +2853,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           <button
             type="submit"
             disabled={(!messageText.trim() && !isRecording) || isSending}
-            className="p-2.5 md:p-3 bg-gradient-to-r from-primary-500 to-cyan-500 text-white rounded-xl hover:shadow-glow transition disabled:opacity-50 disabled:cursor-not-allowed active:opacity-80 flex-shrink-0"
+            className="p-2 md:p-2.5 md:p-3 bg-gradient-to-r from-primary-500 to-cyan-500 text-white rounded-xl hover:shadow-glow transition disabled:opacity-50 disabled:cursor-not-allowed active:opacity-80 flex-shrink-0"
           >
             <Send size={20} />
           </button>

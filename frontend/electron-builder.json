@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
-  "appId": "com.blockstar.cypher",
+  "appId": "world.blockstar.cypher",
   "productName": "BlockStar Cypher",
   "copyright": "Copyright © 2026 BlockStar",
   "directories": {
@@ -72,7 +72,22 @@
     "hardenedRuntime": true,
     "gatekeeperAssess": false,
     "entitlements": "build/entitlements.mac.plist",
-    "entitlementsInherit": "build/entitlements.mac.plist"
+    "entitlementsInherit": "build/entitlements.mac.plist",
+    "notarize": true,
+    "extendInfo": {
+      "NSMicrophoneUsageDescription": "BlockStar Cypher needs the microphone for calls and walkie-talkie.",
+      "NSCameraUsageDescription": "BlockStar Cypher needs the camera for video calls and scanning QR codes.",
+      "ITSAppUsesNonEncryptionExempt": false
+    }
+  },
+  "mas": {
+    "type": "distribution",
+    "category": "public.app-category.social-networking",
+    "entitlements": "build/entitlements.mas.plist",
+    "entitlementsInherit": "build/entitlements.mas.inherit.plist",
+    "provisioningProfile": "build/embedded.provisionprofile",
+    "hardenedRuntime": false,
+    "gatekeeperAssess": false
   },
   "dmg": {
     "contents": [

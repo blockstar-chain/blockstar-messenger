@@ -131,6 +131,21 @@ export class BlockchainService {
     return await this.signer.getAddress();
   }
 
+  async getgetActiveTLDs(): Promise<any | null>{
+    if (!this.nftContract) {
+      throw new Error('NFT contract not initialized');
+    }
+
+    try {
+      const tlds = await this.nftContract.getActiveTLDs();
+      return tlds;
+    }
+    catch(err){
+      console.error('get active IDS failed:', err);
+      return ["bst","blockstar","mail","ai","tech"];
+    }
+  }
+
   disconnect(): void {
     this.provider = null;
     this.signer = null;
