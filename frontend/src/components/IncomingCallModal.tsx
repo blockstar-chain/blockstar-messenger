@@ -115,6 +115,57 @@ export default function IncomingCallModal() {
       console.log('📞 Initializing local stream, video:', isVideoCall);
       await webRTCService.initializeLocalStream(!isVideoCall);
 
+      // ── GROUP CALL ─────────────────────────────────────────────
+      // Star topology: we hold ONE peer connection, to the initiator,
+      // identified by peerId = `${callId}-${myAddress}` (same id they use).
+      if (incomingCall.isGroup) {
+        const me = currentUser.walletAddress.toLowerCase();
+        const initiator = incomingCall.callerId.toLowerCase();
+        const peerId = `${incomingCall.id}-${me}`;
+        let groupData: any = {};
+        try { groupData = JSON.parse(sessionStorage.getItem('incomingGroupCallData') || '{}'); } catch {}
+
+        webRTCService.answerCall(peerId, !isVideoCall, (signal) => {
+          if (signal.type === 'answer') {
+            webSocketService.emit('group:call:answer', {
+              callId: incomingCall.id,
+              answer: signal,
+              peerId,
+              toAddress: initiator,
+            });
+          } else if (signal.candidate || signal.type === 'candidate') {
+            webSocketService.emit('group:call:ice-candidate', {
+              recipientAddress: initiator,
+              candidate: signal,
+              callId: incomingCall.id,
+              peerId,
+            });
+          }
+        });
+        webRTCService.processSignal(peerId, offer);
+
+        setActiveCall({
+          id: incomingCall.id,
+          callerId: initiator,
+          recipientId: [me],
+          type: incomingCall.type,
+          status: 'active',
+          startTime: Date.now(),
+          isGroupCall: true,
+          // We're only connected to the initiator, so show them as the participant
+          participants: [initiator, me],
+          groupName: incomingCall.groupName || groupData.groupName,
+          groupId: incomingCall.groupId || groupData.groupId,
+        });
+        setCallModalOpen(true);
+        setIncomingCall(null);
+        sessionStorage.removeItem('incomingCallOffer');
+        sessionStorage.removeItem('incomingCallInfo');
+        sessionStorage.removeItem('incomingGroupCallData');
+        console.log('✅ Joined group call', incomingCall.id);
+        return;
+      }
+
       // 3. Create the answering peer connection
       const peer = webRTCService.answerCall(
         incomingCall.id,
@@ -188,6 +239,17 @@ export default function IncomingCallModal() {
     console.log('  Call Type:', incomingCall.type);
     console.log('═══════════════════════════════════════');
     
+    if (incomingCall.isGroup) {
+      // Group call: just tell the initiator we're not joining; the call goes on
+      webSocketService.emit('group:call:decline', { callId: incomingCall.id });
+      setIncomingCall(null);
+      sessionStorage.removeItem('incomingCallOffer');
+      sessionStorage.removeItem('incomingCallInfo');
+      sessionStorage.removeItem('incomingGroupCallData');
+      toast('Call declined', { icon: '📵' });
+      return;
+    }
+
     // Notify caller that call was declined
     webSocketService.endCall(incomingCall.id);
     
@@ -219,7 +281,7 @@ export default function IncomingCallModal() {
   const callType = incomingCall.type || 'audio';
 
   return (
-    <div className="fixed inset-0 bg-black/95 z-[100] flex flex-col items-center justify-center p-4">
+    <div className="fixed inset-0 bg-black/95 z-[210] flex flex-col items-center justify-center p-4">
       {/* Background animation */}
       <div className="absolute inset-0 overflow-hidden">
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[300px] sm:w-[600px] sm:h-[600px] bg-gradient-to-r from-primary-500/20 to-purple-500/20 rounded-full blur-3xl animate-pulse" />
@@ -235,7 +297,8 @@ export default function IncomingCallModal() {
             <Phone size={16} className="text-primary-400 sm:w-[18px] sm:h-[18px]" />
           )}
           <span className="text-white/80 text-xs sm:text-sm">
-            Incoming {callType === 'video' ? 'Video' : 'Voice'} Call
+            Incoming {incomingCall.isGroup ? 'Group ' : ''}{callType === 'video' ? 'Video' : 'Voice'} Call
+            {incomingCall.isGroup && incomingCall.groupName ? ` · ${incomingCall.groupName}` : ''}
           </span>
         </div>
 

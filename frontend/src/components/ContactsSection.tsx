@@ -34,6 +34,10 @@ const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
 let currentUserWallet: string | null = null;
 // Cache for contacts (for sync helper)
 let contactsCache: Set<string> = new Set();
+// Wallet address -> nickname, kept in sync with the contacts list so other
+// components (chat header, call banners, push-related UI) can show the
+// nickname a user set instead of always falling back to @username.
+let nicknameCache: Map<string, string> = new Map();
 
 interface ContactsSectionProps {
   onConversationSelect?: () => void;
@@ -107,6 +111,11 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
   // Update contacts cache when contacts change
   useEffect(() => {
     contactsCache = new Set(contacts.map(c => c.walletAddress.toLowerCase()));
+    nicknameCache = new Map(
+      contacts
+        .filter(c => c.nickname)
+        .map(c => [c.walletAddress.toLowerCase(), c.nickname as string])
+    );
   }, [contacts]);
 
   // Load contacts from API
@@ -510,8 +519,8 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
   const sortedContacts = [...filteredContacts].sort((a, b) => {
     if (a.isFavorite && !b.isFavorite) return -1;
     if (!a.isFavorite && b.isFavorite) return 1;
-    const nameA = a.profile?.username || a.nickname || a.walletAddress;
-    const nameB = b.profile?.username || b.nickname || b.walletAddress;
+    const nameA = a.nickname || a.profile?.username || a.walletAddress;
+    const nameB = b.nickname || b.profile?.username || b.walletAddress;
     return nameA.localeCompare(nameB);
   });
 
@@ -618,7 +627,7 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
                         />
                       ) : (
                         <span className="text-white font-semibold">
-                          {getInitials(contact.profile?.username || contact.nickname || contact.walletAddress)}
+                          {getInitials(contact.nickname || contact.profile?.username || contact.walletAddress)}
                         </span>
                       )}
                     </div>
@@ -632,14 +641,19 @@ export default function ContactsSection({ onConversationSelect }: ContactsSectio
                   {/* Info */}
                   <div className="flex-1 min-w-0">
                     <p className="font-semibold text-white truncate">
-                      {contact.profile?.username
-                        ? `@${contact.profile.username}`
-                        : contact.nickname || truncateAddress(contact.walletAddress)
+                      {contact.nickname
+                        ? contact.nickname
+                        : contact.profile?.username
+                          ? `@${contact.profile.username}`
+                          : truncateAddress(contact.walletAddress)
                       }
                     </p>
                     {(contact.profile?.username || contact.nickname) && (
                       <p className="text-xs text-muted truncate">
-                        {truncateAddress(contact.walletAddress)}
+                        {contact.nickname && contact.profile?.username
+                          ? `@${contact.profile.username}`
+                          : truncateAddress(contact.walletAddress)
+                        }
                       </p>
                     )}
                   </div>
@@ -929,4 +943,27 @@ export const addToContacts = async (address: string): Promise<boolean> => {
 // Synchronous check using cached data (for UI that can't be async)
 export const isContact = (address: string): boolean => {
   return contactsCache.has(address.toLowerCase());
+};
+
+// Synchronous nickname lookup using cached data (for UI that can't be async)
+export const getContactNickname = (address: string): string | undefined => {
+  return nicknameCache.get(address.toLowerCase());
+};
+
+// Prime the shared contacts/nickname cache from outside this component.
+// ContactsSection only mounts when the user visits the Contacts tab, so
+// anything that needs nicknames before that (message list, chat header,
+// profile modal) can call this once it has its own contacts fetch result,
+// keeping the single source of truth in sync regardless of which component
+// happened to load the data first.
+export const primeContactsCache = (
+  entries: Array<{ walletAddress: string; nickname?: string }>
+) => {
+  entries.forEach(({ walletAddress, nickname }) => {
+    const normalized = walletAddress.toLowerCase();
+    contactsCache.add(normalized);
+    if (nickname) {
+      nicknameCache.set(normalized, nickname);
+    }
+  });
 };

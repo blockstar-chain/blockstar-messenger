@@ -447,6 +447,8 @@ export interface DBMessage {
   created_at: Date;
   updated_at: Date;
   deleted_at?: Date;
+  edited?: boolean;
+  edited_at?: Date;
   client_id?: string;  // Client-generated message ID for read receipt tracking
 }
 
@@ -872,6 +874,56 @@ export async function deleteConversationMessages(conversationId: string): Promis
 
 export async function getUser(walletAddress: string): Promise<any> {
   return getUserByWallet(walletAddress);
+}
+
+export async function editMessage(
+  messageId: string,
+  content: string,
+  encryptedPayloads?: Record<string, string>
+): Promise<boolean> {
+  try {
+    const update: any = {
+      content,
+      edited: true,
+      edited_at: new Date(),
+      updated_at: new Date(),
+    };
+    if (encryptedPayloads) {
+      update.encrypted_payloads = encryptedPayloads;
+    }
+
+    // Try to find message by client_id first (frontend-generated ID)
+    let result = await messagesCollection.updateOne(
+      { client_id: messageId, deleted_at: { $exists: false } },
+      { $set: update }
+    );
+
+    if (result.modifiedCount > 0) {
+      console.log(`✅ Edited message by client_id: ${messageId}`);
+      return true;
+    }
+
+    // If not found by client_id, try by ObjectId
+    try {
+      result = await messagesCollection.updateOne(
+        { _id: new ObjectId(messageId), deleted_at: { $exists: false } },
+        { $set: update }
+      );
+
+      if (result.modifiedCount > 0) {
+        console.log(`✅ Edited message by ObjectId: ${messageId}`);
+        return true;
+      }
+    } catch {
+      // Invalid ObjectId format, that's ok
+    }
+
+    console.log(`⚠️ Message not found for edit: ${messageId}`);
+    return false;
+  } catch (error) {
+    console.error('Error editing message:', error);
+    return false;
+  }
 }
 
 export async function softDeleteMessage(messageId: string): Promise<boolean> {
@@ -1493,6 +1545,28 @@ export async function isContactExists(
 }
 
 /**
+ * Get the nickname `ownerWallet` has set for `contactWallet`, if any.
+ * Used e.g. so push notifications can show the name the recipient chose
+ * for the sender, rather than the sender's own @username.
+ */
+export async function getContactNickname(
+  ownerWallet: string,
+  contactWallet: string
+): Promise<string | null> {
+  try {
+    const contact = await contactsCollection.findOne({
+      owner_wallet: ownerWallet.toLowerCase(),
+      contact_wallet: contactWallet.toLowerCase(),
+    });
+
+    return (contact as any)?.nickname || null;
+  } catch (error) {
+    console.error('Error fetching contact nickname:', error);
+    return null;
+  }
+}
+
+/**
  * Hide a conversation for a specific user (soft delete)
  * The conversation still exists but won't be returned for this user
  */
@@ -1828,6 +1902,7 @@ export default {
   // Delete operations
   deleteConversation,
   deleteConversationMessages,
+  editMessage,
   softDeleteMessage,
   hideConversationForUser,
   unhideConversationForUser,
@@ -1837,6 +1912,7 @@ export default {
   getUser,
   // Contact operations
   getContacts,
+  getContactNickname,
   addContact,
   updateContact,
   removeContact,

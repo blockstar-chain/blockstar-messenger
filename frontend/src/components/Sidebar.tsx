@@ -16,7 +16,7 @@ import { useSettingReslover } from '@/hooks/useSetting';
 import { resolveAccountDisplay } from '@/utils/constant';
 import ContactsSection from './ContactsSection';
 import UserProfileModal from './UserProfileModal';
-import { addToContacts, isContact } from './ContactsSection';
+import { addToContacts, isContact, primeContactsCache, getContactNickname } from './ContactsSection';
 import MeshStatusIndicator from './MeshStatusIndicator';
 import MeshNetworkModal from './MeshNetworkModal';
 import MeshSettingsSection from './MeshSettingsSection';
@@ -545,10 +545,12 @@ export default function Sidebar({
     }
   };
 
-  // Load contacts when showing new chat modal
+  // Load contacts - needed for the "new chat" picker, but also to resolve
+  // nicknames in the conversation list, chat header, etc. So this runs as
+  // soon as we have a user, not just when the new-chat modal is opened.
   useEffect(() => {
     const loadContactsForChat = async () => {
-      if (!showNewChatModal || !currentUser?.walletAddress) return;
+      if (!currentUser?.walletAddress) return;
 
       try {
         const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
@@ -580,6 +582,7 @@ export default function Sidebar({
               })
             );
             setAvailableContacts(contactsWithProfiles);
+            primeContactsCache(contactsWithProfiles);
           }
         }
       } catch (error) {
@@ -588,7 +591,7 @@ export default function Sidebar({
     };
 
     loadContactsForChat();
-  }, [showNewChatModal, currentUser?.walletAddress]);
+  }, [currentUser?.walletAddress]);
 
   // Load conversations when component mounts or currentUser changes
   useEffect(() => {
@@ -1720,6 +1723,7 @@ export default function Sidebar({
                   // Check contactProfiles state first, then fall back to wallet cache
                   const stateProfile = otherParticipant ? contactProfiles[otherParticipant.toLowerCase()] : null;
                   const contactProfile = stateProfile || (otherParticipant ? getProfileByWallet(otherParticipant) : null);
+                  const contactNickname = otherParticipant ? getContactNickname(otherParticipant) : undefined;
 
                   return (
                     <div
@@ -1767,7 +1771,7 @@ export default function Sidebar({
                               className="w-full h-full object-cover"
                             />
                           ) : (
-                            getInitials(contactProfile?.username || otherParticipant || '')
+                            getInitials(contactNickname || contactProfile?.username || otherParticipant || '')
                           )}
                         </div>
                         <div className="flex-1 min-w-0">
@@ -1777,6 +1781,13 @@ export default function Sidebar({
                                 <>
                                   <p className="font-semibold text-white truncate">{groupConv.groupName || 'Group Chat'}</p>
                                   <p className="text-xs text-muted truncate">{conversation.participants.length} members</p>
+                                </>
+                              ) : contactNickname ? (
+                                <>
+                                  <p className="font-semibold text-white truncate">{contactNickname}</p>
+                                  <p className="text-xs text-muted truncate">
+                                    {contactProfile?.username ? `@${contactProfile.username}` : truncateAddress(otherParticipant || '')}
+                                  </p>
                                 </>
                               ) : contactProfile?.username ? (
                                 <>

@@ -329,7 +329,12 @@ export default function CallModal() {
         // Group call - handle per-participant streams
         // Extract participant address from peerId (format: callId-address)
         const parts = peerId.split('-');
-        const participantAddress = parts[parts.length - 1]?.toLowerCase();
+        let participantAddress = parts[parts.length - 1]?.toLowerCase();
+        // As a joiner, our only peer is `${callId}-${myAddress}` — that stream
+        // is the initiator's, not ours.
+        if (participantAddress && participantAddress === currentUser?.walletAddress?.toLowerCase()) {
+          participantAddress = activeCall.callerId?.toLowerCase();
+        }
 
         if (participantAddress) {
           setParticipantStreams(prev => {
@@ -561,8 +566,11 @@ export default function CallModal() {
     if (activeCall && !fromRemote) {
       if (isGroupCall) {
         // Notify all participants
+        // Server decides: initiator hanging up ends it for everyone,
+        // anyone else hanging up just leaves.
         webSocketService.emit('group:call:end', {
           callId: activeCall.id,
+          groupId: activeCall.groupId,
           participantAddress: currentUser?.walletAddress,
         });
       } else {
@@ -638,7 +646,7 @@ export default function CallModal() {
   const totalParticipants = participantStreams.size;
 
   return (
-    <div className="fixed inset-0 bg-midnight z-50 flex items-center justify-center">
+    <div className="fixed inset-0 bg-midnight z-[200] flex items-center justify-center">
       {/* Audio element for direct calls */}
       {!isGroupCall && (
         <audio
@@ -962,7 +970,10 @@ export default function CallModal() {
         )}
 
         {/* Call Controls */}
-        <div className="absolute bottom-12 left-1/2 -translate-x-1/2">
+        <div
+          className="absolute left-1/2 -translate-x-1/2"
+          style={{ bottom: 'calc(3rem + env(safe-area-inset-bottom, 0px))' }}
+        >
           <div className="flex items-center gap-4 bg-card/80 backdrop-blur-sm px-6 py-4 rounded-full border border-midnight">
             {/* Mute Button */}
             <button

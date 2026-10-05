@@ -597,6 +597,185 @@ app.get('/api/calls/:callId/status', async (req, res) => {
 
 
 // Send call-specific push notification (high priority)
+// ============================================
+// REACH-AWARE EMIT
+// ============================================
+// A mobile app that's backgrounded / locked keeps its socket "connected" from
+// the server's point of view for up to ~45s (ping timeout), but iOS has frozen
+// the JS — anything emitted to it just vanishes. So for things the user must
+// notice (messages, calls) we emit WITH an ack: the client replies immediately
+// with { visible }. No reply in time, or app not on screen ⇒ send a push too.
+type Reach =
+  | { status: 'offline' }
+  | { status: 'no-ack' }
+  | { status: 'delivered'; visible: boolean };
+
+function emitWithReach(walletAddress: string, event: string, payload: any, timeoutMs = 4000): Promise<Reach> {
+  const socketId = activeConnections.get(walletAddress.toLowerCase());
+  const target = socketId ? io.sockets.sockets.get(socketId) : undefined;
+  if (!target) return Promise.resolve({ status: 'offline' });
+
+  return new Promise<Reach>((resolve) => {
+    target.timeout(timeoutMs).emit(event, payload, (err: any, response: any) => {
+      if (err) {
+        console.log(`   ⏱️ No ack for ${event} from ${walletAddress} — treating as unreachable`);
+        resolve({ status: 'no-ack' });
+      } else {
+        resolve({ status: 'delivered', visible: response?.visible !== false });
+      }
+    });
+  });
+}
+
+/** Generic message push — NEVER includes message content (E2E). */
+async function sendMessagePush(
+  recipientWallet: string,
+  senderWallet: string,
+  senderNameHint: string | undefined,
+  body: string,
+  conversationId: string
+): Promise<void> {
+  try {
+    const tokens = await db.getPushTokens(recipientWallet.toLowerCase());
+    if (!tokens || !tokens.length) return;
+    const recipientNickname = await db.getContactNickname(recipientWallet.toLowerCase(), senderWallet);
+    const senderName = recipientNickname || senderNameHint ||
+      `${senderWallet.slice(0, 6)}…${senderWallet.slice(-4)}`;
+    for (const { push_token, platform } of tokens) {
+      try {
+        await pushService.sendMessageNotification(
+          push_token,
+          platform as 'ios' | 'android',
+          senderName,
+          body,
+          conversationId
+        );
+      } catch (err) {
+        console.error(`Failed to send message push to ${platform}:`, err);
+      }
+    }
+    console.log(`📬 Message push sent to ${tokens.length} device(s) for ${recipientWallet}`);
+  } catch (err) {
+    console.error('Failed to send message push:', err);
+  }
+}
+
+// ============================================
+// GROUP CALL STATE
+// ============================================
+// Group calls are a star: the initiator holds one peer connection per member.
+// We track each call so we can (a) push members whose phones are asleep,
+// (b) re-deliver the ring when they open the app, and (c) end/leave properly.
+interface GroupCallState {
+  callId: string;
+  groupId: string;
+  groupName: string;
+  callType: 'audio' | 'video';
+  initiator: string;
+  initiatorName?: string;
+  participants: string[];
+  offers: Map<string, any>;        // recipient -> initiator's offer for them
+  pending: Map<string, number>;    // recipient -> time we started ringing
+  pushed: Set<string>;             // recipients we've already pushed
+  joined: Set<string>;
+  createdAt: number;
+}
+const groupCalls = new Map<string, GroupCallState>();
+const GROUP_RING_TTL_MS = 60_000;           // stop ringing a member after 60s
+const GROUP_CALL_MAX_AGE_MS = 6 * 60 * 60_000;
+
+function groupIncomingPayload(call: GroupCallState, recipient: string) {
+  return {
+    callerId: call.initiator,
+    callerAddress: call.initiator,
+    initiatorId: call.initiator,
+    callerName: call.initiatorName,
+    callType: call.callType,
+    offer: call.offers.get(recipient),
+    callId: call.callId,
+    groupId: call.groupId,
+    groupName: call.groupName,
+    participants: call.participants,
+    peerId: `${call.callId}-${recipient}`,
+  };
+}
+
+async function pushGroupCall(call: GroupCallState, recipient: string): Promise<void> {
+  if (call.pushed.has(recipient)) return;
+  call.pushed.add(recipient);
+  try {
+    const tokens = await db.getPushTokens(recipient);
+    if (!tokens || !tokens.length) {
+      console.log(`   📱 No push tokens for ${recipient} — can't ring group call`);
+      return;
+    }
+    const nickname = await db.getContactNickname(recipient, call.initiator).catch(() => null);
+    for (const { push_token, platform } of tokens) {
+      try {
+        await pushService.sendGroupCallNotification(push_token, platform as 'ios' | 'android', {
+          callId: call.callId,
+          groupId: call.groupId,
+          groupName: call.groupName,
+          callerName: nickname || call.initiatorName || truncateAddress(call.initiator),
+          callType: call.callType,
+        });
+      } catch (err) {
+        console.error(`Failed group call push to ${platform}:`, err);
+      }
+    }
+    console.log(`   📞 Group call push sent to ${recipient} (${tokens.length} device(s))`);
+  } catch (err) {
+    console.error('Group call push failed:', err);
+  }
+}
+
+/** Ring one member: socket first; push if their app isn't on screen. */
+function ringGroupMember(call: GroupCallState, recipient: string): void {
+  emitWithReach(recipient, 'group:call:incoming', groupIncomingPayload(call, recipient)).then(async (reach) => {
+    if (reach.status === 'delivered' && reach.visible) {
+      console.log(`   → Group call ringing on ${recipient}`);
+      return;
+    }
+    console.log(`   → ${recipient} not on screen (${reach.status}) — pushing group call`);
+    await pushGroupCall(call, recipient);
+  }).catch((err) => console.error('ringGroupMember failed:', err));
+}
+
+/** Re-send any still-ringing group calls to this user (on connect / app foreground). */
+function resyncPendingCalls(walletAddress: string): void {
+  const me = walletAddress.toLowerCase();
+  const now = Date.now();
+  for (const call of groupCalls.values()) {
+    const since = call.pending.get(me);
+    if (since === undefined) continue;
+    if (now - since > GROUP_RING_TTL_MS) { call.pending.delete(me); continue; }
+    const socketId = activeConnections.get(me);
+    if (socketId) {
+      console.log(`📞 Re-delivering pending group call ${call.callId} to ${me}`);
+      io.to(socketId).emit('group:call:incoming', groupIncomingPayload(call, me));
+    }
+  }
+}
+
+function emitToUser(walletAddress: string, event: string, payload: any): void {
+  const socketId = activeConnections.get(walletAddress.toLowerCase());
+  if (socketId) io.to(socketId).emit(event, payload);
+}
+
+// Housekeeping: expire stale rings and abandoned calls
+setInterval(() => {
+  const now = Date.now();
+  for (const [callId, call] of groupCalls) {
+    for (const [member, since] of call.pending) {
+      if (now - since > GROUP_RING_TTL_MS) {
+        call.pending.delete(member);
+        emitToUser(call.initiator, 'group:call:participant:unavailable', { callId, address: member });
+      }
+    }
+    if (now - call.createdAt > GROUP_CALL_MAX_AGE_MS) groupCalls.delete(callId);
+  }
+}, 15_000);
+
 async function sendCallPushNotification(
   recipientWallet: string,
   callId: string,
@@ -1282,6 +1461,8 @@ app.get('/api/conversations/:conversationId/messages', async (req, res) => {
         readBy: msg.read_by || [],  // Ensure array even if empty
         reactions: msg.reactions || [],  // Include reactions
         timestamp: msg.created_at.getTime(),
+        edited: msgAny.edited || false,
+        editedAt: msgAny.edited_at ? new Date(msgAny.edited_at).getTime() : undefined,
       };
     });
 
@@ -1493,6 +1674,30 @@ app.get('/api/conversations/:walletAddress/all', async (req, res) => {
   } catch (error) {
     console.error('Error fetching all conversations:', error);
     res.status(500).json({ error: 'Failed to fetch conversations' });
+  }
+});
+
+// Edit a single message's content (used as a persistence fallback alongside
+// the real-time message:edit socket event, mirroring the delete endpoint below)
+app.patch('/api/messages/:messageId', async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { content, encryptedPayloads } = req.body;
+
+    if (!content) {
+      return res.status(400).json({ error: 'content is required' });
+    }
+
+    const edited = await db.editMessage(messageId, content, encryptedPayloads);
+
+    if (edited) {
+      res.json({ success: true, message: 'Message edited' });
+    } else {
+      res.status(404).json({ success: false, error: 'Message not found' });
+    }
+  } catch (error) {
+    console.error('Error editing message:', error);
+    res.status(500).json({ error: 'Failed to edit message' });
   }
 });
 
@@ -1981,6 +2186,7 @@ app.get('/api/sync/:walletAddress', async (req, res) => {
               contentStr = String(msg.content || '');
             }
 
+            const msgAny = msg as any;
             return {
               id: msg.client_id || msg._id!.toString(),  // Use client_id if available
               conversationId: msg.conversation_id,
@@ -1990,6 +2196,8 @@ app.get('/api/sync/:walletAddress', async (req, res) => {
               delivered: msg.delivered,
               readBy: msg.read_by,
               timestamp: msg.created_at.getTime(),
+              edited: msgAny.edited || false,
+              editedAt: msgAny.edited_at ? new Date(msgAny.edited_at).getTime() : undefined,
             };
           }),
         };
@@ -2145,6 +2353,10 @@ io.on('connection', (socket: Socket) => {
 
   console.log(`User ${address} connected`);
 
+  // If a group call was ringing for this user while their app was asleep,
+  // ring them now that they're back (small delay so client handlers attach).
+  setTimeout(() => resyncPendingCalls(address), 1500);
+
   // Broadcast online status to all
   socket.broadcast.emit('user:status', {
     address,
@@ -2268,7 +2480,7 @@ io.on('connection', (socket: Socket) => {
 
       if (recipientSocketId) {
         // Recipient is online - deliver immediately
-        io.to(recipientSocketId).emit('message', {
+        const outbound = {
           id: message.id,
           senderId: message.senderId,
           recipientId: message.recipientId,
@@ -2277,13 +2489,33 @@ io.on('connection', (socket: Socket) => {
           timestamp: message.timestamp,
           conversationId: conversationId,
           deliveredAt: Date.now(),
-        });
+        };
 
-        // Also send conversation ID back to sender
-        socket.emit('message:delivered', {
-          messageId: message.id,
-          conversationId: conversationId,
-          timestamp: Date.now(),
+        // Don't block this handler waiting for the ack
+        emitWithReach(recipientAddress, 'message', outbound).then(async (reach) => {
+          if (reach.status === 'delivered') {
+            socket.emit('message:delivered', {
+              messageId: message.id,
+              conversationId: conversationId,
+              timestamp: Date.now(),
+            });
+            // App is open but backgrounded (e.g. phone locked) → push so they notice
+            if (!reach.visible) {
+              await sendMessagePush(recipientAddress, address, message.senderName, 'Sent you a message', conversationId || '');
+            }
+            return;
+          }
+          // Socket was stale (iOS suspended the app) — queue + push like offline
+          try {
+            await db.queueOfflineMessage(
+              recipientAddress, address, message.content, message.type || 'text',
+              message.id, conversationId || undefined
+            );
+          } catch (e) {
+            console.error('Failed to queue message after missing ack:', e);
+          }
+          await sendMessagePush(recipientAddress, address, message.senderName, 'Sent you a message', conversationId || '');
+          socket.emit('message:queued', { messageId: message.id, recipientAddress });
         });
       } else {
         // Recipient is offline - queue message in database
@@ -2301,34 +2533,9 @@ io.on('connection', (socket: Socket) => {
           console.error('Failed to queue offline message:', dbError);
         }
 
-                // Recipient is offline → send a push notification so they see the message.
-        try {
-          const tokens = await db.getPushTokens(recipientAddress);
-          console.log("push tokens" , tokens);
-          if (tokens && tokens.length) {
-            const senderName = (message.senderName as string) ||
-              `${address.slice(0, 6)}…${address.slice(-4)}`;
-            // SECURITY: messages are end-to-end encrypted — never put the content
-            // (which is ciphertext) in the notification. Show a generic body only.
-            const preview = 'Sent you a message';
-            for (const { push_token, platform } of tokens) {
-              try {
-                await pushService.sendMessageNotification(
-                  push_token,
-                  platform as 'ios' | 'android',
-                  senderName,
-                  preview,
-                  conversationId || ''
-                );
-              } catch (err) {
-                console.error(`Failed to send message push to ${platform}:`, err);
-              }
-            }
-            console.log(`📬 Message push sent to ${tokens.length} device(s) for ${recipientAddress}`);
-          }
-        } catch (pushErr) {
-          console.error('Failed to send message push:', pushErr);
-        }
+        // Recipient is offline → send a push notification so they see the message.
+        // SECURITY: E2E — generic body only, never the content.
+        await sendMessagePush(recipientAddress, address, message.senderName, 'Sent you a message', conversationId || '');
 
         // Acknowledge to sender (will be delivered when recipient comes online)
         socket.emit('message:queued', {
@@ -2392,6 +2599,59 @@ io.on('connection', (socket: Socket) => {
       }
     } catch (error) {
       console.error('Error handling message:read:', error);
+    }
+  });
+
+  // ----------------------
+  // Message Edits
+  // ----------------------
+
+  socket.on('message:edit', async ({ messageId, conversationId, senderId, content, encryptedPayloads, editedAt }: {
+    messageId: string;
+    conversationId: string;
+    senderId: string;
+    content: string;
+    encryptedPayloads?: Record<string, string>;
+    editedAt: number;
+  }) => {
+    try {
+      console.log('✏️ Edit:', { messageId, conversationId, senderId });
+
+      // Persist the new content (and per-recipient payloads for group chats)
+      await db.editMessage(messageId, content, encryptedPayloads);
+
+      const conversation = await db.getConversationById(conversationId);
+      if (!conversation) {
+        console.log('Conversation not found for edit');
+        return;
+      }
+
+      // Broadcast to all other participants (not the sender - they already
+      // applied the edit optimistically on their own device)
+      for (const participant of conversation.participants) {
+        const participantLower = participant.toLowerCase();
+        if (participantLower === senderId.toLowerCase()) continue;
+
+        const participantSocketId = activeConnections.get(participantLower);
+        if (!participantSocketId) continue;
+
+        // For group chats, give each participant their own encrypted payload,
+        // same resolution used for new group messages
+        let participantContent = content;
+        if (encryptedPayloads && encryptedPayloads[participantLower]) {
+          participantContent = encryptedPayloads[participantLower];
+        }
+
+        io.to(participantSocketId).emit('message:edit', {
+          messageId,
+          conversationId,
+          senderId,
+          content: participantContent,
+          editedAt,
+        });
+      }
+    } catch (error) {
+      console.error('Error handling message:edit:', error);
     }
   });
 
@@ -2474,17 +2734,32 @@ io.on('connection', (socket: Socket) => {
       });
 
       if (recipientSocketId) {
-        // Recipient is online - send via WebSocket
-        io.to(recipientSocketId).emit('call:incoming', {
+        // Confirm call initiated to caller with the SAME call ID
+        socket.emit('call:initiated', { callId: finalCallId, recipientAddress: recipient });
+
+        // Ring over the socket, but verify it actually landed. If the recipient's
+        // app is backgrounded / locked (no ack, or not visible) also send the
+        // call push so the phone actually rings.
+        emitWithReach(recipient, 'call:incoming', {
           callerId: address,
           callerName: callerName, // Pass caller's @name
           callType,
           offer,
           callId: finalCallId,
-        });
-
-        // Confirm call initiated to caller with the SAME call ID
-        socket.emit('call:initiated', { callId: finalCallId, recipientAddress: recipient });
+        }).then(async (reach) => {
+          if (reach.status === 'delivered' && reach.visible) return;
+          console.log(`📞 ${recipient} not on screen (${reach.status}) — sending call push`);
+          let displayName = callerName;
+          if (!displayName) {
+            try {
+              const callerProfile = await db.getUserByWallet(address);
+              displayName = callerProfile?.username || truncateAddress(address);
+            } catch {
+              displayName = truncateAddress(address);
+            }
+          }
+          await sendCallPushNotification(recipient, finalCallId, address, displayName, callType, offer);
+        }).catch((err) => console.error('Call reach check failed:', err));
       } else {
         // Recipient is OFFLINE - try to send push notification
         console.log(`📞 Recipient ${recipient} is offline, attempting push notification...`);
@@ -2852,49 +3127,40 @@ io.on('connection', (socket: Socket) => {
           groupInfo, // Include group metadata so recipient can create group if needed
         };
 
-        if (recipientSocketId) {
-          io.to(recipientSocketId).emit('message', recipientMessage);
-          console.log(`   → Sent to ${recipientAddress} (encrypted: ${isEncrypted})`);
-        } else {
-          // Queue for offline delivery with their specific encrypted content
-          await db.queueOfflineMessage(
-            recipientAddress,
-            address,  // sender wallet
-            recipientContent,  // their encrypted content
-            message.type || 'text',
-            message.id,  // client ID
-            groupId,  // conversation ID
-            groupInfo  // group metadata
-          );
-          console.log(`   → Queued offline for ${recipientAddress}`);
+        const groupName = (groupInfo && (groupInfo.name || groupInfo.groupName))
+          ? String(groupInfo.name || groupInfo.groupName) : '';
+        const pushBody = groupName ? `New message in ${groupName}` : 'Sent a message to the group';
 
-          // Push the offline group member (generic — never the encrypted content)
+        const queueAndPush = async () => {
           try {
-            const gTokens = await db.getPushTokens(recipientLower);
-            if (gTokens && gTokens.length) {
-              const senderName = (message.senderName as string) ||
-                `${address.slice(0, 6)}…${address.slice(-4)}`;
-              const groupName = (groupInfo && groupInfo.name) ? String(groupInfo.name) : '';
-              const body = groupName
-                ? `New message in ${groupName}`
-                : 'Sent a message to the group';
-              for (const { push_token, platform } of gTokens) {
-                try {
-                  await pushService.sendMessageNotification(
-                    push_token,
-                    platform as 'ios' | 'android',
-                    senderName,
-                    body,
-                    groupId
-                  );
-                } catch (err) {
-                  console.error(`Failed to send group message push to ${platform}:`, err);
-                }
-              }
-            }
-          } catch (pushErr) {
-            console.error('Failed to send group message push:', pushErr);
+            await db.queueOfflineMessage(
+              recipientAddress,
+              address,           // sender wallet
+              recipientContent,  // their encrypted content
+              message.type || 'text',
+              message.id,        // client ID
+              groupId,           // conversation ID
+              groupInfo          // group metadata
+            );
+            console.log(`   → Queued offline for ${recipientAddress}`);
+          } catch (e) {
+            console.error(`Failed to queue group message for ${recipientAddress}:`, e);
           }
+          // Generic push — never the encrypted content
+          await sendMessagePush(recipientLower, address, message.senderName, pushBody, groupId);
+        };
+
+        if (recipientSocketId) {
+          console.log(`   → Sending to ${recipientAddress} (encrypted: ${isEncrypted})`);
+          emitWithReach(recipientLower, 'message', recipientMessage).then(async (reach) => {
+            if (reach.status !== 'delivered') {
+              await queueAndPush();
+            } else if (!reach.visible) {
+              await sendMessagePush(recipientLower, address, message.senderName, pushBody, groupId);
+            }
+          });
+        } else {
+          await queueAndPush();
         }
       }
 
@@ -3005,53 +3271,80 @@ io.on('connection', (socket: Socket) => {
   // Group Call Events
   // ----------------------
 
-  socket.on('group:call:initiate', ({ recipientAddress, callType, offer, callId, groupId, groupName, participants }: any) => {
+  socket.on('group:call:initiate', async ({ recipientAddress, callType, offer, callId, groupId, groupName, participants, callerName }: any) => {
     try {
-      const recipient = recipientAddress.toLowerCase();
-      const recipientSocketId = activeConnections.get(recipient);
+      const recipient = String(recipientAddress || '').toLowerCase();
+      if (!recipient || !callId) return;
 
-      console.log('Group call initiated:', {
-        from: address,
-        to: recipient,
-        callId,
-        groupId,
-        groupName,
-        type: callType
-      });
+      // Respect blocks: a member who blocked the caller just isn't rung
+      if (await db.isBlocked(recipient, address)) {
+        console.log(`🚫 Group call ring to ${recipient} suppressed — blocked ${address}`);
+        return;
+      }
 
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('group:call:incoming', {
-          callerId: address,
-          callerAddress: address,
-          callType,
-          offer,
+      let call = groupCalls.get(callId);
+      if (!call) {
+        let initiatorName = callerName;
+        if (!initiatorName) {
+          try {
+            const u = await db.getUserByWallet(address);
+            initiatorName = u?.username ? `@${String(u.username).replace(/^@/, '')}` : undefined;
+          } catch { /* ignore */ }
+        }
+        call = {
           callId,
           groupId,
-          groupName,
-          participants,
-          peerId: `${callId}-${recipient}`,
-        });
-
-        console.log(`   → Group call signal sent to ${recipient}`);
-      } else {
-        console.log(`   → ${recipient} is offline, cannot reach`);
-        socket.emit('group:call:participant:unavailable', {
-          address: recipient,
-          callId,
-        });
+          groupName: groupName || 'Group',
+          callType: callType === 'video' ? 'video' : 'audio',
+          initiator: address,
+          initiatorName,
+          participants: (participants || []).map((p: string) => p.toLowerCase()),
+          offers: new Map(),
+          pending: new Map(),
+          pushed: new Set(),
+          joined: new Set(),
+          createdAt: Date.now(),
+        };
+        groupCalls.set(callId, call);
       }
+
+      call.offers.set(recipient, offer);
+      call.pending.set(recipient, Date.now());
+
+      console.log('Group call initiated:', { from: address, to: recipient, callId, groupId, type: callType });
+      ringGroupMember(call, recipient);
     } catch (error) {
       console.error('Error initiating group call:', error);
     }
+  });
+
+  // Client asks for anything still ringing for it (app came to foreground / push tapped)
+  socket.on('call:resync', () => {
+    resyncPendingCalls(address);
+  });
+
+  // A member declined a group call
+  socket.on('group:call:decline', ({ callId }: any) => {
+    const call = groupCalls.get(callId);
+    if (!call) return;
+    call.pending.delete(address);
+    emitToUser(call.initiator, 'group:call:participant:declined', { callId, address, participantAddress: address });
+    console.log(`📵 ${address} declined group call ${callId}`);
   });
 
   socket.on('group:call:answer', ({ callId, answer, peerId, toAddress }: any) => {
     try {
       // Extract caller address from callId (format: groupId-timestamp)
       // The toAddress should be the caller
-      const recipientSocketId = activeConnections.get(toAddress.toLowerCase());
+      const call = groupCalls.get(callId);
+      if (call) {
+        call.pending.delete(address);
+        call.joined.add(address);
+      }
+      const target = String(toAddress || call?.initiator || '').toLowerCase();
+      const recipientSocketId = activeConnections.get(target);
 
-      console.log('Group call answer:', { callId, peerId, toAddress, hasSocket: !!recipientSocketId });
+      console.log('Group call answer:', { callId, peerId, toAddress: target, hasSocket: !!recipientSocketId });
 
       if (recipientSocketId) {
         io.to(recipientSocketId).emit('group:call:answer', {
@@ -3060,7 +3353,11 @@ io.on('connection', (socket: Socket) => {
           peerId,
           fromAddress: address,
         });
-        console.log(`   → Group call answer sent to ${toAddress}`);
+        io.to(recipientSocketId).emit('group:call:participant:joined', {
+          callId,
+          participantAddress: address,
+        });
+        console.log(`   → Group call answer sent to ${target}`);
       }
     } catch (error) {
       console.error('Error answering group call:', error);
@@ -3086,19 +3383,52 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
+  const leaveGroupCall = async (callId: string, groupIdHint?: string) => {
+    const call = groupCalls.get(callId);
+    if (!call) {
+      // Unknown call (server restarted?) — best effort via group membership
+      if (!groupIdHint) return;
+      const members = await db.getGroupMembers(groupIdHint);
+      for (const m of members) {
+        if (m.toLowerCase() !== address) {
+          emitToUser(m, 'group:call:participant:left', { callId, address, participantAddress: address });
+        }
+      }
+      return;
+    }
+    call.joined.delete(address);
+    call.pending.delete(address);
+    const notify = new Set<string>([call.initiator, ...call.joined]);
+    notify.delete(address);
+    for (const m of notify) {
+      emitToUser(m, 'group:call:participant:left', { callId, address, participantAddress: address });
+    }
+    console.log(`👋 ${address} left group call ${callId}`);
+  };
+
   socket.on('group:call:end', async ({ callId, groupId }: any) => {
     try {
-      console.log(`Group call ended: ${callId} in group ${groupId}`);
+      const call = groupCalls.get(callId);
 
-      // Get all group members and notify them
-      const members = await db.getGroupMembers(groupId);
-      for (const member of members) {
-        if (member.toLowerCase() !== address) {
-          const socketId = activeConnections.get(member.toLowerCase());
-          if (socketId) {
-            io.to(socketId).emit('group:call:ended', { callId, endedBy: address });
-          }
-        }
+      // A non-initiator hanging up just leaves; the call continues for others
+      if (call && call.initiator !== address) {
+        await leaveGroupCall(callId, groupId);
+        return;
+      }
+
+      console.log(`Group call ended: ${callId} by ${address}`);
+      const recipients = new Set<string>();
+      if (call) {
+        call.participants.forEach(p => recipients.add(p));
+        call.pending.forEach((_, p) => recipients.add(p));
+        call.joined.forEach(p => recipients.add(p));
+        groupCalls.delete(callId);
+      } else if (groupId) {
+        (await db.getGroupMembers(groupId)).forEach(m => recipients.add(m.toLowerCase()));
+      }
+      recipients.delete(address);
+      for (const m of recipients) {
+        emitToUser(m, 'group:call:ended', { callId, endedBy: address });
       }
     } catch (error) {
       console.error('Error ending group call:', error);
@@ -3107,21 +3437,7 @@ io.on('connection', (socket: Socket) => {
 
   socket.on('group:call:leave', async ({ callId, groupId }: any) => {
     try {
-      console.log(`User ${address} left group call: ${callId}`);
-
-      // Notify other participants
-      const members = await db.getGroupMembers(groupId);
-      for (const member of members) {
-        if (member.toLowerCase() !== address) {
-          const socketId = activeConnections.get(member.toLowerCase());
-          if (socketId) {
-            io.to(socketId).emit('group:call:participant:left', {
-              callId,
-              address,
-            });
-          }
-        }
-      }
+      await leaveGroupCall(callId, groupId);
     } catch (error) {
       console.error('Error handling group call leave:', error);
     }
@@ -3135,8 +3451,16 @@ io.on('connection', (socket: Socket) => {
     console.log('Client disconnected:', socket.id);
 
     if (address) {
-      activeConnections.delete(address);
       socketToWallet.delete(socket.id);
+      // Only clear the mapping if it still points at THIS socket. When a phone
+      // reconnects, the new socket registers first and the old one's disconnect
+      // fires later (ping timeout) — deleting unconditionally made the user look
+      // offline while they were actually connected.
+      if (activeConnections.get(address) !== socket.id) {
+        console.log(`   (stale socket for ${address} closed; newer connection kept)`);
+        return;
+      }
+      activeConnections.delete(address);
       userStatuses.set(address, 'offline');
       lastSeenTimes.set(address, Date.now()); // Track last seen time
 

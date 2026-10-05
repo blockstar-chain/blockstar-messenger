@@ -5,6 +5,7 @@ import { truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
 import toast from 'react-hot-toast';
 import { useAppStore } from '@/store';
 import { useBlockStore } from '@/store/blockStore';
+import { getContactNickname } from './ContactsSection';
 
 interface UserProfileModalProps {
   isOpen: boolean;
@@ -33,6 +34,7 @@ export default function UserProfileModal({
   const currentUser = useAppStore((st) => st.currentUser);
   const blockedList = useBlockStore((st) => st.blocked);
   const isSelf = !!currentUser && currentUser.walletAddress.toLowerCase() === walletAddress?.toLowerCase();
+  const nickname = walletAddress ? getContactNickname(walletAddress) : undefined;
   const isBlocked = !!walletAddress && blockedList.some((b) => b.walletAddress === walletAddress.toLowerCase());
 
   const handleToggleBlock = async () => {
@@ -141,7 +143,7 @@ export default function UserProfileModal({
                   className="w-full h-full flex items-center justify-center text-white text-2xl font-bold"
                   style={{ backgroundColor: getAvatarColor(walletAddress) }}
                 >
-                  {getInitials(profile?.username || walletAddress)}
+                  {getInitials(nickname || profile?.username || walletAddress)}
                 </div>
               )}
             </div>
@@ -158,7 +160,16 @@ export default function UserProfileModal({
             <>
               {/* Name & Username */}
               <div className="mb-4">
-                {profile?.username ? (
+                {nickname ? (
+                  <>
+                    <h2 className="text-2xl font-bold text-white">{nickname}</h2>
+                    {profile?.username ? (
+                      <p className="text-sm text-secondary">@{profile.username}</p>
+                    ) : (
+                      <p className="text-sm text-secondary font-mono">{truncateAddress(walletAddress)}</p>
+                    )}
+                  </>
+                ) : profile?.username ? (
                   <>
                     <h2 className="text-2xl font-bold text-white">@{profile.username}</h2>
                     {profile.fullUsername && profile.fullUsername !== profile.username && (

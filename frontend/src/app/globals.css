@@ -515,7 +515,9 @@ textarea:focus {
   bottom: 0;
   background: linear-gradient(transparent, #030308 20%);
   padding-bottom: env(safe-area-inset-bottom);
-  z-index: 50;
+  /* Only needs to sit above the message list. Keep this BELOW full-screen
+     overlays (call screens use z-[200]) or it covers the call controls. */
+  z-index: 20;
 }
 
 /* On iOS, ensure the input doesn't get hidden by keyboard */
@@ -528,7 +530,7 @@ textarea:focus {
     background: #0f0f14;
     padding: 12px 16px;
     padding-bottom: calc(12px + env(safe-area-inset-bottom, 0));
-    z-index: 100;
+    z-index: 20; /* was 100 — it was drawing on top of the in-call screen on iOS */
   }
   
   /* When any input is focused on iOS, scroll it into view */

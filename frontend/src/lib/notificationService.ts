@@ -152,6 +152,23 @@ export async function showIncomingCallNotification(
     return null;
   }
 
+  // Electron desktop: native notification (only when the window isn't in front —
+  // the in-app incoming-call screen already covers the focused case)
+  const electronAPI = typeof window !== 'undefined' ? (window as any).electronAPI : null;
+  if (electronAPI?.isElectron && electronAPI.showNotification) {
+    if (typeof document !== 'undefined' && document.hasFocus()) return null;
+    electronAPI
+      .showNotification({
+        id: `call-${callId}`,
+        title: `📞 Incoming ${callType} call`,
+        body: `${callerName} is calling…`,
+        silent: true, // ringtone is played by the app
+        urgent: true,
+      })
+      .catch((err: any) => console.error('Electron call notification failed:', err));
+    return null;
+  }
+
   const hasPermission = await requestNotificationPermission();
   if (!hasPermission) {
     console.warn('Notification permission not granted');

@@ -28,7 +28,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   
   // ─── Notifications ───
-  showNotification: (title, body) => ipcRenderer.invoke('show-notification', { title, body }),
+  // showNotification({ title, body, id, silent, urgent }) — or legacy (title, body)
+  showNotification: (titleOrOpts, body) =>
+    ipcRenderer.invoke(
+      'show-notification',
+      typeof titleOrOpts === 'object' ? titleOrOpts : { title: titleOrOpts, body }
+    ),
+  onNotificationClick: (callback) => {
+    const handler = (event, id) => callback(id);
+    ipcRenderer.on('notification-clicked', handler);
+    return () => ipcRenderer.removeListener('notification-clicked', handler);
+  },
+  setBadgeCount: (count) => ipcRenderer.invoke('set-badge-count', count),
   
   // ─── Window Controls ───
   minimizeToTray: () => ipcRenderer.send('minimize-to-tray'),

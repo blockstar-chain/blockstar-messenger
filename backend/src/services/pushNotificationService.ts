@@ -690,6 +690,36 @@ export async function sendCallNotificationWithDeepLink(
   }
 }
 
+/**
+ * Group call ring. There's no /call deep-link flow for group calls, so this is
+ * a high-priority alert; tapping it opens the app, which re-syncs with the
+ * server and receives the pending group-call invite over the socket.
+ */
+export async function sendGroupCallNotification(
+  token: string,
+  platform: 'ios' | 'android',
+  payload: { callId: string; groupId: string; groupName?: string; callerName?: string; callType: 'audio' | 'video' }
+): Promise<boolean> {
+  const kind = payload.callType === 'video' ? 'video' : 'voice';
+  const title = `📞 Incoming group ${kind} call`;
+  const body = payload.groupName
+    ? `${payload.callerName || 'Someone'} is calling ${payload.groupName}`
+    : `${payload.callerName || 'Someone'} started a group call`;
+
+  return sendFCMPush(token, {
+    title,
+    body,
+    data: {
+      type: 'group_call',
+      callId: payload.callId,
+      conversationId: payload.groupId,
+      groupId: payload.groupId,
+      callType: payload.callType,
+    },
+    sound: 'default',
+  }, platform);
+}
+
 // ═══════════════════════════════════════════════════════════════
 // EXPORTS
 // ═══════════════════════════════════════════════════════════════
@@ -701,6 +731,7 @@ export default {
   sendFCMPush,
   sendCallNotification,
   sendCallNotificationWithDeepLink,
+  sendGroupCallNotification,
   sendMessageNotification,
   cancelCallNotification,
   firebaseInitialized

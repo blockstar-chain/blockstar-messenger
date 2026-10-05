@@ -78,6 +78,8 @@ export const dbHelpers = {
             read: false, // Will be properly set by ChatArea based on readBy
             readBy: msg.readBy || [], // Include readBy for processing
             reactions: msg.reactions || [], // Include reactions
+            edited: msg.edited || false,
+            editedAt: msg.editedAt,
           }));
           
           // Cache the messages

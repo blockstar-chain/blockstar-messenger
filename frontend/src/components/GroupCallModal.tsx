@@ -303,7 +303,7 @@ export default function GroupCallModal() {
     const connectedCount = Array.from(participants.values()).filter(p => p.isConnected).length;
 
     return (
-        <div className="fixed inset-0 bg-midnight z-50 flex flex-col">
+        <div className="fixed inset-0 bg-midnight z-[200] flex flex-col">
             {/* Header */}
             <div className="bg-card/80 backdrop-blur-sm border-b border-midnight p-4">
                 <div className="flex items-center justify-between">

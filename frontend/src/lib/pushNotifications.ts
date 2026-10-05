@@ -661,6 +661,18 @@ function handleNotificationData(data: any, wasTapped: boolean): void {
       handleMissedCall(data);
       break;
 
+    case 'group_call':
+      // Group calls ring via the socket; ask the server to re-send the ring
+      console.log('📞 Group call push — requesting resync');
+      import('@/lib/websocket')
+        .then(({ webSocketService }) => {
+          webSocketService.requestCallResync();
+          // socket may still be reconnecting after wake — try again shortly
+          setTimeout(() => webSocketService.requestCallResync(), 2000);
+        })
+        .catch(() => {});
+      break;
+
     case 'call_cancelled':
       console.log('📴 Call was cancelled');
       break;

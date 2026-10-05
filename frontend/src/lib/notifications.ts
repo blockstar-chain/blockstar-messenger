@@ -21,6 +21,22 @@ const DEFAULT_SETTINGS: NotificationSettings = {
 
 const STORAGE_KEY = 'blockstar_notification_settings';
 
+// Click callbacks for native Electron notifications, keyed by notification id
+const electronClickHandlers = new Map<string, () => void>();
+let electronClickListenerReady = false;
+function ensureElectronClickListener(): void {
+  if (electronClickListenerReady || typeof window === 'undefined') return;
+  const api = (window as any).electronAPI;
+  if (!api?.onNotificationClick) return;
+  api.onNotificationClick((id: string | null) => {
+    if (!id) return;
+    const handler = electronClickHandlers.get(id);
+    electronClickHandlers.delete(id);
+    try { handler?.(); } catch (e) { console.error('Notification click handler failed:', e); }
+  });
+  electronClickListenerReady = true;
+}
+
 class NotificationService {
   private settings: NotificationSettings;
   private audioContext: AudioContext | null = null;
@@ -256,8 +272,10 @@ class NotificationService {
       return null;
     }
     
-    // Check permission
-    if (!this.permissionGranted) {
+    const isElectronApp = typeof window !== 'undefined' && !!(window as any).electronAPI?.isElectron;
+
+    // Check permission (Electron uses native notifications — no web permission needed)
+    if (!isElectronApp && !this.permissionGranted) {
       console.log('🔔 Permission not granted, attempting to request...');
       // Try to request permission (will only work after user interaction)
       this.requestPermission().then(granted => {
@@ -272,6 +290,23 @@ class NotificationService {
     // Check if conversation is muted
     if (options.conversationId && this.settings.mutedConversations.includes(options.conversationId)) {
       console.log('🔔 Conversation is muted');
+      return null;
+    }
+
+    // Electron desktop app → native macOS/Windows notification via main process
+    const electronAPI = typeof window !== 'undefined' ? (window as any).electronAPI : null;
+    if (electronAPI?.isElectron && electronAPI.showNotification) {
+      const id = options.tag || `blockstar-${Date.now()}`;
+      if (options.onClick) electronClickHandlers.set(id, options.onClick);
+      ensureElectronClickListener();
+      electronAPI
+        .showNotification({
+          id,
+          title,
+          body: this.settings.showPreview ? options.body : 'New message',
+          silent: true, // we play our own sound
+        })
+        .catch((err: any) => console.error('🔔 Electron notification failed:', err));
       return null;
     }
 
@@ -445,6 +480,12 @@ class NotificationService {
   async testNotification(): Promise<void> {
     await this.playSound();
     
+    const api = typeof window !== 'undefined' ? (window as any).electronAPI : null;
+    if (api?.isElectron && api.showNotification) {
+      await api.showNotification({ title: 'BlockStar Cypher', body: 'Notifications are working! 🎉' });
+      return;
+    }
+
     if (this.permissionGranted) {
       const notification = new Notification('BlockStar Cypher', {
         body: 'Notifications are working! 🎉',

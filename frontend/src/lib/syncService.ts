@@ -90,6 +90,8 @@ export async function syncFromServer(walletAddress: string): Promise<SyncResult>
             type: serverMsg.type || 'text',
             delivered: serverMsg.delivered,
             read: serverMsg.readBy?.includes(normalizedWallet) || false,
+            edited: serverMsg.edited || false,
+            editedAt: serverMsg.editedAt,
           };
           
           await dbHelpers.saveMessage(message);

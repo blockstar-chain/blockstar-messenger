@@ -8,7 +8,7 @@ import { encryptionService } from '@/lib/encryption';
 import { voiceMessageService } from '@/lib/voice-message-service';
 import { notificationService } from '@/lib/notifications';
 import { Message, Conversation } from '@/types';
-import { Send, Phone, Video, MoreVertical, Menu, Paperclip, Mic, MicOff, Lock, LockOpen, Search, X, Bell, BellOff, Smile, Check, CheckCheck, Trash2, Shield, ShieldAlert, MessageSquare, Users, RefreshCw, Settings, UserPlus, VolumeX, Volume2, ChevronLeft, Ban } from 'lucide-react';
+import { Send, Phone, Video, MoreVertical, Menu, Paperclip, Mic, MicOff, Lock, LockOpen, Search, X, Bell, BellOff, Smile, Check, CheckCheck, Trash2, Shield, ShieldAlert, MessageSquare, Users, RefreshCw, Settings, UserPlus, VolumeX, Volume2, ChevronLeft, Ban, Pencil } from 'lucide-react';
 import { generateMessageId, generateConversationId, formatMessageTime, truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
 import { resolveProfile, getProfileByWallet, type BlockStarProfile } from '@/lib/profileResolver';
 import toast from 'react-hot-toast';
@@ -16,7 +16,7 @@ import EmojiPicker from './EmojiPicker';
 import GroupSettingsModal from './GroupSettingsModal';
 import UserProfileModal from './UserProfileModal';
 import { useBlockStore } from '@/store/blockStore';
-import { addToContacts, isContact } from './ContactsSection';
+import { addToContacts, isContact, getContactNickname } from './ContactsSection';
 import { isConversationDeleted, removeFromDeletedConversations } from './Sidebar';
 
 // Store for decrypted message content (in-memory + localStorage cache)
@@ -115,6 +115,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
     messages,
     setMessages,
     addMessage,
+    updateMessage,
     toggleSidebar,
     setActiveCall,
     setCallModalOpen,
@@ -131,6 +132,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
   const [readMessageIds, setReadMessageIds] = useState<Set<string>>(new Set());
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [showMessageMenu, setShowMessageMenu] = useState(false);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [messageMenuPosition, setMessageMenuPosition] = useState({ x: 0, y: 0 });
   const [contactProfile, setContactProfile] = useState<BlockStarProfile | null>(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -139,6 +141,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
   const [memberProfiles, setMemberProfiles] = useState<Map<string, BlockStarProfile | null>>(new Map());
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [isUserContact, setIsUserContact] = useState(false);
+  const [contactNickname, setContactNickname] = useState<string | undefined>(undefined);
   const [encryptionStatus, setEncryptionStatus] = useState<'encrypted' | 'unencrypted' | 'checking'>('checking');
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
   const [messageReactions, setMessageReactions] = useState<Map<string, Array<{ emoji: string; userId: string }>>>(new Map());
@@ -283,11 +286,13 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
       if (!otherParticipant) {
         setContactProfile(null);
         setIsUserContact(false);
+        setContactNickname(undefined);
         return;
       }
 
       // Check if this user is in contacts
       setIsUserContact(isContact(otherParticipant));
+      setContactNickname(getContactNickname(otherParticipant));
 
       try {
         // First check local wallet cache (populated when @name was resolved)
@@ -815,7 +820,8 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         webSocketService.markDelivered(message.id);
 
         // Trigger notification for incoming messages
-        // Get sender name for notification
+        // Get sender name for notification - prefer the nickname we've set
+        // for this sender over their @username, same as the chat UI does.
         let senderName = truncateAddress(senderId);
         try {
           const senderProfile = await getProfileByWallet(senderId);
@@ -824,6 +830,10 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           }
         } catch (e) {
           // Use address if profile fetch fails
+        }
+        const senderNickname = getContactNickname(senderId);
+        if (senderNickname) {
+          senderName = senderNickname;
         }
 
         // Get group name if it's a group message
@@ -1141,6 +1151,178 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
     setMessageMenuPosition({ x: e.clientX, y: e.clientY });
     setShowMessageMenu(true);
   };
+
+  // Enter edit mode for one of the current user's own text messages
+  const handleEditMessage = (messageId: string) => {
+    if (!activeConversationId) return;
+
+    const msgs = messages.get(activeConversationId) || [];
+    const message = msgs.find(m => m.id === messageId);
+    if (!message) return;
+
+    // Use the decrypted plaintext we already have cached locally (same
+    // source the message bubble renders from), falling back to content.
+    const plainText = decryptedContentCache.get(messageId) ?? message.content;
+
+    setMessageText(plainText);
+    setEditingMessageId(messageId);
+    setShowMessageMenu(false);
+    setSelectedMessageId(null);
+
+    // Give the input focus so the user can start editing immediately
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingMessageId(null);
+    setMessageText('');
+  };
+
+  const handleSaveEditedMessage = async () => {
+    if (!editingMessageId || !currentUser || !activeConversationId) return;
+
+    const newPlainText = messageText.trim();
+    if (!newPlainText) return;
+
+    const msgs = messages.get(activeConversationId) || [];
+    const originalMessage = msgs.find(m => m.id === editingMessageId);
+    if (!originalMessage) {
+      setEditingMessageId(null);
+      setMessageText('');
+      return;
+    }
+
+    // No-op if nothing actually changed
+    const previousPlainText = decryptedContentCache.get(editingMessageId) ?? originalMessage.content;
+    if (newPlainText === previousPlainText) {
+      setEditingMessageId(null);
+      setMessageText('');
+      return;
+    }
+
+    setIsSending(true);
+
+    try {
+      const isGroup = activeConversation?.type === 'group' ||
+        (activeConversation?.participants && activeConversation.participants.length > 2) ||
+        !!(activeConversation as any)?.groupName;
+
+      const editedAt = Date.now();
+
+      // Re-encrypt the new content the same way the original message was encrypted
+      let encryptedPayloads: Record<string, string> | undefined;
+      let directEncryptedContent: string | undefined;
+
+      if (isGroup) {
+        const senderId = currentUser.walletAddress.toLowerCase();
+        const recipients = activeConversation?.participants.filter(
+          p => p.toLowerCase() !== senderId
+        ) || [];
+
+        encryptedPayloads = {};
+        for (const recipient of recipients) {
+          const recipientLower = recipient.toLowerCase();
+          const { encrypted, error } = await encryptionService.encryptForRecipient(newPlainText, recipientLower);
+          encryptedPayloads[recipientLower] = (encrypted && !error) ? encrypted : newPlainText;
+        }
+        // Sender's own copy stays plaintext, same convention as handleSendMessage
+        encryptedPayloads[senderId] = newPlainText;
+      } else if (otherParticipant) {
+        const { encrypted } = await encryptionService.encryptForRecipient(newPlainText, otherParticipant.toLowerCase());
+        directEncryptedContent = encrypted || newPlainText;
+      }
+
+      // Update local plaintext cache + IndexedDB-style cache + UI state immediately
+      saveDecryptedContent(editingMessageId, newPlainText);
+      await db.messages.update(editingMessageId, {
+        content: newPlainText,
+        edited: true,
+        editedAt,
+      });
+      updateMessage(editingMessageId, {
+        content: newPlainText,
+        edited: true,
+        editedAt,
+      });
+
+      // Persist + broadcast the edit to the server and other participant(s)
+      const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
+      try {
+        await fetch(`${API_URL}/api/messages/${editingMessageId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: directEncryptedContent || newPlainText,
+            encryptedPayloads,
+          }),
+        });
+      } catch (syncError) {
+        console.warn('Could not sync message edit to server:', syncError);
+      }
+
+      webSocketService.emit('message:edit', {
+        messageId: editingMessageId,
+        conversationId: activeConversationId,
+        senderId: currentUser.walletAddress.toLowerCase(),
+        content: directEncryptedContent || newPlainText,
+        encryptedPayloads,
+        editedAt,
+      });
+
+      toast.success('Message edited');
+    } catch (error) {
+      console.error('Failed to edit message:', error);
+      toast.error('Failed to edit message');
+    } finally {
+      setIsSending(false);
+      setEditingMessageId(null);
+      setMessageText('');
+    }
+  };
+
+  // Listen for edits made elsewhere (other device, or the recipient seeing our edit)
+  useEffect(() => {
+    const unsubscribe = webSocketService.on('message:edit', (data: {
+      messageId: string;
+      senderId: string;
+      content: string;
+      editedAt: number;
+    }) => {
+      // Ignore the echo of our own edit - we already applied it optimistically.
+      if (data.senderId?.toLowerCase() === currentUser?.walletAddress.toLowerCase()) {
+        return;
+      }
+
+      // Decrypt the same way incoming new messages are decrypted before
+      // caching + displaying (server broadcasts the sender-encrypted content).
+      (async () => {
+        let plainText = data.content;
+        try {
+          const { decrypted, decryptionFailed } = await encryptionService.decryptFromSender(
+            data.content,
+            data.senderId
+          );
+          if (!decryptionFailed) plainText = decrypted;
+        } catch {
+          // Fall back to raw content
+        }
+
+        saveDecryptedContent(data.messageId, plainText);
+        await db.messages.update(data.messageId, {
+          content: plainText,
+          edited: true,
+          editedAt: data.editedAt,
+        });
+        updateMessage(data.messageId, {
+          content: plainText,
+          edited: true,
+          editedAt: data.editedAt,
+        });
+      })();
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // Quick emoji reactions
   const quickReactions = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
@@ -1598,6 +1780,12 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Editing an existing message takes a completely different save path
+    if (editingMessageId) {
+      await handleSaveEditedMessage();
+      return;
+    }
+
     if (!messageText.trim() || !currentUser || !activeConversationId) {
       console.log('❌ Send blocked - missing:', {
         text: !!messageText.trim(),
@@ -1864,6 +2052,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                   groupId: activeConversationId,
                   groupName: groupConversation?.groupName || 'Group Call',
                   participants: activeConversation?.participants,
+                  callerName: currentUser.username ? `@${currentUser.username.replace('@', '')}` : undefined,
                 });
                 offerSent = true;
               } else if (signal.candidate || signal.type === 'candidate') {
@@ -1898,6 +2087,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           isGroupCall: true,
           participants: activeConversation?.participants || [],
           groupName: groupConversation?.groupName || 'Group Call',
+          groupId: activeConversationId || undefined,
         };
 
         toast.dismiss('call-init');
@@ -2069,7 +2259,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                   className="w-full h-full object-cover"
                 />
               ) : (
-                getInitials(displayProfile?.username || otherParticipant || '')
+                getInitials(contactNickname || displayProfile?.username || otherParticipant || '')
               )}
             </div>
 
@@ -2088,6 +2278,13 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                 <>
                   <h2 className="font-semibold text-white text-sm md:text-base truncate">{groupConv?.groupName || 'Group Chat'}</h2>
                   <p className="text-xs text-muted">{activeConversation?.participants.length} members</p>
+                </>
+              ) : contactNickname ? (
+                <>
+                  <h2 className="font-semibold text-white text-sm md:text-base truncate">{contactNickname}</h2>
+                  <p className="text-xs text-muted truncate hidden md:block">
+                    {displayProfile?.username ? `@${displayProfile.username}` : truncateAddress(otherParticipant || '')}
+                  </p>
                 </>
               ) : displayProfile?.username ? (
                 <>
@@ -2697,7 +2894,8 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                       if (senderProfile?.avatar) {
                         return <img src={senderProfile.avatar} alt="" className="w-full h-full object-cover" />;
                       }
-                      return getInitials(senderProfile?.username || message.senderId);
+                      const senderNick = isGroupChat ? getContactNickname(message.senderId) : contactNickname;
+                      return getInitials(senderNick || senderProfile?.username || message.senderId);
                     })()}
                   </div>
                 )}
@@ -2742,6 +2940,8 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                     {isGroupChat && !isSender && showAvatar && (
                       <p className="text-xs font-medium text-primary-400 mb-1">
                         {(() => {
+                          const senderNick = getContactNickname(message.senderId);
+                          if (senderNick) return senderNick;
                           const senderProfile = memberProfiles.get(message.senderId.toLowerCase());
                           if (senderProfile?.username) {
                             return `@${senderProfile.username}`;
@@ -2753,7 +2953,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                     {renderMessageContent()}
                     <div className={`flex items-center gap-1.5 mt-1 ${isSender ? 'justify-end' : 'justify-start'}`}>
                       <span className={`text-xs ${isSender ? 'text-white/60' : 'text-muted'}`}>
-                        {formatMessageTime(message.timestamp)}
+                        {message.edited && 'edited · '}{formatMessageTime(message.timestamp)}
                       </span>
                       {isSender && (
                         <span className="flex items-center">
@@ -2810,6 +3010,26 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           className="fixed bg-card border border-midnight rounded-xl shadow-lg py-1 z-50"
           style={{ left: messageMenuPosition.x, top: messageMenuPosition.y }}
         >
+          {(() => {
+            const selectedMessage = selectedMessageId
+              ? (messages.get(activeConversationId!) || []).find(m => m.id === selectedMessageId)
+              : null;
+            const canEdit = selectedMessage &&
+              (selectedMessage.type === 'text' || !selectedMessage.type) &&
+              selectedMessage.content !== '__ENCRYPTED_GROUP__';
+
+            if (!canEdit) return null;
+
+            return (
+              <button
+                onClick={() => handleEditMessage(selectedMessageId!)}
+                className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-dark-200 flex items-center gap-2 transition"
+              >
+                <Pencil size={14} />
+                Edit Message
+              </button>
+            );
+          })()}
           <button
             onClick={() => handleDeleteMessage(selectedMessageId!)}
             className="w-full px-4 py-2.5 text-left text-sm text-danger-500 hover:bg-danger-500/10 flex items-center gap-2 transition"
@@ -2842,11 +3062,28 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
             </button>
           </div>
         ) : (
+        <>
+        {editingMessageId && (
+          <div className="flex items-center justify-between gap-2 px-3 py-1.5 mb-2 bg-primary-500/10 border border-primary-500/30 rounded-lg">
+            <span className="flex items-center gap-2 text-xs text-primary-400">
+              <Pencil size={12} />
+              Editing message
+            </span>
+            <button
+              type="button"
+              onClick={handleCancelEdit}
+              className="text-xs text-secondary hover:text-white transition"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
         <form onSubmit={handleSendMessage} className="flex items-center gap-2 md:gap-3">
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="p-1 md:p-2.5 hover:bg-dark-200 rounded-xl transition text-secondary hover:text-white active:bg-dark-100 flex-shrink-0"
+            disabled={!!editingMessageId}
+            className="p-1 md:p-2.5 hover:bg-dark-200 rounded-xl transition text-secondary hover:text-white active:bg-dark-100 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
             title="Attach file"
           >
             <Paperclip size={20} />
@@ -2891,7 +3128,12 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
               type="text"
               value={messageText}
               onChange={(e) => setMessageText(e.target.value)}
-              placeholder="Type a message..."
+              onKeyDown={(e) => {
+                if (e.key === 'Escape' && editingMessageId) {
+                  handleCancelEdit();
+                }
+              }}
+              placeholder={editingMessageId ? "Edit your message..." : "Type a message..."}
               disabled={isSending}
               className="flex-1 min-w-0 px-3 md:px-4 py-2.5 md:py-3 bg-card border border-midnight rounded-xl text-white placeholder-muted focus:outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500/50 transition text-base"
               style={{ fontSize: '16px' }} // Prevents iOS zoom on focus
@@ -2900,23 +3142,27 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           <button
             type="button"
             onClick={handleVoiceRecordToggle}
-            disabled={isSending}
+            disabled={isSending || !!editingMessageId}
             className={`p-1 md:p-2.5 rounded-xl transition flex-shrink-0 ${isRecording
                 ? 'bg-danger-500 text-white hover:bg-danger-600 animate-pulse'
                 : 'hover:bg-dark-200 text-secondary hover:text-white active:bg-dark-100'
-              }`}
+              } disabled:opacity-40 disabled:cursor-not-allowed`}
             title={isRecording ? "Stop recording" : "Voice message"}
           >
             {isRecording ? <MicOff size={20} /> : <Mic size={20} />}
           </button>
           <button
             type="submit"
+            onMouseDown={(e) => e.preventDefault()}
+            onTouchStart={(e) => e.preventDefault()}
             disabled={(!messageText.trim() && !isRecording) || isSending}
+            title={editingMessageId ? "Save edit" : "Send"}
             className="p-2 md:p-2.5 md:p-3 bg-gradient-to-r from-primary-500 to-cyan-500 text-white rounded-xl hover:shadow-glow transition disabled:opacity-50 disabled:cursor-not-allowed active:opacity-80 flex-shrink-0"
           >
-            <Send size={20} />
+            {editingMessageId ? <Check size={20} /> : <Send size={20} />}
           </button>
         </form>
+        </>
         )}
       </div>
 

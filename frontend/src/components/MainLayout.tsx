@@ -116,6 +116,9 @@ export default function MainLayout() {
   // ========================================
   useEffect(() => {
     setUnreadMessageCount(totalUnread);
+    // Electron: mirror unread count on the macOS dock icon
+    const electronAPI = typeof window !== 'undefined' ? (window as any).electronAPI : null;
+    electronAPI?.setBadgeCount?.(totalUnread)?.catch?.(() => {});
   }, [totalUnread]);
 
   useEffect(() => {
@@ -370,9 +373,18 @@ export default function MainLayout() {
 
     // Group call handlers
     const unsubscribeGroupCallIncoming = webSocketService.on('group:call:incoming', (data: any) => {
-      const { callId, groupId, initiatorId, callType, offer, groupName } = data;
+      const { callId, groupId, callType, offer, groupName, participants } = data;
+      // Server sends callerId; older builds used initiatorId
+      const initiatorId: string = (data.initiatorId || data.callerId || data.callerAddress || '').toLowerCase();
 
-      if (initiatorId.toLowerCase() === currentUser.walletAddress.toLowerCase()) {
+      if (!callId || !initiatorId || !offer) return;
+      if (initiatorId === currentUser.walletAddress.toLowerCase()) return;
+
+      // Ignore duplicates (the server re-sends rings after the app wakes up)
+      const { incomingCall: curIncoming, activeCall: curActive } = useAppStore.getState();
+      if (curIncoming?.id === callId || curActive?.id === callId) return;
+      if (curActive) {
+        console.log('📞 Busy — ignoring group call', callId);
         return;
       }
 
@@ -385,16 +397,41 @@ export default function MainLayout() {
         startTime: Date.now(),
         isGroup: true,
         groupId: groupId,
+        groupName,
       });
 
       sessionStorage.setItem('incomingCallOffer', JSON.stringify(offer));
       sessionStorage.setItem('incomingGroupCallData', JSON.stringify({
+        callId,
         groupId,
         groupName,
         initiatorId,
+        participants: participants || [],
       }));
+      if (data.callerName) {
+        sessionStorage.setItem('incomingCallInfo', JSON.stringify({ callerName: String(data.callerName).replace(/^@/, '') }));
+      }
 
-      toast(`📞 Incoming ${callType} call from ${groupName || 'Group'}!`, { duration: 10000 });
+      showIncomingCallNotification(
+        groupName ? `${data.callerName || 'Someone'} · ${groupName}` : (data.callerName || 'Group call'),
+        initiatorId,
+        callId,
+        callType || 'audio'
+      );
+    });
+
+    const unsubscribeGroupDeclined = webSocketService.on('group:call:participant:declined', (data: any) => {
+      const { activeCall: cur } = useAppStore.getState();
+      if (cur && data.callId === cur.id) {
+        toast(`${(data.participantAddress || data.address || '').substring(0, 6)}… declined`, { icon: '📵' });
+      }
+    });
+
+    const unsubscribeGroupUnavailable = webSocketService.on('group:call:participant:unavailable', (data: any) => {
+      const { activeCall: cur } = useAppStore.getState();
+      if (cur && data.callId === cur.id) {
+        toast(`${(data.address || '').substring(0, 6)}… didn't answer`, { icon: '📵' });
+      }
     });
 
     const unsubscribeGroupCallAnswer = webSocketService.on('group:call:answer', (data: any) => {
@@ -415,6 +452,9 @@ export default function MainLayout() {
     });
 
     const unsubscribeGroupCallEnd = webSocketService.on('group:call:ended', (data: any) => {
+      const { activeCall: curA, incomingCall: curI } = useAppStore.getState();
+      if (data?.callId && curA?.id !== data.callId && curI?.id !== data.callId) return;
+      sessionStorage.removeItem('incomingGroupCallData');
       toast.error('Group call ended');
       webRTCService.cleanup();
       setActiveCall(null);
@@ -436,6 +476,8 @@ export default function MainLayout() {
       handleUnavailable();
       handleCallStatus();
       unsubscribeGroupCallIncoming();
+      unsubscribeGroupDeclined();
+      unsubscribeGroupUnavailable();
       unsubscribeGroupCallAnswer();
       unsubscribeGroupCallIce();
       unsubscribeGroupCallEnd();

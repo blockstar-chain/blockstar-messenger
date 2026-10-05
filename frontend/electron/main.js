@@ -583,6 +583,55 @@ ipcMain.handle('get-platform', () => {
   };
 });
 
+// ─── Native notifications ───────────────────────────────────────
+// The Web Notification API inside Electron is unreliable on macOS (especially
+// for unsigned/dev builds), so the renderer routes popups through here and we
+// use Electron's native Notification, which goes to macOS Notification Center.
+const activeNotifications = new Set(); // keep refs so they aren't GC'd before click
+
+ipcMain.handle('show-notification', (event, payload) => {
+  // Back-compat: old preload passed { title, body }
+  const { title, body, id, silent, urgent } = payload || {};
+  if (!Notification.isSupported()) return { success: false, reason: 'unsupported' };
+
+  const n = new Notification({
+    title: String(title || 'BlockStar Cypher'),
+    body: String(body || ''),
+    silent: silent !== false, // renderer plays its own sound by default
+    timeoutType: urgent ? 'never' : 'default',
+  });
+
+  activeNotifications.add(n);
+  const release = () => activeNotifications.delete(n);
+
+  n.on('click', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.send('notification-clicked', id || null);
+    }
+    release();
+  });
+  n.on('close', release);
+  n.show();
+
+  // Bounce the dock icon if the window isn't focused
+  if (process.platform === 'darwin' && mainWindow && !mainWindow.isFocused()) {
+    app.dock.bounce(urgent ? 'critical' : 'informational');
+  }
+  return { success: true };
+});
+
+// Dock / taskbar unread badge
+ipcMain.handle('set-badge-count', (event, count) => {
+  const n = Math.max(0, parseInt(count, 10) || 0);
+  try {
+    app.setBadgeCount(n); // macOS dock badge, Linux Unity launcher
+  } catch {}
+  return { success: true };
+});
+
 // Minimize to tray (optional)
 ipcMain.on('minimize-to-tray', () => {
   if (mainWindow) {

@@ -109,7 +109,11 @@ export class WebSocketService {
       // Server responded to ping - connection is alive
     });
 
-    this.socket.on('message', (message: Message) => {
+    this.socket.on('message', (message: Message, ack?: (info: any) => void) => {
+      // Tell the server we actually got it and whether the app is on screen.
+      // If we're backgrounded (or never ack because iOS suspended us), the
+      // server sends a push notification instead of assuming we saw it.
+      WebSocketService.ackPresence(ack);
       // Debug log for all messages, especially system messages
       if (message.type === 'system' || message.isSystemMessage) {
         console.log('═══════════════════════════════════════');
@@ -124,9 +128,16 @@ export class WebSocketService {
       this.messageHandlers.forEach((handler) => handler(message));
     });
 
-    this.socket.on('call:incoming', (data: any) => {
+    this.socket.on('call:incoming', (data: any, ack?: (info: any) => void) => {
       console.log('📞 call:incoming received:', data);
+      WebSocketService.ackPresence(ack);
       this.callHandlers.forEach((handler) => handler(data));
+    });
+
+    // Group call rings must be acked too, so the server knows to push a
+    // backgrounded phone. (Other listeners attach via on() and just ignore ack.)
+    this.socket.on('group:call:incoming', (_data: any, ack?: (info: any) => void) => {
+      WebSocketService.ackPresence(ack);
     });
 
     this.socket.on('call:answer', (data: any) => {
@@ -409,6 +420,27 @@ export class WebSocketService {
   }
 
   /**
+   * Ask the server to re-send anything still ringing for us (e.g. a group call
+   * that arrived while the app was asleep). Safe to call any time.
+   */
+  requestCallResync(): void {
+    if (this.socket?.connected) this.socket.emit('call:resync');
+  }
+
+  /**
+   * Acknowledge a server event with our foreground state.
+   */
+  private static ackPresence(ack?: (info: any) => void): void {
+    if (typeof ack !== 'function') return;
+    try {
+      const visible = typeof document !== 'undefined' ? document.visibilityState === 'visible' : true;
+      ack({ received: true, visible });
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
    * Generic listener for custom events
    */
   on(event: string, handler: (data: any) => void): () => void {
@@ -424,3 +456,13 @@ export class WebSocketService {
 }
 
 export const webSocketService = new WebSocketService();
+
+// When the app comes back to the foreground, pick up any call that rang while
+// we were suspended (iOS freezes the socket in the background).
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      setTimeout(() => webSocketService.requestCallResync(), 500);
+    }
+  });
+}

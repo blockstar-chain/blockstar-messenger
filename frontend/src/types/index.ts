@@ -110,6 +110,8 @@ export interface Call {
   participants?: string[]; // All participants including caller
   connectedPeers?: string[]; // Peers that have connected
   groupName?: string; // Group name for display
+  isGroup?: boolean;   // Incoming group call
+  groupId?: string;    // Group conversation id for group calls
 }
 
 export interface GroupCallParticipant {
