@@ -307,6 +307,9 @@ export default function CallModal() {
   // Listen for remote streams
   useEffect(() => {
     if (!activeCall || !isCallModalOpen) return;
+    // Group calls are rendered (and their audio played) by GroupCallModal —
+    // handling them here too caused double audio and wrong participant mapping.
+    if (isGroupCall) return;
 
     const unsubscribeStream = webRTCService.onStream((stream, callId, peerId) => {
       console.log('========================================');
@@ -632,6 +635,7 @@ export default function CallModal() {
   };
 
   if (!activeCall || !isCallModalOpen) return null;
+  if (isGroupCall) return null; // GroupCallModal owns the group call UI
 
   const isVideoCall = activeCall.type === 'video';
   const isCaller = activeCall?.callerId?.toLowerCase() === currentUser?.walletAddress?.toLowerCase();

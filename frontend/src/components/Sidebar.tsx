@@ -3,7 +3,7 @@ import { useAppStore } from '@/store';
 import { db, dbHelpers } from '@/lib/database';
 import { Conversation } from '@/types';
 import { Search, Plus, Settings, LogOut, X, MessageSquarePlus, Lock, ExternalLink, Globe, Mail, Twitter, MessageSquare, Trash2, Users, ExternalLinkIcon, BookUser, Radio, RefreshCw, Bell, Volume2, Ban } from 'lucide-react';
-import { truncateAddress, formatTimestamp, getInitials, getAvatarColor, generateConversationId } from '@/utils/helpers';
+import { truncateAddress, formatTimestamp, getInitials, getAvatarColor, generateConversationId, isPhantomGroup } from '@/utils/helpers';
 import { blockchainService } from '@/lib/blockchain';
 import { resolveProfile, resolveProfilesByWallets, getProfileByWallet, type BlockStarProfile } from '@/lib/profileResolver';
 import { groupChatService } from '@/lib/group-chat-service';
@@ -789,10 +789,13 @@ export default function Sidebar({
       });
     };
 
+    // Hide phantom group copies keyed by a Mongo ObjectId (real groups use group_…)
+    const visible = conversations.filter((c) => !isPhantomGroup(c, conversations));
+
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       setFilteredConversations(
-        sortByRecent(conversations.filter((conv) => {
+        sortByRecent(visible.filter((conv) => {
           // Search in participant addresses
           const matchesAddress = conv.participants.some((p) =>
             p.toLowerCase().includes(query)
@@ -821,7 +824,7 @@ export default function Sidebar({
         }))
       );
     } else {
-      setFilteredConversations(sortByRecent(conversations));
+      setFilteredConversations(sortByRecent(visible));
     }
   }, [searchQuery, conversations, contactProfiles]);
 
@@ -902,6 +905,13 @@ export default function Sidebar({
                 console.log(`📬 Server returned conv matching deleted client ID: ${clientStyleId} - removing from deleted list`);
                 removeFromDeletedConversations(clientStyleId, currentUser.walletAddress);
                 deletedIds.delete(clientStyleId);
+              }
+
+              // Drop the phantom duplicate stored under the group's Mongo _id
+              if (serverConv.legacyId && serverConv.legacyId !== serverConv.id) {
+                try { await db.conversations.delete(serverConv.legacyId); } catch {}
+                const idx = allConversations.findIndex(c => c.id === serverConv.legacyId);
+                if (idx >= 0) allConversations.splice(idx, 1);
               }
 
               // Check if we already have this conversation locally by ID

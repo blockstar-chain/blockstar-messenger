@@ -5,6 +5,9 @@ import { webRTCService } from '@/lib/webrtc';
 import { syncFromServer } from '@/lib/syncService';
 import { db } from '@/lib/database';
 import toast from 'react-hot-toast';
+import { isPhantomGroup } from '@/utils/helpers';
+import { groupCallMesh } from '@/lib/groupCallMesh';
+import { refreshTurnCredentials } from '@/lib/webrtc';
 import Sidebar from './Sidebar';
 import ChatArea from './ChatArea';
 import CallModal from './CallModal';
@@ -107,6 +110,11 @@ export default function MainLayout() {
 
   // Mesh modal state - lifted up for mobile nav
   const [showMesh, setShowMesh] = useState(false);
+
+  // Prefetch TURN credentials so calls start instantly and work on strict Wi-Fi
+  useEffect(() => {
+    if (currentUser?.walletAddress) refreshTurnCredentials(currentUser.walletAddress);
+  }, [currentUser?.walletAddress]);
 
   // Calculate total unread count
   const totalUnread = conversations.reduce((sum, conv) => sum + (conv.unreadCount || 0), 0);
@@ -215,10 +223,14 @@ export default function MainLayout() {
           let conversations = await db.conversations.toArray();
 
           // Filter out groups with invalid names
+          const allConvs = conversations;
           conversations = conversations.filter(conv => {
             if (conv.type === 'group') {
-              const groupName = (conv as any).groupName;
-              if (!groupName || groupName === 'Group Chat') {
+              const groupName = (conv as any).groupName || (conv as any).name;
+              // Real groups always have a group_… id; an ObjectId-keyed group is
+              // the phantom duplicate older builds created.
+              const isPhantom = isPhantomGroup(conv, allConvs);
+              if (!groupName || groupName === 'Group Chat' || isPhantom) {
                 console.log(`⚠️ Filtering out invalid group from sync:`, conv.id);
                 return false;
               }
@@ -455,6 +467,7 @@ export default function MainLayout() {
       const { activeCall: curA, incomingCall: curI } = useAppStore.getState();
       if (data?.callId && curA?.id !== data.callId && curI?.id !== data.callId) return;
       sessionStorage.removeItem('incomingGroupCallData');
+      groupCallMesh.end();
       toast.error('Group call ended');
       webRTCService.cleanup();
       setActiveCall(null);

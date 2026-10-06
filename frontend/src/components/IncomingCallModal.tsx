@@ -9,6 +9,7 @@ import { webSocketService } from '@/lib/websocket';
 import { getAvatarColor, getInitials, truncateAddress } from '@/utils/helpers';
 import { resolveProfilesByWallets } from '@/lib/profileResolver';
 import toast from 'react-hot-toast';
+import { groupCallMesh } from '@/lib/groupCallMesh';
 
 export default function IncomingCallModal() {
   const { 
@@ -125,6 +126,9 @@ export default function IncomingCallModal() {
         let groupData: any = {};
         try { groupData = JSON.parse(sessionStorage.getItem('incomingGroupCallData') || '{}'); } catch {}
 
+        groupCallMesh.begin({ callId: incomingCall.id, me, initiator, audioOnly: !isVideoCall });
+        groupCallMesh.registerPeer(peerId, initiator);
+
         webRTCService.answerCall(peerId, !isVideoCall, (signal) => {
           if (signal.type === 'answer') {
             webSocketService.emit('group:call:answer', {
@@ -152,8 +156,10 @@ export default function IncomingCallModal() {
           status: 'active',
           startTime: Date.now(),
           isGroupCall: true,
-          // We're only connected to the initiator, so show them as the participant
-          participants: [initiator, me],
+          // Full mesh: everyone in the group gets a tile; they connect as they join
+          participants: Array.from(new Set(
+            [initiator, me, ...((groupData.participants || []) as string[]).map((p: string) => p.toLowerCase())]
+          )),
           groupName: incomingCall.groupName || groupData.groupName,
           groupId: incomingCall.groupId || groupData.groupId,
         });

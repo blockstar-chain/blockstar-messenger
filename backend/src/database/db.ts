@@ -59,11 +59,58 @@ export async function initializeDatabase(): Promise<boolean> {
     // Create indexes for performance
     await createIndexes();
 
+    // One-off repair for groups whose messages were saved under the Mongo _id
+    await migrateLegacyGroupMessageIds();
+
     console.log('📦 Connected to MongoDB:', DB_NAME);
     return true;
   } catch (error) {
     console.error('❌ MongoDB connection failed:', error);
     return false;
+  }
+}
+
+/**
+ * Some clients briefly addressed groups by their Mongo _id instead of their
+ * group_id (because /api/sync returned _id). Messages sent that way were stored
+ * under the wrong conversation_id and showed up as a phantom "Group Chat".
+ * Move them back under the real group_id. Safe to run on every start.
+ */
+async function migrateLegacyGroupMessageIds(): Promise<void> {
+  try {
+    const groups = await conversationsCollection
+      .find({ type: 'group', group_id: { $exists: true, $ne: null } }, { projection: { _id: 1, group_id: 1 } })
+      .toArray();
+    let moved = 0;
+    for (const g of groups as any[]) {
+      const legacy = g._id.toString();
+      if (!g.group_id || legacy === g.group_id) continue;
+      const r = await messagesCollection.updateMany(
+        { conversation_id: legacy },
+        { $set: { conversation_id: g.group_id } }
+      );
+      moved += r.modifiedCount;
+    }
+    if (moved) console.log(`🔧 Re-homed ${moved} group message(s) from legacy _id to group_id`);
+  } catch (err) {
+    console.error('migrateLegacyGroupMessageIds failed:', err);
+  }
+}
+
+/**
+ * Map any group identifier (group_id or legacy Mongo _id) to the canonical
+ * group_id. Returns the input unchanged if it isn't a known group.
+ */
+export async function canonicalGroupId(id: string): Promise<string> {
+  if (!id || !/^[0-9a-fA-F]{24}$/.test(id)) return id;
+  try {
+    const conv = await conversationsCollection.findOne(
+      { _id: new ObjectId(id), type: 'group' },
+      { projection: { group_id: 1 } }
+    );
+    return (conv as any)?.group_id || id;
+  } catch {
+    return id;
   }
 }
 
@@ -1877,6 +1924,7 @@ export default {
   updateGroupAvatar,
   // Message operations
   saveMessage,
+  canonicalGroupId,
   blockUser,
   unblockUser,
   getBlockedUsers,

@@ -8,15 +8,43 @@ const TURN_USERNAME = process.env.NEXT_PUBLIC_TURN_USERNAME;
 const TURN_CREDENTIAL = process.env.NEXT_PUBLIC_TURN_CREDENTIAL;
 
 // Build ICE servers configuration
+// Short-lived TURN credentials from our backend (coturn use-auth-secret).
+// Fetched before each call; cached until close to expiry.
+const API_BASE_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
+let fetchedTurn: { servers: RTCIceServer[]; expiresAt: number } | null = null;
+
+export async function refreshTurnCredentials(wallet?: string): Promise<void> {
+  if (fetchedTurn && fetchedTurn.expiresAt - Date.now() > 30 * 60 * 1000) return;
+  try {
+    const qs = wallet ? `?wallet=${encodeURIComponent(wallet.toLowerCase())}` : '';
+    const res = await fetch(`${API_BASE_URL}/api/turn-credentials${qs}`, { cache: 'no-store' });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data?.iceServers?.length) {
+      fetchedTurn = {
+        servers: data.iceServers,
+        expiresAt: Date.now() + (Number(data.ttl) || 3600) * 1000,
+      };
+      console.log('🔧 TURN credentials loaded from backend');
+    } else if (data && data.configured === false) {
+      console.warn('⚠️ No TURN server configured on backend — calls may fail on strict Wi-Fi/NAT');
+    }
+  } catch (err) {
+    console.warn('Could not fetch TURN credentials:', err);
+  }
+}
+
 function getIceServers(): RTCIceServer[] {
   const servers: RTCIceServer[] = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:global.stun.twilio.com:3478' },
   ];
 
-  if (TURN_SERVER_URL && TURN_USERNAME && TURN_CREDENTIAL) {
+  if (fetchedTurn && fetchedTurn.expiresAt > Date.now()) {
+    servers.push(...fetchedTurn.servers);
+    console.log('🔧 Using BlockStar TURN server');
+  } else if (TURN_SERVER_URL && TURN_USERNAME && TURN_CREDENTIAL) {
     servers.push({
       urls: TURN_SERVER_URL,
       username: TURN_USERNAME,
@@ -61,6 +89,9 @@ export class WebRTCService {
    * Initialize local media stream
    */
   async initializeLocalStream(audioOnly: boolean = false): Promise<MediaStream> {
+    // Make sure TURN creds are fresh before any peer is created for this call
+    await refreshTurnCredentials();
+
     try {
       console.log('========================================');
       console.log('📱 INITIALIZING LOCAL STREAM');
@@ -359,6 +390,14 @@ export class WebRTCService {
     onIceCandidate?: (candidate: any) => void
   ): void {
     
+    // ICE diagnostics: 'failed' here almost always means no TURN relay was usable
+    peer.on('iceStateChange', (iceState: string) => {
+      console.log(`🧊 ICE state [${callId}]:`, iceState);
+      if (iceState === 'failed') {
+        console.error('❌ ICE failed — peers could not reach each other. A TURN relay is needed on this network.');
+      }
+    });
+
     // Handle signaling data
     peer.on('signal', (signal) => {
       console.log('📤 SIGNAL:', signal.type || 'candidate');
@@ -570,6 +609,20 @@ export class WebRTCService {
         peer.destroy();
       }
     }
+  }
+
+  /** True if a peer connection with this id exists. */
+  hasPeer(peerId: string): boolean {
+    return this.peers.has(peerId);
+  }
+
+  /**
+   * Close one peer connection (e.g. a group-call member left) without
+   * firing call-end handlers or touching the local stream.
+   */
+  closePeer(peerId: string): void {
+    this.cleanupPeer(peerId);
+    this.pendingCandidates.delete(peerId);
   }
 
   /**

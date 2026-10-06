@@ -1,9 +1,11 @@
 // BlockStar Messenger Service Worker
-const CACHE_NAME = 'blockstar-messenger-v1';
+// Bump this whenever the caching strategy changes — old caches are deleted on activate.
+const CACHE_NAME = 'blockstar-messenger-v2';
 
 // Files to cache - only cache files that definitely exist
+// NOTE: never pre-cache '/' — a cached HTML page pins every user to the JS
+// bundle that existed when the worker installed, so new deploys never load.
 const STATIC_ASSETS = [
-  '/',
   '/sounds/notification.mp3',
   '/sounds/ringtone.mp3'
 ];
@@ -66,23 +68,29 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Pages (HTML) and Next.js build files: always go to the network.
+  // _next/static files are content-hashed and cached by the browser already.
+  const isNavigation = event.request.mode === 'navigate' ||
+    (event.request.headers.get('accept') || '').includes('text/html');
+  if (isNavigation || url.pathname.startsWith('/_next/')) {
+    if (isNavigation) {
+      event.respondWith(
+        fetch(event.request).catch(() =>
+          new Response('<h1>Offline</h1><p>BlockStar Cypher needs a connection.</p>', {
+            status: 503,
+            headers: { 'Content-Type': 'text/html' },
+          })
+        )
+      );
+    }
+    return;
+  }
+
+  // Everything else (sounds, icons): cache-first, fall back to network
   event.respondWith(
     caches.match(event.request)
-      .then((response) => {
-        // Return cached response if found
-        if (response) {
-          return response;
-        }
-        // Otherwise fetch from network
-        return fetch(event.request);
-      })
-      .catch(() => {
-        // If both cache and network fail, return a fallback for HTML requests
-        if (event.request.headers.get('accept')?.includes('text/html')) {
-          return caches.match('/');
-        }
-        return new Response('Offline', { status: 503 });
-      })
+      .then((response) => response || fetch(event.request))
+      .catch(() => new Response('Offline', { status: 503 }))
   );
 });
 

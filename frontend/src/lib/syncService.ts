@@ -44,15 +44,35 @@ export async function syncFromServer(walletAddress: string): Promise<SyncResult>
     // Process each conversation
     for (const serverConv of data.conversations) {
       // Save/update conversation
+      const isGroup = serverConv.type === 'group';
+
+      // Remove the phantom copy older builds stored under the group's Mongo _id
+      if (serverConv.legacyId && serverConv.legacyId !== serverConv.id) {
+        try {
+          await db.conversations.delete(serverConv.legacyId);
+          dbHelpers.clearMessageCache(serverConv.legacyId);
+        } catch { /* ignore */ }
+      }
+
+      const existingLocal: any = await db.conversations.get(serverConv.id).catch(() => undefined);
+
       const conversation: Conversation = {
+        ...(existingLocal || {}),
         id: serverConv.id,
         type: serverConv.type,
         participants: serverConv.participants,
         name: serverConv.name,
-        unreadCount: 0,
+        unreadCount: existingLocal?.unreadCount || 0,
         createdAt: serverConv.createdAt,
         updatedAt: serverConv.updatedAt,
       };
+      if (isGroup) {
+        // Without these the group shows as "Group Chat" / gets filtered out
+        (conversation as any).groupName = serverConv.groupName || serverConv.name || existingLocal?.groupName;
+        (conversation as any).groupAvatar = serverConv.groupAvatar || serverConv.avatarUrl || existingLocal?.groupAvatar;
+        (conversation as any).admins = serverConv.admins?.length ? serverConv.admins : (existingLocal?.admins || []);
+        (conversation as any).createdBy = serverConv.createdBy || existingLocal?.createdBy || '';
+      }
       
       // Process and decrypt messages
       if (serverConv.messages && serverConv.messages.length > 0) {
@@ -66,7 +86,10 @@ export async function syncFromServer(walletAddress: string): Promise<SyncResult>
           
           if (encryptionService.isReady()) {
             try {
-              const otherParty = isSentByUs ? recipientAddr : serverMsg.senderWallet;
+              // Group payloads are encrypted pairwise with the SENDER's key
+              const otherParty = isGroup
+                ? serverMsg.senderWallet
+                : (isSentByUs ? recipientAddr : serverMsg.senderWallet);
               const { decrypted, wasEncrypted } = await encryptionService.decryptFromSender(
                 serverMsg.content,
                 otherParty
@@ -108,7 +131,9 @@ export async function syncFromServer(walletAddress: string): Promise<SyncResult>
         
         if (encryptionService.isReady()) {
           try {
-            const otherParty = lastMsgSentByUs ? lastRecipient : lastServerMsg.senderWallet;
+            const otherParty = isGroup
+              ? lastServerMsg.senderWallet
+              : (lastMsgSentByUs ? lastRecipient : lastServerMsg.senderWallet);
             const { decrypted, wasEncrypted } = await encryptionService.decryptFromSender(
               lastServerMsg.content,
               otherParty

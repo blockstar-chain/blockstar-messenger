@@ -223,6 +223,29 @@ app.get('/health', async (req, res) => {
 });
 
 // Alias for /api/health (used by mesh network service)
+// ============================================
+// TURN CREDENTIALS (for calls behind strict NAT / office & home Wi-Fi)
+// ============================================
+// Uses coturn's "use-auth-secret" (TURN REST API): short-lived credentials
+// derived from a shared secret, so nothing long-lived ships in the frontend.
+//   TURN_SECRET = same value as `static-auth-secret` in turnserver.conf
+//   TURN_URLS   = comma-separated, e.g.
+//     turn:turn.blockstar.world:3478?transport=udp,turn:turn.blockstar.world:3478?transport=tcp,turns:turn.blockstar.world:5349?transport=tcp
+app.get('/api/turn-credentials', (req, res) => {
+  const secret = process.env.TURN_SECRET;
+  const urls = (process.env.TURN_URLS || '').split(',').map(u => u.trim()).filter(Boolean);
+  if (!secret || urls.length === 0) {
+    return res.json({ success: true, iceServers: [], ttl: 0, configured: false });
+  }
+  const ttl = 12 * 60 * 60; // 12h
+  const expiry = Math.floor(Date.now() / 1000) + ttl;
+  const who = String(req.query.wallet || 'cypher').toLowerCase().replace(/[^a-z0-9x]/g, '').slice(0, 42) || 'cypher';
+  const username = `${expiry}:${who}`;
+  const credential = crypto.createHmac('sha1', secret).update(username).digest('base64');
+  res.set('Cache-Control', 'no-store');
+  res.json({ success: true, iceServers: [{ urls, username, credential }], ttl, configured: true });
+});
+
 app.get('/api/health', async (req, res) => {
   try {
     const stats = await db.getStats();
@@ -1391,6 +1414,7 @@ app.get('/api/conversations/:walletAddress', async (req, res) => {
 
         return {
           id: conversationId,  // Use group_id if available
+          legacyId: convAny.group_id ? conv._id!.toString() : undefined,
           type: conv.type,
           participants: conv.participants,
           name: conv.name,
@@ -2165,14 +2189,23 @@ app.get('/api/sync/:walletAddress', async (req, res) => {
     // Get messages for each conversation (last 50 per conversation)
     const conversationsWithMessages = await Promise.all(
       conversations.map(async (conv) => {
-        const messages = await db.getMessages(conv._id!.toString(), 50);
+        const convAny = conv as any;
+        // Groups are addressed by group_id everywhere else — returning the Mongo
+        // _id here is what created the duplicate "Group Chat" on clients.
+        const convId: string = convAny.group_id || conv._id!.toString();
+        const messages = await db.getMessages(convId, 50);
 
         return {
-          id: conv._id!.toString(),
+          id: convId,
+          legacyId: convAny.group_id ? conv._id!.toString() : undefined,
           type: conv.type,
           participants: conv.participants,
           name: conv.name,
           avatarUrl: conv.avatar_url,
+          groupName: conv.type === 'group' ? conv.name : undefined,
+          groupAvatar: conv.type === 'group' ? conv.avatar_url : undefined,
+          admins: convAny.admins || [],
+          createdBy: convAny.created_by || '',
           createdAt: conv.created_at.getTime(),
           updatedAt: conv.updated_at.getTime(),
           messages: messages.map(msg => {
@@ -2187,6 +2220,10 @@ app.get('/api/sync/:walletAddress', async (req, res) => {
             }
 
             const msgAny = msg as any;
+            // Encrypted group message: hand back THIS user's ciphertext
+            if (contentStr === '__ENCRYPTED_GROUP__' && msgAny.encrypted_payloads?.[address]) {
+              contentStr = msgAny.encrypted_payloads[address];
+            }
             return {
               id: msg.client_id || msg._id!.toString(),  // Use client_id if available
               conversationId: msg.conversation_id,
@@ -3084,8 +3121,14 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
-  socket.on('group:message', async ({ groupId, message, recipients, groupInfo }: any) => {
+  socket.on('group:message', async ({ groupId: rawGroupId, message, recipients, groupInfo }: any) => {
     try {
+      // Old clients may address the group by its Mongo _id — normalise to group_id
+      const groupId = await db.canonicalGroupId(rawGroupId);
+      if (groupId !== rawGroupId) {
+        console.log(`🔧 group:message used legacy id ${rawGroupId} → ${groupId}`);
+        if (groupInfo && typeof groupInfo === 'object') groupInfo = { ...groupInfo, id: groupId };
+      }
       console.log(`📢 Group message in ${groupId} from ${address}:`, message.content?.substring(0, 30));
 
       // For encrypted group messages, we store a marker and send individual payloads
@@ -3318,6 +3361,20 @@ io.on('connection', (socket: Socket) => {
     }
   });
 
+  // Mesh signalling between two members (offer / answer / ICE), relayed as-is
+  socket.on('group:call:mesh:signal', ({ callId, toAddress, peerId, signal }: any) => {
+    try {
+      const call = groupCalls.get(callId);
+      const to = String(toAddress || '').toLowerCase();
+      if (!call || !to) return;
+      const inCall = (a: string) => a === call.initiator || call.joined.has(a);
+      if (!inCall(address) || !inCall(to)) return;
+      emitToUser(to, 'group:call:mesh:signal', { callId, peerId, signal, from: address });
+    } catch (error) {
+      console.error('Error relaying mesh signal:', error);
+    }
+  });
+
   // Client asks for anything still ringing for it (app came to foreground / push tapped)
   socket.on('call:resync', () => {
     resyncPendingCalls(address);
@@ -3358,6 +3415,16 @@ io.on('connection', (socket: Socket) => {
           participantAddress: address,
         });
         console.log(`   → Group call answer sent to ${target}`);
+      }
+
+      if (call) {
+        // Full mesh: tell the newcomer who's already in, so they connect to each
+        // (they make the offers), and tell those members someone joined.
+        const others = [...call.joined].filter(m => m !== address);
+        socket.emit('group:call:roster', { callId, peers: others, initiator: call.initiator });
+        for (const m of others) {
+          emitToUser(m, 'group:call:participant:joined', { callId, participantAddress: address });
+        }
       }
     } catch (error) {
       console.error('Error answering group call:', error);

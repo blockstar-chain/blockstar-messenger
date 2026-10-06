@@ -16,6 +16,7 @@ import EmojiPicker from './EmojiPicker';
 import GroupSettingsModal from './GroupSettingsModal';
 import UserProfileModal from './UserProfileModal';
 import { useBlockStore } from '@/store/blockStore';
+import { groupCallMesh } from '@/lib/groupCallMesh';
 import { addToContacts, isContact, getContactNickname } from './ContactsSection';
 import { isConversationDeleted, removeFromDeletedConversations } from './Sidebar';
 
@@ -2033,10 +2034,18 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         console.log('Generated group call ID:', callId);
         console.log('Recipients:', recipients);
 
+        groupCallMesh.begin({
+          callId,
+          me: currentUser.walletAddress,
+          initiator: currentUser.walletAddress,
+          audioOnly: type === 'audio',
+        });
+
         // Create peer connections for each recipient
         for (const recipientAddress of recipients) {
           const peerId = `${callId}-${recipientAddress.toLowerCase()}`;
           let offerSent = false;
+          groupCallMesh.registerPeer(peerId, recipientAddress);
 
           webRTCService.createCall(
             peerId,

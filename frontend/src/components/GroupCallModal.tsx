@@ -7,6 +7,7 @@ import { truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
 import { resolveProfile, type BlockStarProfile } from '@/lib/profileResolver';
 import toast from 'react-hot-toast';
 import { useSettingReslover } from '@/hooks/useSetting';
+import { groupCallMesh } from '@/lib/groupCallMesh';
 
 interface GroupCallParticipant {
     address: string;
@@ -16,6 +17,7 @@ interface GroupCallParticipant {
     isConnected: boolean;
     isMuted: boolean;
     isVideoOff: boolean;
+    status?: 'ringing' | 'connected' | 'left' | 'declined' | 'no-answer';
 }
 
 const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
@@ -34,6 +36,9 @@ export default function GroupCallModal() {
     const hasEnded = useRef(false);
     const remoteVideoRefs = useRef<Map<string, HTMLVideoElement | null>>(new Map());
     const remoteAudioRefs = useRef<Map<string, HTMLAudioElement | null>>(new Map());
+    // Latest stream per participant, so <audio>/<video> that mount AFTER the
+    // stream arrives still get it (ref callbacks below attach it).
+    const remoteStreams = useRef<Map<string, MediaStream>>(new Map());
     const domainName = currentUser?.username ? currentUser.username.includes('@') ? currentUser.username.split('@')[0] : currentUser.username : "";
     const stats = useSettingReslover(domainName || '');
 
@@ -165,16 +170,22 @@ export default function GroupCallModal() {
     useEffect(() => {
         if (!activeCall || !isCallModalOpen) return;
 
-        const unsubscribeStream = webRTCService.onStream((stream, peerId) => {
-            console.log('GroupCallModal: Remote stream received from:', peerId);
-
-            // Extract participant address from peer ID (format: callId-participantAddress)
-            const parts = peerId.split('-');
-            const participantAddress = parts[parts.length - 1];
-
+        const unsubscribeStream = webRTCService.onStream((stream, callKey, peerId) => {
+            const key = peerId || callKey;
+            // NB: the 2nd arg is the peer key, not the group call id. Map it to a
+            // person via the mesh registry (handles initiator, member and mesh links).
+            const participantAddress = groupCallMesh.addressForPeer(key);
+            console.log('GroupCallModal: Remote stream', key, '→', participantAddress);
             if (!participantAddress) return;
 
-            // Update participant with stream
+            remoteStreams.current.set(participantAddress, stream);
+
+            // First media in → mark the call active (stops the outgoing ring tone)
+            const cur = useAppStore.getState().activeCall;
+            if (cur && cur.id === activeCall.id && cur.status !== 'active') {
+                setActiveCall({ ...cur, status: 'active' });
+            }
+
             setParticipants(prev => {
                 const updated = new Map(prev);
                 const existing = updated.get(participantAddress) || {
@@ -187,26 +198,30 @@ export default function GroupCallModal() {
                     ...existing,
                     stream,
                     isConnected: true,
+                    status: 'connected',
                 });
                 return updated;
             });
 
-            // Set video element
             const videoRef = remoteVideoRefs.current.get(participantAddress);
             if (videoRef && activeCall.type === 'video') {
                 videoRef.srcObject = stream;
                 videoRef.play().catch(console.warn);
             }
 
-            // Set audio element
-            const audioRef = remoteAudioRefs.current.get(participantAddress);
-            if (audioRef) {
-                audioRef.srcObject = stream;
-                audioRef.volume = 1.0;
-                audioRef.play().catch(e => {
-                    console.warn('Audio autoplay blocked for', participantAddress);
-                });
+            let audioRef = remoteAudioRefs.current.get(participantAddress);
+            if (!audioRef) {
+                // Tile not rendered (e.g. not in participants list) — play anyway
+                audioRef = document.createElement('audio');
+                audioRef.autoplay = true;
+                (audioRef as any).playsInline = true;
+                remoteAudioRefs.current.set(participantAddress, audioRef);
             }
+            audioRef.srcObject = stream;
+            audioRef.volume = 1.0;
+            audioRef.play().catch(() => {
+                console.warn('Audio autoplay blocked for', participantAddress);
+            });
 
             // Update call status
             setCallStatus('active');
@@ -216,6 +231,40 @@ export default function GroupCallModal() {
             unsubscribeStream();
         };
     }, [activeCall?.id, activeCall?.type, isCallModalOpen]);
+
+    // Who joined / left / declined
+    useEffect(() => {
+        if (!activeCall || !isCallModalOpen || !isGroupCall) return;
+        const mark = (addr: string, patch: Partial<GroupCallParticipant>) => {
+            const a = (addr || '').toLowerCase();
+            if (!a) return;
+            setParticipants(prev => {
+                const updated = new Map(prev);
+                const existing = updated.get(a) || { address: a, isConnected: false, isMuted: false, isVideoOff: false };
+                updated.set(a, { ...existing, ...patch });
+                return updated;
+            });
+        };
+        const forThisCall = (d: any) => d && d.callId === activeCall.id;
+        const unsubs = [
+            webSocketService.on('group:call:participant:left', (d: any) => {
+                if (!forThisCall(d)) return;
+                const a = (d.participantAddress || d.address || '').toLowerCase();
+                remoteStreams.current.delete(a);
+                const el = remoteAudioRefs.current.get(a);
+                if (el) el.srcObject = null;
+                mark(a, { isConnected: false, stream: undefined, status: 'left' });
+                toast(`${truncateAddress(a)} left the call`, { icon: '👋' });
+            }),
+            webSocketService.on('group:call:participant:declined', (d: any) => {
+                if (forThisCall(d)) mark(d.participantAddress || d.address, { status: 'declined' });
+            }),
+            webSocketService.on('group:call:participant:unavailable', (d: any) => {
+                if (forThisCall(d)) mark(d.address, { status: 'no-answer' });
+            }),
+        ];
+        return () => unsubs.forEach(u => u());
+    }, [activeCall?.id, isCallModalOpen, isGroupCall]);
 
     const handleToggleAudio = () => {
         const enabled = webRTCService.toggleAudio();
@@ -247,17 +296,19 @@ export default function GroupCallModal() {
         const currentActiveCall = useAppStore.getState().activeCall;
 
         if (currentActiveCall && !fromRemote) {
-            webSocketService.endCall(currentActiveCall.id);
-
-            // Notify all participants about call end
-            if (currentActiveCall.isGroupCall && currentActiveCall.id) {
-                webSocketService.emit('group:call:end', {
-                    callId: currentActiveCall.id,
-                    groupId: currentActiveCall.id.split('-')[0], // Extract group ID
-                });
-            }
+            // Server decides: the initiator hanging up ends it for everyone;
+            // anyone else just leaves and the call continues.
+            // (Don't send the 1:1 'call:end' here — it isn't a 1:1 call.)
+            webSocketService.emit('group:call:end', {
+                callId: currentActiveCall.id,
+                groupId: currentActiveCall.groupId || currentActiveCall.id.replace(/-\d+$/, ''),
+            });
         }
 
+        groupCallMesh.end();
+        remoteStreams.current.clear();
+        remoteAudioRefs.current.forEach(el => { if (el) el.srcObject = null; });
+        remoteAudioRefs.current.clear();
         webRTCService.cleanup();
         setActiveCall(null);
         setCallModalOpen(false);
@@ -291,10 +342,23 @@ export default function GroupCallModal() {
 
     const setVideoRef = useCallback((address: string, ref: HTMLVideoElement | null) => {
         remoteVideoRefs.current.set(address, ref);
+        const stream = remoteStreams.current.get(address);
+        if (ref && stream && ref.srcObject !== stream) {
+            ref.srcObject = stream;
+            ref.play().catch(() => {});
+        }
     }, []);
 
     const setAudioRef = useCallback((address: string, ref: HTMLAudioElement | null) => {
+        if (!ref) return; // keep any detached fallback element playing
+        const prev = remoteAudioRefs.current.get(address);
+        if (prev && prev !== ref) prev.srcObject = null; // avoid double audio
         remoteAudioRefs.current.set(address, ref);
+        const stream = remoteStreams.current.get(address);
+        if (stream && ref.srcObject !== stream) {
+            ref.srcObject = stream;
+            ref.play().catch(() => {});
+        }
     }, []);
 
     if (!activeCall || !isCallModalOpen || !isGroupCall) return null;
@@ -305,7 +369,10 @@ export default function GroupCallModal() {
     return (
         <div className="fixed inset-0 bg-midnight z-[200] flex flex-col">
             {/* Header */}
-            <div className="bg-card/80 backdrop-blur-sm border-b border-midnight p-4">
+            <div
+                className="bg-card/80 backdrop-blur-sm border-b border-midnight p-4"
+                style={{ paddingTop: 'calc(1rem + env(safe-area-inset-top, 0px))' }}
+            >
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500/50 to-pink-500/50 flex items-center justify-center">
@@ -316,7 +383,7 @@ export default function GroupCallModal() {
                                 {activeCall.groupName || 'Group Call'}
                             </h3>
                             <p className="text-xs text-secondary">
-                                {connectedCount + 1} / {otherParticipants.length + 1} connected • {formatDuration(callDuration)}
+                                {connectedCount + 1} of {otherParticipants.length + 1} in call • {formatDuration(callDuration)}
                             </p>
                         </div>
                     </div>
@@ -387,7 +454,12 @@ export default function GroupCallModal() {
                                         )}
                                         <p className="text-white font-medium">{displayName}</p>
                                         <p className="text-sm text-secondary mt-1">
-                                            {participant?.isConnected ? 'Connected' : 'Connecting...'}
+                                            {participant?.isConnected
+                                                ? 'Connected'
+                                                : participant?.status === 'left' ? 'Left the call'
+                                                : participant?.status === 'declined' ? 'Declined'
+                                                : participant?.status === 'no-answer' ? 'No answer'
+                                                : 'Connecting...'}
                                         </p>
                                     </div>
                                 )}
@@ -465,7 +537,10 @@ export default function GroupCallModal() {
             )}
 
             {/* Call Controls */}
-            <div className="bg-card/80 backdrop-blur-sm border-t border-midnight p-6">
+            <div
+                className="bg-card/80 backdrop-blur-sm border-t border-midnight p-6"
+                style={{ paddingBottom: 'calc(1.5rem + env(safe-area-inset-bottom, 0px))' }}
+            >
                 <div className="flex items-center justify-center gap-6">
                     <button
                         onClick={handleToggleAudio}

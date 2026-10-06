@@ -194,3 +194,20 @@ export const trimAddress = (addr :any) => {
         return addr;
     }
 }
+
+/**
+ * True for the duplicate group copy older builds created under the group's
+ * Mongo ObjectId (real groups use a "group_…" id).
+ */
+export function isPhantomGroup(conv: any, all: any[]): boolean {
+  if (!conv || conv.type !== 'group' || !/^[0-9a-f]{24}$/i.test(conv.id || '')) return false;
+  const name = conv.groupName || conv.name;
+  if (!name || name === 'Group Chat') return true;
+  const key = [...(conv.participants || [])].map((p: string) => p.toLowerCase()).sort().join(',');
+  return all.some((o: any) =>
+    o !== conv &&
+    o.type === 'group' &&
+    typeof o.id === 'string' && o.id.startsWith('group_') &&
+    [...(o.participants || [])].map((p: string) => p.toLowerCase()).sort().join(',') === key
+  );
+}
