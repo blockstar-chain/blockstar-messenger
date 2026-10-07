@@ -24,6 +24,7 @@ import MeshSettingsComponent from './MeshSettings';
 import NotificationSettingsPanel from './NotificationSettings';
 import RingtoneSettingsPanel from './RingtoneSettings';
 import BlockedUsersSettings from './BlockedUsersSettings';
+import { CYPHER_BUILD } from '@/lib/buildInfo';
 import { useBlockStore } from '@/store/blockStore';
 import { unregisterPushNotifications } from '@/lib/pushNotifications';
 import { clearUserSession } from '@/lib/persistentAuth';
@@ -845,10 +846,16 @@ export default function Sidebar({
       const beforeFilter = allConversations.length;
       allConversations = allConversations.filter(c => {
         if (c.type === 'group') {
-          const name = c.groupName || '';
-          if (!name || name === 'Group Chat' || name.trim() === '') {
+          const name = (c.groupName || (c as any).name || '').trim();
+          if (!name || name === 'Group Chat') {
+            // A real group (group_… id) that merely lost its name locally must
+            // NOT be deleted — the server sync below restores the name. Deleting
+            // it here is what made groups vanish after every restart.
+            if (c.id.startsWith('group_')) {
+              console.log(`⚠️ Group ${c.id} has no local name yet — keeping, will refresh from server`);
+              return true;
+            }
             console.log(`⚠️ Filtering out invalid local group: ${c.id} (name: "${name}")`);
-            // Also delete from IndexedDB
             db.conversations.delete(c.id).catch(() => { });
             return false;
           }
@@ -2548,7 +2555,11 @@ export default function Sidebar({
                 <div className="p-4 bg-dark-200 border border-midnight rounded-xl space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-secondary">Version</span>
-                    <span className="text-white">1.0.0</span>
+                    <span className="text-white">2.0.0</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-secondary">Build</span>
+                    <span className="text-white font-mono">{CYPHER_BUILD}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-secondary">Network</span>

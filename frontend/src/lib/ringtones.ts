@@ -49,6 +49,8 @@ const DEFAULT_SETTINGS: RingtoneSettings = {
 class RingtoneService {
   private settings: RingtoneSettings;
   private currentAudio: HTMLAudioElement | null = null;
+  private activeCallSounds = new Set<HTMLAudioElement>();
+  private callSoundToken = 0;
   private previewAudio: HTMLAudioElement | null = null;
 
   constructor() {
@@ -148,11 +150,21 @@ class RingtoneService {
     
     this.currentAudio.loop = true;
     this.currentAudio.volume = this.settings.callVolume;
+    const audio = this.currentAudio;
+    const token = this.callSoundToken;
+    this.activeCallSounds.add(audio);
 
     try {
-      await this.currentAudio.play();
-      return this.currentAudio;
+      await audio.play();
+      // A stop arrived while play() was starting — honour it
+      if (token !== this.callSoundToken) {
+        try { audio.pause(); audio.src = ''; } catch {}
+        this.activeCallSounds.delete(audio);
+        return null;
+      }
+      return audio;
     } catch (error) {
+      this.activeCallSounds.delete(audio);
       console.error('Failed to play incoming ringtone:', error);
       return null;
     }
@@ -174,11 +186,21 @@ class RingtoneService {
     
     this.currentAudio.loop = true;
     this.currentAudio.volume = this.settings.callVolume;
+    const audio = this.currentAudio;
+    const token = this.callSoundToken;
+    this.activeCallSounds.add(audio);
 
     try {
-      await this.currentAudio.play();
-      return this.currentAudio;
+      await audio.play();
+      // A stop arrived while play() was starting — honour it
+      if (token !== this.callSoundToken) {
+        try { audio.pause(); audio.src = ''; } catch {}
+        this.activeCallSounds.delete(audio);
+        return null;
+      }
+      return audio;
     } catch (error) {
+      this.activeCallSounds.delete(audio);
       console.error('Failed to play outgoing tone:', error);
       return null;
     }
@@ -204,9 +226,16 @@ class RingtoneService {
    * Stop current playing sound
    */
   stopCurrentSound(): void {
+    // Stop EVERY looping call sound we've started, not just the latest one.
+    // Rapid status changes could start a second tone before the first was
+    // tracked, leaving a faint ring playing until the app was killed.
+    this.callSoundToken++;
+    for (const a of this.activeCallSounds) {
+      try { a.pause(); a.currentTime = 0; a.src = ''; a.load(); } catch {}
+    }
+    this.activeCallSounds.clear();
     if (this.currentAudio) {
-      this.currentAudio.pause();
-      this.currentAudio.currentTime = 0;
+      try { this.currentAudio.pause(); this.currentAudio.currentTime = 0; } catch {}
       this.currentAudio = null;
     }
   }

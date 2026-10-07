@@ -1,5 +1,6 @@
 {
   "name": "blockstar-cypher-frontend",
+  "productName": "BlockStar Cypher",
   "version": "2.0.0",
   "private": true,
   "main": "electron/main.js",

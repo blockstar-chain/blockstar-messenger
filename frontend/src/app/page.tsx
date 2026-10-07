@@ -1,4 +1,5 @@
 'use client';
+import { CYPHER_BUILD } from '@/lib/buildInfo';
 
 import { useEffect } from 'react';
 import { useAppStore } from '@/store';
@@ -15,7 +16,7 @@ export default function HomePage() {
   // Register service worker for PWA
   useEffect(() => {
     // Lets you confirm in DevTools which build a tester is actually running
-    console.log('🏷️ Cypher build: 2026-10-06-groupfix');
+    console.log(`🏷️ Cypher build: ${CYPHER_BUILD}`);
 
     if ('serviceWorker' in navigator) {
       // When a new service worker takes over (new deploy), reload once so the

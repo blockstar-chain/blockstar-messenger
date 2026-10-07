@@ -7,6 +7,7 @@ import { db } from '@/lib/database';
 import toast from 'react-hot-toast';
 import { isPhantomGroup } from '@/utils/helpers';
 import { groupCallMesh } from '@/lib/groupCallMesh';
+import { ringtoneService } from '@/lib/ringtones';
 import { refreshTurnCredentials } from '@/lib/webrtc';
 import Sidebar from './Sidebar';
 import ChatArea from './ChatArea';
@@ -110,6 +111,21 @@ export default function MainLayout() {
 
   // Mesh modal state - lifted up for mobile nav
   const [showMesh, setShowMesh] = useState(false);
+
+  // Web (Safari/Chrome on Mac): browsers only show the notification permission
+  // prompt from a user click. Asking later, when a call arrives, is silently
+  // refused — so incoming-call banners never appeared. Ask on the first click.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+    if ((window as any).electronAPI?.isElectron) return; // Electron uses native notifications
+    if (Notification.permission !== 'default') return;
+    const ask = () => {
+      Notification.requestPermission().catch(() => {});
+      window.removeEventListener('pointerdown', ask);
+    };
+    window.addEventListener('pointerdown', ask, { once: true });
+    return () => window.removeEventListener('pointerdown', ask);
+  }, []);
 
   // Prefetch TURN credentials so calls start instantly and work on strict Wi-Fi
   useEffect(() => {
@@ -230,7 +246,7 @@ export default function MainLayout() {
               // Real groups always have a group_… id; an ObjectId-keyed group is
               // the phantom duplicate older builds created.
               const isPhantom = isPhantomGroup(conv, allConvs);
-              if (!groupName || groupName === 'Group Chat' || isPhantom) {
+              if (isPhantom || ((!groupName || groupName === 'Group Chat') && !conv.id.startsWith('group_'))) {
                 console.log(`⚠️ Filtering out invalid group from sync:`, conv.id);
                 return false;
               }
@@ -468,6 +484,7 @@ export default function MainLayout() {
       if (data?.callId && curA?.id !== data.callId && curI?.id !== data.callId) return;
       sessionStorage.removeItem('incomingGroupCallData');
       groupCallMesh.end();
+      ringtoneService.stopCurrentSound();
       toast.error('Group call ended');
       webRTCService.cleanup();
       setActiveCall(null);

@@ -39,6 +39,7 @@ export default function CallModal() {
   const [callStatus, setCallStatus] = useState<'connecting' | 'ringing' | 'active' | 'ended'>('connecting');
   const [hasRemoteStream, setHasRemoteStream] = useState(false);
   const [remoteAudioPlaying, setRemoteAudioPlaying] = useState(false);
+  const [audioPanelOpen, setAudioPanelOpen] = useState(false);
   const [participantStreams, setParticipantStreams] = useState<Map<string, ParticipantStream>>(new Map());
   const [myProfile, setMyProfile] = useState<BlockStarProfile | null>(null);
   const [otherPartyProfile, setOtherPartyProfile] = useState<BlockStarProfile | null>(null);
@@ -260,7 +261,13 @@ export default function CallModal() {
 
   // Watch for call status changes from store
   useEffect(() => {
-    if (!activeCall) return;
+    if (!activeCall) {
+      // Call is gone — make sure the outgoing ring stops. (This component stays
+      // mounted, so the tone effect's unmount cleanup never ran.)
+      setCallStatus('ended');
+      ringtoneService.stopCurrentSound();
+      return;
+    }
 
     const isCaller = activeCall.callerId?.toLowerCase() === currentUser?.walletAddress?.toLowerCase();
 
@@ -275,7 +282,8 @@ export default function CallModal() {
 
   // Play outgoing tone when calling (ringing status)
   useEffect(() => {
-    if (callStatus === 'ringing') {
+    // Group calls: GroupCallModal owns the call; never ring from here
+    if (callStatus === 'ringing' && activeCall && !isGroupCall && isCallModalOpen) {
       // Play outgoing call tone
       console.log('📞 Playing outgoing call tone...');
       ringtoneService.playOutgoingTone();
@@ -287,7 +295,7 @@ export default function CallModal() {
     return () => {
       ringtoneService.stopCurrentSound();
     };
-  }, [callStatus]);
+  }, [callStatus, isGroupCall, isCallModalOpen, activeCall?.id]);
 
   // Duration timer
   useEffect(() => {
@@ -802,16 +810,18 @@ export default function CallModal() {
             // Direct call layout - show both participants
             <>
               {isVideoCall ? (
+                // Absolute so it never takes layout space — while ringing it was
+                // pushing the avatars off to the right edge.
                 <video
                   ref={remoteVideoRef}
                   autoPlay
                   playsInline
-                  className="w-full h-full object-cover"
+                  className={`absolute inset-0 w-full h-full object-cover transition-opacity ${hasRemoteStream ? 'opacity-100' : 'opacity-0'}`}
                 />
               ) : null}
 
-              {(!isVideoCall || callStatus !== 'active') && (
-                <div className="flex flex-col items-center">
+              {(!isVideoCall || callStatus !== 'active' || !hasRemoteStream) && (
+                <div className="relative z-10 flex flex-col items-center px-4">
                   {/* Both avatars side by side */}
                   <div className="flex items-start justify-center gap-8 mb-8">
                     {/* Your avatar */}
@@ -895,7 +905,10 @@ export default function CallModal() {
 
         {/* Local Video (picture-in-picture) */}
         {isVideoCall && (
-          <div className="absolute top-6 right-6 w-48 h-36 bg-dark-300 rounded-xl overflow-hidden border-2 border-midnight shadow-lg">
+          <div
+            className="absolute right-4 md:right-6 w-28 h-40 md:w-48 md:h-36 bg-dark-300 rounded-xl overflow-hidden border-2 border-midnight shadow-lg z-20"
+            style={{ bottom: 'calc(9rem + env(safe-area-inset-bottom, 0px))' }}
+          >
             <video
               ref={localVideoRef}
               autoPlay
@@ -909,11 +922,27 @@ export default function CallModal() {
           </div>
         )}
 
-        {/* Audio Status & Controls Panel */}
-        {callStatus === 'active' && (
-          <div className="absolute top-6 left-6 bg-card/95 backdrop-blur-sm text-white px-4 py-3 rounded-xl text-sm max-w-xs border border-midnight">
-            <div className="font-bold mb-2 text-primary-400">
-              🔊 {isGroupCall ? 'Group Call' : 'Audio Status'}
+        {/* Audio Status: a small pill by default; expands on tap, or by itself
+            when audio isn't playing (so it never covers the video for nothing) */}
+        {callStatus === 'active' && !audioPanelOpen && !(hasRemoteStream && !remoteAudioPlaying) && (
+          <button
+            onClick={() => setAudioPanelOpen(true)}
+            className="absolute left-4 z-20 flex items-center gap-1.5 bg-card/80 backdrop-blur-sm text-xs text-white px-3 py-1.5 rounded-full border border-midnight"
+            style={{ top: 'calc(1rem + env(safe-area-inset-top, 0px))' }}
+            title="Audio status"
+          >
+            <span className={`w-2 h-2 rounded-full ${remoteAudioPlaying ? 'bg-success-500' : 'bg-warning-500'}`} />
+            {formatDuration(callDuration)}
+          </button>
+        )}
+        {callStatus === 'active' && (audioPanelOpen || (hasRemoteStream && !remoteAudioPlaying)) && (
+          <div
+            className="absolute left-4 z-20 bg-card/95 backdrop-blur-sm text-white px-3 py-2.5 rounded-xl text-sm w-56 border border-midnight"
+            style={{ top: 'calc(1rem + env(safe-area-inset-top, 0px))' }}
+          >
+            <div className="font-bold mb-2 text-primary-400 flex items-center justify-between">
+              <span>🔊 {isGroupCall ? 'Group Call' : 'Audio Status'}</span>
+              <button onClick={() => setAudioPanelOpen(false)} className="text-secondary hover:text-white px-1" title="Hide">✕</button>
             </div>
 
             <div className="space-y-2 text-xs">

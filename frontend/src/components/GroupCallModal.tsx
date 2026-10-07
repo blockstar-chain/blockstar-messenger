@@ -8,6 +8,7 @@ import { resolveProfile, type BlockStarProfile } from '@/lib/profileResolver';
 import toast from 'react-hot-toast';
 import { useSettingReslover } from '@/hooks/useSetting';
 import { groupCallMesh } from '@/lib/groupCallMesh';
+import { ringtoneService } from '@/lib/ringtones';
 
 interface GroupCallParticipant {
     address: string;
@@ -232,6 +233,14 @@ export default function GroupCallModal() {
         };
     }, [activeCall?.id, activeCall?.type, isCallModalOpen]);
 
+    // Ringback for the person who started the call, until someone connects
+    useEffect(() => {
+        const ringing = !!activeCall && isCallModalOpen && isGroupCall && callStatus === 'ringing';
+        if (ringing) ringtoneService.playOutgoingTone();
+        else ringtoneService.stopCurrentSound();
+        return () => { ringtoneService.stopCurrentSound(); };
+    }, [callStatus, activeCall?.id, isCallModalOpen, isGroupCall]);
+
     // Who joined / left / declined
     useEffect(() => {
         if (!activeCall || !isCallModalOpen || !isGroupCall) return;
@@ -305,6 +314,7 @@ export default function GroupCallModal() {
             });
         }
 
+        ringtoneService.stopCurrentSound();
         groupCallMesh.end();
         remoteStreams.current.clear();
         remoteAudioRefs.current.forEach(el => { if (el) el.srcObject = null; });

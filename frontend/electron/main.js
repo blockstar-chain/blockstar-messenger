@@ -1,11 +1,76 @@
 // electron/main.js
 // Main process for Electron desktop app
 
-const { app, BrowserWindow, shell, ipcMain, Notification, protocol, clipboard } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, Notification, protocol, clipboard, Menu } = require('electron');
 const path = require('path');
 const url = require('url');
 const fs = require('fs');
 const http = require('http');
+
+// ─── App name ───────────────────────────────────────────────────
+// The macOS menu bar ("About / Hide / Quit …") uses app.name, which defaulted to
+// the npm package name "blockstar-cypher-frontend". Set the real product name.
+// IMPORTANT: renaming would also move the userData folder (IndexedDB, localStorage
+// = encryption keys, sessions). Keep using the existing folder so nobody loses data.
+const APP_DISPLAY_NAME = 'BlockStar Cypher';
+try {
+  const legacyUserData = path.join(app.getPath('appData'), 'blockstar-cypher-frontend');
+  app.setName(APP_DISPLAY_NAME);
+  if (fs.existsSync(legacyUserData)) {
+    app.setPath('userData', legacyUserData);
+  }
+} catch (e) {
+  console.error('Could not set app name/userData:', e);
+}
+
+function buildAppMenu() {
+  const isMac = process.platform === 'darwin';
+  const template = [
+    ...(isMac ? [{
+      label: APP_DISPLAY_NAME,
+      submenu: [
+        { role: 'about', label: `About ${APP_DISPLAY_NAME}` },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide', label: `Hide ${APP_DISPLAY_NAME}` },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit', label: `Quit ${APP_DISPLAY_NAME}` },
+      ],
+    }] : []),
+    // Edit menu is what makes ⌘C / ⌘V / ⌘A work in text fields on macOS
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
+        { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        ...(isDev ? [{ role: 'toggleDevTools' }] : []),
+        { type: 'separator' },
+        { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+    { role: 'windowMenu' },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  if (isMac) {
+    app.setAboutPanelOptions({
+      applicationName: APP_DISPLAY_NAME,
+      applicationVersion: app.getVersion(),
+      copyright: 'Copyright © 2026 BlockStar',
+    });
+  }
+}
 
 // Keep a global reference to prevent garbage collection
 let mainWindow;
@@ -57,7 +122,11 @@ function createWindow() {
       contextIsolation: true,
       preload: PRELOAD_PATH,
       webSecurity: true,
+      // Keep the socket, timers and ringtone running when the window is in the
+      // background — otherwise incoming calls only show once you click back in.
+      backgroundThrottling: false,
     },
+    title: APP_DISPLAY_NAME,
     icon: path.join(__dirname, '../public/icon.png'),
     // macOS specific
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
@@ -195,6 +264,7 @@ function createWindow() {
 
 // This method will be called when Electron has finished initialization
 app.whenReady().then(() => {
+  buildAppMenu();
   createWindow();
 
   // On macOS, re-create window when dock icon is clicked
