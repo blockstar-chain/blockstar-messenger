@@ -53,7 +53,8 @@ function buildAppMenu() {
       submenu: [
         { role: 'reload' },
         { role: 'forceReload' },
-        ...(isDev ? [{ role: 'toggleDevTools' }] : []),
+        // Available in release builds during testing so testers can send console logs
+        { role: 'toggleDevTools', label: 'Developer Tools' },
         { type: 'separator' },
         { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
         { type: 'separator' },

@@ -9,7 +9,7 @@ import { isPhantomGroup } from '@/utils/helpers';
 import { groupCallMesh } from '@/lib/groupCallMesh';
 import { ringtoneService } from '@/lib/ringtones';
 import { refreshTurnCredentials } from '@/lib/webrtc';
-import Sidebar from './Sidebar';
+import Sidebar, { getDeletedConversations } from './Sidebar';
 import ChatArea from './ChatArea';
 import CallModal from './CallModal';
 import GroupCallModal from './GroupCallModal';
@@ -235,18 +235,38 @@ export default function MainLayout() {
         if (result.success) {
           console.log(`✅ Synced ${result.conversationsCount} conversations, ${result.messagesCount} messages`);
 
-          // Reload conversations into store, filtering out invalid "Group Chat" groups
-          let conversations = await db.conversations.toArray();
+          // MERGE the synced data into the chat list — never replace it.
+          // This used to rebuild the list from the sync result alone, so anything
+          // the sync response didn't carry (e.g. a group that only the Sidebar's
+          // loader had fetched) vanished every 5 minutes until "refresh".
+          const synced = await db.conversations.toArray();
+          const current = useAppStore.getState().conversations;
+          const byId = new Map<string, any>();
+          for (const c of current) byId.set(c.id, c);
+          for (const c of synced) {
+            const prev: any = byId.get(c.id);
+            if (!prev) { byId.set(c.id, c); continue; }
+            const prevTs = prev.lastMessage?.timestamp || 0;
+            const nextTs = (c as any).lastMessage?.timestamp || 0;
+            byId.set(c.id, {
+              ...prev,
+              ...c,
+              // keep whichever preview is newer, and the live unread count
+              lastMessage: nextTs >= prevTs ? ((c as any).lastMessage || prev.lastMessage) : prev.lastMessage,
+              unreadCount: prev.unreadCount ?? (c as any).unreadCount ?? 0,
+              groupName: (c as any).groupName || prev.groupName,
+              updatedAt: Math.max(prev.updatedAt || 0, c.updatedAt || 0),
+            });
+          }
 
-          // Filter out groups with invalid names
-          const allConvs = conversations;
-          conversations = conversations.filter(conv => {
+          const deletedIds = getDeletedConversations(currentUser.walletAddress);
+          const merged = Array.from(byId.values());
+          const conversations = merged.filter((conv: any) => {
+            if (deletedIds.has(conv.id)) return false;
             if (conv.type === 'group') {
-              const groupName = (conv as any).groupName || (conv as any).name;
-              // Real groups always have a group_… id; an ObjectId-keyed group is
-              // the phantom duplicate older builds created.
-              const isPhantom = isPhantomGroup(conv, allConvs);
-              if (isPhantom || ((!groupName || groupName === 'Group Chat') && !conv.id.startsWith('group_'))) {
+              const groupName = conv.groupName || conv.name;
+              const isPhantom = isPhantomGroup(conv, merged);
+              if (isPhantom || ((!groupName || groupName === 'Group Chat') && !String(conv.id).startsWith('group_'))) {
                 console.log(`⚠️ Filtering out invalid group from sync:`, conv.id);
                 return false;
               }
@@ -254,7 +274,14 @@ export default function MainLayout() {
             return true;
           });
 
-          const sorted = conversations.sort((a, b) => b.updatedAt - a.updatedAt);
+          const groupsBefore = current.filter(c => c.type === 'group').length;
+          const groupsAfter = conversations.filter((c: any) => c.type === 'group').length;
+          if (groupsAfter < groupsBefore) {
+            console.warn(`⚠️ Sync would drop ${groupsBefore - groupsAfter} group(s)`,
+              current.filter(c => c.type === 'group' && !conversations.some((x: any) => x.id === c.id)).map(c => c.id));
+          }
+
+          const sorted = conversations.sort((a: any, b: any) => (b.updatedAt || 0) - (a.updatedAt || 0));
           setConversations(sorted);
 
           if (result.messagesCount > 0) {

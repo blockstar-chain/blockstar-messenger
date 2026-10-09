@@ -14,13 +14,50 @@ export class WebSocketService {
   private keepaliveInterval: NodeJS.Timeout | null = null;
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 10;
+  // Every on(event, handler) subscription, kept so it survives socket swaps.
+  // Previously on() bound only to whatever socket existed at that moment, so a
+  // listener registered before connect() — or before a second connect() made a
+  // new socket — silently never fired (calls not ringing / answers not arriving).
+  private customHandlers: Map<string, Set<(...args: any[]) => void>> = new Map();
 
   /**
    * Connect to WebSocket server
    */
-  connect(walletAddress: any, publicKey: string, username?: string): void {
+  connect(walletAddress: any, publicKey?: string, username?: string): void {
+    const sameWallet = !!this.socket && !!this.userAddress &&
+      String(this.userAddress).toLowerCase() === String(walletAddress).toLowerCase();
+
+    if (sameWallet && this.socket) {
+      // Auto-login and the auth page can both call connect() at startup. Don't
+      // open a second socket for the same wallet — the server only routes to
+      // the newest one, so listeners on the other never hear anything.
+      const newKey = publicKey && publicKey !== this.publicKey;
+      this.publicKey = publicKey || this.publicKey;
+      this.username = username || this.username;
+      (this.socket as any).auth = {
+        walletAddress: this.userAddress,
+        publicKey: this.publicKey,
+        username: this.username,
+      };
+      if (!this.socket.connected) {
+        this.socket.connect();
+      } else if (newKey) {
+        this.socket.emit('key:update', { publicKey: this.publicKey });
+      }
+      return;
+    }
+
+    if (this.socket) {
+      // Different wallet (account switch) — close the old connection properly
+      try {
+        this.socket.removeAllListeners();
+        this.socket.disconnect();
+      } catch { /* ignore */ }
+      this.socket = null;
+    }
+
     this.userAddress = walletAddress;
-    this.publicKey = publicKey;
+    this.publicKey = publicKey || null;
     this.username = username;
 
     this.socket = io(SOCKET_URL, {
@@ -40,7 +77,16 @@ export class WebSocketService {
     });
 
     this.setupEventHandlers();
+    this.bindCustomHandlers();
     this.startKeepalive();
+  }
+
+  /** Attach every registered on() listener to the current socket. */
+  private bindCustomHandlers(): void {
+    if (!this.socket) return;
+    for (const [event, handlers] of this.customHandlers) {
+      for (const h of handlers) this.socket.on(event, h);
+    }
   }
 
   /**
@@ -67,7 +113,7 @@ export class WebSocketService {
    * Attempt to reconnect if disconnected
    */
   private attemptReconnect(): void {
-    if (!this.userAddress || !this.publicKey) return;
+    if (!this.userAddress) return;
     
     if (this.socket && !this.socket.connected) {
       this.reconnectAttempts++;
@@ -412,9 +458,14 @@ export class WebSocketService {
    * Generic emit method for custom events
    */
   emit(event: string, data: any): void {
-    if (!this.socket || !this.socket.connected) {
-      console.warn('Socket not connected, cannot emit:', event);
+    if (!this.socket) {
+      console.warn('Socket not created yet, cannot emit:', event);
       return;
+    }
+    if (!this.socket.connected) {
+      // socket.io queues this and sends it on reconnect — far better than
+      // silently dropping a call answer or ICE candidate during a blip.
+      console.warn('Socket reconnecting — queued emit:', event);
     }
     this.socket.emit(event, data);
   }
@@ -444,10 +495,17 @@ export class WebSocketService {
    * Generic listener for custom events
    */
   on(event: string, handler: (data: any) => void): () => void {
+    let set = this.customHandlers.get(event);
+    if (!set) {
+      set = new Set();
+      this.customHandlers.set(event, set);
+    }
+    set.add(handler);
     if (this.socket) {
       this.socket.on(event, handler);
     }
     return () => {
+      this.customHandlers.get(event)?.delete(handler);
       if (this.socket) {
         this.socket.off(event, handler);
       }

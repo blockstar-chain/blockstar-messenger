@@ -204,10 +204,14 @@ export function isPhantomGroup(conv: any, all: any[]): boolean {
   const name = conv.groupName || conv.name;
   if (!name || name === 'Group Chat') return true;
   const key = [...(conv.participants || [])].map((p: string) => p.toLowerCase()).sort().join(',');
+  const myName = String(name).trim().toLowerCase();
+  // Only a copy of the SAME group (same members AND same name) is a phantom.
+  // Two different groups with the same people are both real.
   return all.some((o: any) =>
     o !== conv &&
     o.type === 'group' &&
     typeof o.id === 'string' && o.id.startsWith('group_') &&
+    String(o.groupName || o.name || '').trim().toLowerCase() === myName &&
     [...(o.participants || [])].map((p: string) => p.toLowerCase()).sort().join(',') === key
   );
 }
