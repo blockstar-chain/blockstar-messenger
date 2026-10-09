@@ -18,7 +18,8 @@ export default function HomePage() {
     // Lets you confirm in DevTools which build a tester is actually running
     console.log(`🏷️ Cypher build: ${CYPHER_BUILD}`);
 
-    if ('serviceWorker' in navigator) {
+    const isFileProtocol = window.location.protocol === 'file:';
+    if ('serviceWorker' in navigator && !isFileProtocol) {
       // When a new service worker takes over (new deploy), reload once so the
       // page runs the new JS instead of the bundle it was loaded with.
       let reloaded = false;

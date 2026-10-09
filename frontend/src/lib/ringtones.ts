@@ -180,7 +180,7 @@ class RingtoneService {
       return audio;
     } catch (error) {
       this.activeCallSounds.delete(audio);
-      console.error('Failed to play incoming ringtone:', error);
+      if ((error as any)?.name !== 'AbortError') console.error('Failed to play incoming ringtone:', error);
       return null;
     }
   }
@@ -216,7 +216,7 @@ class RingtoneService {
       return audio;
     } catch (error) {
       this.activeCallSounds.delete(audio);
-      console.error('Failed to play outgoing tone:', error);
+      if ((error as any)?.name !== 'AbortError') console.error('Failed to play outgoing tone:', error);
       return null;
     }
   }

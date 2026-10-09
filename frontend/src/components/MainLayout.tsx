@@ -132,6 +132,22 @@ export default function MainLayout() {
     if (currentUser?.walletAddress) refreshTurnCredentials(currentUser.walletAddress);
   }, [currentUser?.walletAddress]);
 
+  // Mount only the layout that's actually visible. Previously the desktop and
+  // mobile layouts were BOTH mounted (one hidden with CSS), so every chat-list
+  // and chat effect ran twice — each message was processed twice (double unread
+  // counts and notification sounds) and every load/sync happened twice.
+  const [isDesktop, setIsDesktop] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(min-width: 768px)').matches : true
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia('(min-width: 768px)');
+    const onChange = () => setIsDesktop(mq.matches);
+    onChange();
+    mq.addEventListener?.('change', onChange);
+    return () => mq.removeEventListener?.('change', onChange);
+  }, []);
+
   // Calculate total unread count
   const totalUnread = conversations.reduce((sum, conv) => sum + (conv.unreadCount || 0), 0);
 
@@ -684,8 +700,10 @@ export default function MainLayout() {
   return (
     <div className="flex h-[100dvh] bg-midnight overflow-hidden">
 
+      {isDesktop ? (
+      <>
       {/* Desktop Layout: Sidebar always visible */}
-      <div className="hidden md:flex md:w-80 lg:w-96 flex-shrink-0 h-full">
+      <div className="flex w-80 lg:w-96 flex-shrink-0 h-full">
         <Sidebar
           onConversationSelect={handleConversationSelect}
           activeTab={sidebarTab}
@@ -700,12 +718,13 @@ export default function MainLayout() {
       </div>
 
       {/* Desktop: Chat area */}
-      <div className="hidden md:flex flex-1 flex-col min-w-0 h-full">
+      <div className="flex flex-1 flex-col min-w-0 h-full">
         <ChatArea />
       </div>
-
-      {/* Mobile Layout */}
-      <div className="flex md:hidden flex-col w-full h-full">
+      </>
+      ) : (
+      /* Mobile Layout */
+      <div className="flex flex-col w-full h-full">
         {/* Mobile: Either sidebar or chat, with bottom nav space */}
         <div className="flex-1 overflow-hidden pb-16">
           {isInChat && activeConversationId ? (
@@ -735,6 +754,7 @@ export default function MainLayout() {
           />
         )}
       </div>
+      )}
 
       {/* Call modals */}
       <CallModal />

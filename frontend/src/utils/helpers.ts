@@ -91,6 +91,15 @@ export async function copyToClipboard(text: string): Promise<boolean> {
 }
 
 /**
+ * Short display handle from a BlockStar name: "testuser@blockstar" -> "testuser".
+ * (The old `.replace('@', '')` produced "testuserblockstar".)
+ */
+export function shortHandle(username: string | undefined | null): string {
+  if (!username) return '';
+  return String(username).replace(/^@/, '').split('@')[0];
+}
+
+/**
  * Get initials from username
  */
 export function getInitials(username: string | undefined | null): string {

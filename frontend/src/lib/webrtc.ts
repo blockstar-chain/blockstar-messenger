@@ -470,7 +470,9 @@ export class WebRTCService {
 
     // Handle errors
     peer.on('error', (error) => {
-      console.error('❌ PEER ERROR:', error.message);
+      const normalClose = /User-Initiated Abort|Close called/i.test(error?.message || '');
+      if (normalClose) console.log('📴 Peer closed by the other side');
+      else console.error('❌ PEER ERROR:', error.message);
       this.onConnectionStateHandlers.forEach(h => h('error', callId));
       this.cleanupPeer(callId);
       this.onCallEndHandlers.forEach((handler) => handler(callId));

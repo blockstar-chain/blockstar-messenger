@@ -112,7 +112,7 @@ export default function CallModal() {
 
         // Method 2: Try resolving by username directly
         if (currentUser.username) {
-          const username = currentUser.username.replace('@', ''); // Remove @ if present
+          const username = currentUser.username.replace(/^@/, ''); // keep "name@tld" — the resolver expects it
           console.log('🔍 [MyProfile] Trying direct username resolve:', username);
 
           const profile = await resolveProfile(username);

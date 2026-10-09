@@ -9,7 +9,7 @@ import { voiceMessageService } from '@/lib/voice-message-service';
 import { notificationService } from '@/lib/notifications';
 import { Message, Conversation } from '@/types';
 import { Send, Phone, Video, MoreVertical, Menu, Paperclip, Mic, MicOff, Lock, LockOpen, Search, X, Bell, BellOff, Smile, Check, CheckCheck, Trash2, Shield, ShieldAlert, MessageSquare, Users, RefreshCw, Settings, UserPlus, VolumeX, Volume2, ChevronLeft, Ban, Pencil } from 'lucide-react';
-import { generateMessageId, generateConversationId, formatMessageTime, truncateAddress, getInitials, getAvatarColor } from '@/utils/helpers';
+import { generateMessageId, generateConversationId, formatMessageTime, truncateAddress, getInitials, getAvatarColor, shortHandle } from '@/utils/helpers';
 import { resolveProfile, getProfileByWallet, type BlockStarProfile } from '@/lib/profileResolver';
 import toast from 'react-hot-toast';
 import EmojiPicker from './EmojiPicker';
@@ -970,9 +970,15 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
               }
             }
 
-            const otherPartyAddress = isMySentMessage
-              ? recipientAddr  // For sent messages, use recipient's key
-              : msg.senderId;  // For received messages, use sender's key
+            // Group messages are encrypted pairwise sender→reader, so the key is
+            // always the SENDER's (for our own messages that's our own key).
+            const isGroupMsg = activeConversation?.type === 'group' ||
+              String(activeConversationId || '').startsWith('group_');
+            const otherPartyAddress = isGroupMsg
+              ? msg.senderId
+              : isMySentMessage
+                ? recipientAddr  // For sent messages, use recipient's key
+                : msg.senderId;  // For received messages, use sender's key
 
             if (!otherPartyAddress) {
               console.warn('Cannot decrypt: no other party address for message', msg.id);
@@ -1226,8 +1232,15 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
           const { encrypted, error } = await encryptionService.encryptForRecipient(newPlainText, recipientLower);
           encryptedPayloads[recipientLower] = (encrypted && !error) ? encrypted : newPlainText;
         }
-        // Sender's own copy stays plaintext, same convention as handleSendMessage
-        encryptedPayloads[senderId] = newPlainText;
+        // Sender's own copy, encrypted to ourselves (never plaintext on the server)
+        try {
+          const myKey = await encryptionService.getPublicKey();
+          encryptedPayloads[senderId] = myKey
+            ? await encryptionService.encryptMessage(newPlainText, myKey)
+            : newPlainText;
+        } catch {
+          encryptedPayloads[senderId] = newPlainText;
+        }
       } else if (otherParticipant) {
         const { encrypted } = await encryptionService.encryptForRecipient(newPlainText, otherParticipant.toLowerCase());
         directEncryptedContent = encrypted || newPlainText;
@@ -1856,11 +1869,20 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
 
         // IMPORTANT: Also encrypt for the sender so they can decrypt their own messages later
         // This is needed when messages are loaded from the server after cache is cleared
+        // Sender's own copy: encrypt it to OURSELVES (X25519 with our own key pair)
+        // so the server never holds plaintext. Previously it was stored in the clear,
+        // which broke end-to-end encryption for every group message.
+        const encryptToSelf = async (text: string): Promise<string> => {
+          try {
+            const myKey = await encryptionService.getPublicKey();
+            if (myKey) return await encryptionService.encryptMessage(text, myKey);
+          } catch (e) {
+            console.warn('Could not encrypt own copy of group message:', e);
+          }
+          return text;
+        };
         if (hasEncryption) {
-          // For sender's own copy, encrypt using first recipient's key (we'll decrypt with same key)
-          // Actually, we store plaintext for sender since they sent it
-          encryptedPayloads[senderId] = plainText;
-          console.log('📢 Added sender payload for self-decryption');
+          encryptedPayloads[senderId] = await encryptToSelf(plainText);
         }
 
         // Update encryption status based on results
@@ -2061,7 +2083,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
                   groupId: activeConversationId,
                   groupName: groupConversation?.groupName || 'Group Call',
                   participants: activeConversation?.participants,
-                  callerName: currentUser.username ? `@${currentUser.username.replace('@', '')}` : undefined,
+                  callerName: currentUser.username ? `@${shortHandle(currentUser.username)}` : undefined,
                 });
                 offerSent = true;
               } else if (signal.candidate || signal.type === 'candidate') {
@@ -2111,7 +2133,7 @@ export default function ChatArea({ onBackClick }: ChatAreaProps) {
         let offerSent = false;
 
         // Get caller name for display on recipient side
-        const callerName = currentUser.username?.replace('@', '') || '';
+        const callerName = shortHandle(currentUser.username);
 
         webRTCService.createCall(
           callId,

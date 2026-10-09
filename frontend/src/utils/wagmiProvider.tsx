@@ -14,7 +14,12 @@ import { networks, projectId, blockstarNetwork } from "./wagmi";
 import { mainnet } from "viem/chains";
 
 const APP_NAME = process.env.NEXT_PUBLIC_PROJECT_NAME || "BlockStar Cypher";
-const APP_URL = process.env.NEXT_PUBLIC_PROJECT_URL || "https://messenger.blockstar.world";
+// WalletConnect warns when metadata.url doesn't match the page. On the web use
+// the real origin; the desktop app (file://) has no origin, so keep the default.
+const APP_URL =
+  (typeof window !== "undefined" && window.location.protocol === "https:")
+    ? window.location.origin
+    : (process.env.NEXT_PUBLIC_PROJECT_URL || "https://messenger.blockstar.world");
 const APP_ICON = "https://messenger.blockstar.world/icon.png";
 
 export const config = createConfig({

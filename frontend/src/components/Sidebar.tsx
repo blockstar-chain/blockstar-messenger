@@ -355,9 +355,9 @@ export default function Sidebar({
       });
       setShowIncomingCall(true);
 
-      // Play ringtone on ALL platforms (web and mobile when app is open)
-      // Native notification handles sound when app is closed/background
-      playRingtone();
+      // Ringtone is played by IncomingCallModal (the visible incoming-call screen).
+      // Playing it here too meant two ringtones at once, which kept going if
+      // only one of them was stopped.
     };
 
     const handleCallCancelled = (data: { callId: string }) => {

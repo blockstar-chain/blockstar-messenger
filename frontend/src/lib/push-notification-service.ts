@@ -15,7 +15,7 @@ export class PushNotificationService {
    * Initialize push notifications
    */
   async initialize(): Promise<void> {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || window.location.protocol === 'file:') {
       console.warn('Push notifications not supported');
       return;
     }

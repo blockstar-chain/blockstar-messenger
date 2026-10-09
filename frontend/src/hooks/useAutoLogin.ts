@@ -68,7 +68,9 @@ export function useAutoLogin() {
         let avatar = storedSession.avatar;
         
         try {
-          const profile = await resolveProfile(storedSession.walletAddress);
+          const profile = storedSession.username
+            ? await resolveProfile(storedSession.username)
+            : null;
           if (profile) {
             username = profile.domain || username;
             avatar = profile.avatar || avatar;

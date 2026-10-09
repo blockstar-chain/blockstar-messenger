@@ -171,6 +171,7 @@ export default function GroupCallModal() {
     useEffect(() => {
         if (!activeCall || !isCallModalOpen) return;
 
+        if (!isGroupCall) return; // 1:1 calls are CallModal's job
         const unsubscribeStream = webRTCService.onStream((stream, callKey, peerId) => {
             const key = peerId || callKey;
             // NB: the 2nd arg is the peer key, not the group call id. Map it to a
@@ -231,7 +232,7 @@ export default function GroupCallModal() {
         return () => {
             unsubscribeStream();
         };
-    }, [activeCall?.id, activeCall?.type, isCallModalOpen]);
+    }, [activeCall?.id, activeCall?.type, isCallModalOpen, isGroupCall]);
 
     // Ringback for the person who started the call, until someone connects
     useEffect(() => {

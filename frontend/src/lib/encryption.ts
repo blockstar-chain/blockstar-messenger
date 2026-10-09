@@ -58,6 +58,9 @@ function hexToUint8Array(hex: string): Uint8Array {
   return bytes;
 }
 
+// Signatures of messages we've already reported as undecryptable (keeps the console clean)
+const undecryptableSeen = new Set<string>();
+
 export class EncryptionService {
   private privateKey: Uint8Array | null = null;
   private publicKey: Uint8Array | null = null;
@@ -387,9 +390,9 @@ export class EncryptionService {
     // Fetch recipient's public key
     const recipientPublicKey = await this.fetchPublicKey(recipientAddress);
 
-    if (!this.isValidX25519PublicKey(recipientPublicKey)) throw new Error('Invalid public key');
-    
-    if (!recipientPublicKey) {
+    // Check "missing" before "invalid": the old order threw on a missing key,
+    // which aborted the whole group send if one member had no key yet.
+    if (!recipientPublicKey || !this.isValidX25519PublicKey(recipientPublicKey)) {
       return {
         encrypted: message, // Fall back to plaintext
         error: 'Recipient public key not found - message sent unencrypted',
@@ -441,9 +444,15 @@ export class EncryptionService {
       const decrypted = await this.decryptMessage(encryptedMessage, senderPublicKey);
       return { decrypted, wasEncrypted: true };
     } catch (error: any) {
-      // Decryption failed - likely key mismatch from key regeneration
-      console.warn('Decryption failed for message. This usually means encryption keys were regenerated.');
-      console.warn('Error:', error?.message || error);
+      // Decryption failed - the message was encrypted with keys that have since
+      // been regenerated. Expected for old messages; log once per message.
+      const sig = `${senderAddress}:${encryptedMessage.slice(0, 24)}`;
+      if (!undecryptableSeen.has(sig)) {
+        undecryptableSeen.add(sig);
+        if (undecryptableSeen.size === 1) {
+          console.info('🔒 Some older messages were encrypted with keys that no longer exist and can\'t be read (expected after a key reset).');
+        }
+      }
       
       return { 
         decrypted: '🔒 [Cannot decrypt - keys changed]', 
@@ -477,7 +486,6 @@ export class EncryptionService {
     try {
       // Decode recipient's public key
       const recipientPubBytes = base64ToUint8Array(recipientPublicKey);
-      console.log('recipient key:', recipientPublicKey, 'bytes:', recipientPubBytes.length);
       
       // Compute X25519 shared secret 
       const sharedSecret = x25519.getSharedSecret(this.privateKey, recipientPubBytes);
@@ -582,7 +590,7 @@ export class EncryptionService {
       const decoder = new TextDecoder();
       return decoder.decode(decrypted);
     } catch (error) {
-      console.error('Decryption error:', error);
+      // Caller (decryptFromSender) reports this once, quietly
       throw new Error('Failed to decrypt message');
     }
   }

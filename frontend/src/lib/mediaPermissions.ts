@@ -15,8 +15,8 @@ export interface PermissionResult {
   error?: string;
 }
 
-const isNative = Capacitor.isNativePlatform();
-const platform = Capacitor.getPlatform();
+export const isNative = Capacitor.isNativePlatform();
+export const platform = Capacitor.getPlatform();
 
 /**
  * Check current permission status for microphone and camera

@@ -350,7 +350,7 @@ async function requestPushPermission(walletAddress: string): Promise<boolean> {
 
 async function debug(message: any, extra?: any) {
   try {
-    console.log('hererererere in debug')
+    if (!Capacitor.isNativePlatform()) return; // web/desktop: nothing to debug remotely
     const payload = {
       message: String(message),
       extra: extra ?? null,
