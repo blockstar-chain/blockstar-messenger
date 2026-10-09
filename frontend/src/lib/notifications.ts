@@ -1,3 +1,4 @@
+import { assetUrl } from '@/lib/assetUrl';
 // frontend/src/lib/notifications.ts
 // Browser Push Notifications and Sound Service
 
@@ -88,7 +89,7 @@ class NotificationService {
     if (typeof window === 'undefined') return;
 
     // Create audio element for notification sound
-    this.notificationSound = new Audio('/sounds/notification.mp3');
+    this.notificationSound = new Audio(assetUrl('/sounds/notification.mp3'));
     this.notificationSound.volume = this.settings.soundVolume;
     
     // Handle audio loading errors gracefully

@@ -1,6 +1,7 @@
 // frontend/src/lib/notificationService.ts
 // Comprehensive notification service for calls, messages, and badges
 
+import { assetUrl } from '@/lib/assetUrl';
 import { Capacitor } from '@capacitor/core';
 import { Badge } from '@capawesome/capacitor-badge';
 import { LocalNotifications } from '@capacitor/local-notifications';
@@ -409,7 +410,7 @@ export function areNotificationsEnabled(): boolean {
  */
 export function playNotificationSound(type: 'message' | 'call' = 'message'): void {
   try {
-    const soundFile = type === 'call' ? '/sounds/incoming.mp3' : '/sounds/message.mp3';
+    const soundFile = assetUrl(type === 'call' ? '/sounds/incoming.mp3' : '/sounds/notification.mp3');
     const audio = new Audio(soundFile);
     audio.volume = 0.5;
     audio.play().catch(e => console.warn('Could not play sound:', e));

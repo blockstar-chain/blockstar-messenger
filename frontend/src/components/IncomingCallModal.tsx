@@ -1,6 +1,8 @@
 // frontend/src/components/IncomingCallModal.tsx
 // Fixed version - connects to store and handles WebRTC answer flow
 
+import { assetUrl } from '@/lib/assetUrl';
+import { ringtoneService } from '@/lib/ringtones';
 import React, { useEffect, useState, useCallback } from 'react';
 import { Phone, PhoneOff, Video } from 'lucide-react';
 import { useAppStore } from '@/store';
@@ -80,8 +82,10 @@ export default function IncomingCallModal() {
     let audio: HTMLAudioElement | null = null;
     
     try {
-      audio = new Audio('/sounds/incoming.mp3');
+      // The ringtone the user picked in Settings, at their call volume
+      audio = new Audio(assetUrl(ringtoneService.getIncomingRingtoneFile()));
       audio.loop = true;
+      audio.volume = ringtoneService.getSettings().callVolume;
       audio.play().catch(e => console.warn('Could not play ringtone:', e));
     } catch (e) {
       console.warn('Ringtone not available');

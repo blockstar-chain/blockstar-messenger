@@ -1,3 +1,4 @@
+import { assetUrl } from '@/lib/assetUrl';
 import { PushNotification } from '@/types';
 
 /**
@@ -229,7 +230,7 @@ export class PushNotificationService {
    * Play notification sound
    */
   private playNotificationSound(): void {
-    const audio = new Audio('/sounds/notification.mp3');
+    const audio = new Audio(assetUrl('/sounds/notification.mp3'));
     audio.volume = 0.5;
     audio.play().catch((error) => {
       console.error('Failed to play notification sound:', error);

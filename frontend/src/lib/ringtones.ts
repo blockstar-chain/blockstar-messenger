@@ -1,6 +1,8 @@
 // frontend/src/lib/ringtones.ts
 // Ringtone management service for customizable notification sounds
 
+import { assetUrl } from './assetUrl';
+
 export interface RingtoneOption {
   id: string;
   name: string;
@@ -38,10 +40,12 @@ export const RINGTONES: RingtoneOption[] = [
 
 const STORAGE_KEY = 'blockstar_ringtone_settings';
 
+// NB: these must be real IDs from RINGTONES above. The old defaults
+// ('outgoing-standard', 'message-pop') didn't exist, so nothing ever played.
 const DEFAULT_SETTINGS: RingtoneSettings = {
   incomingCall: 'incoming-gentle',
-  outgoingCall: 'outgoing-standard',
-  messageSound: 'message-pop',
+  outgoingCall: 'outgoing-classic',
+  messageSound: 'message-chime',
   callVolume: 0.7,
   messageVolume: 0.5,
 };
@@ -63,7 +67,13 @@ class RingtoneService {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
-        return { ...DEFAULT_SETTINGS, ...JSON.parse(stored) };
+        const merged = { ...DEFAULT_SETTINGS, ...JSON.parse(stored) };
+        // Repair saved choices that point at ringtones that don't exist
+        const valid = (id: string, cat: string) => RINGTONES.some(r => r.id === id && r.category === cat);
+        if (!valid(merged.incomingCall, 'incoming')) merged.incomingCall = DEFAULT_SETTINGS.incomingCall;
+        if (!valid(merged.outgoingCall, 'outgoing')) merged.outgoingCall = DEFAULT_SETTINGS.outgoingCall;
+        if (!valid(merged.messageSound, 'message')) merged.messageSound = DEFAULT_SETTINGS.messageSound;
+        return merged;
       }
     } catch (error) {
       console.error('Failed to load ringtone settings:', error);
@@ -98,6 +108,11 @@ class RingtoneService {
     return RINGTONES.find(r => r.id === id);
   }
 
+  /** File for the user's chosen incoming ringtone (used by the incoming-call screen). */
+  getIncomingRingtoneFile(): string {
+    return this.getRingtoneById(this.settings.incomingCall)?.file || '/sounds/incoming.mp3';
+  }
+
   /**
    * Play a preview of a ringtone (stops after a few seconds)
    */
@@ -108,7 +123,7 @@ class RingtoneService {
     if (!ringtone) return;
 
     try {
-      this.previewAudio = new Audio(ringtone.file);
+      this.previewAudio = new Audio(assetUrl(ringtone.file));
       
       // Set volume based on category
       if (ringtone.category === 'message') {
@@ -143,9 +158,9 @@ class RingtoneService {
     const ringtone = this.getRingtoneById(this.settings.incomingCall);
     if (!ringtone) {
       // Fallback to default sound
-      this.currentAudio = new Audio('/sounds/ringtone.mp3');
+      this.currentAudio = new Audio(assetUrl('/sounds/ringtone.mp3'));
     } else {
-      this.currentAudio = new Audio(ringtone.file);
+      this.currentAudio = new Audio(assetUrl(ringtone.file));
     }
     
     this.currentAudio.loop = true;
@@ -179,9 +194,9 @@ class RingtoneService {
     const ringtone = this.getRingtoneById(this.settings.outgoingCall);
     if (!ringtone) {
       // Fallback to default sound
-      this.currentAudio = new Audio('/sounds/outgoing.mp3');
+      this.currentAudio = new Audio(assetUrl('/sounds/outgoing.mp3'));
     } else {
-      this.currentAudio = new Audio(ringtone.file);
+      this.currentAudio = new Audio(assetUrl(ringtone.file));
     }
     
     this.currentAudio.loop = true;
@@ -212,7 +227,7 @@ class RingtoneService {
   async playMessageSound(): Promise<void> {
     const ringtone = this.getRingtoneById(this.settings.messageSound);
     
-    const audio = new Audio(ringtone?.file || '/sounds/notification.mp3');
+    const audio = new Audio(assetUrl(ringtone?.file || '/sounds/notification.mp3'));
     audio.volume = this.settings.messageVolume;
 
     try {

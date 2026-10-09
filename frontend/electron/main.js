@@ -73,6 +73,10 @@ function buildAppMenu() {
   }
 }
 
+// Ringtones and message sounds must play without a click first (an incoming
+// call arrives while you're doing something else). Chromium blocks that by default.
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
 // Keep a global reference to prevent garbage collection
 let mainWindow;
 

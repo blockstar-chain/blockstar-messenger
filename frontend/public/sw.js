@@ -1,13 +1,15 @@
 // BlockStar Messenger Service Worker
 // Bump this whenever the caching strategy changes — old caches are deleted on activate.
-const CACHE_NAME = 'blockstar-messenger-v2';
+const CACHE_NAME = 'blockstar-messenger-v3';
 
 // Files to cache - only cache files that definitely exist
 // NOTE: never pre-cache '/' — a cached HTML page pins every user to the JS
 // bundle that existed when the worker installed, so new deploys never load.
 const STATIC_ASSETS = [
   '/sounds/notification.mp3',
-  '/sounds/ringtone.mp3'
+  '/sounds/ringtone.mp3',
+  '/sounds/incoming.mp3',
+  '/sounds/outgoing.mp3',
 ];
 
 // Install event - cache static assets

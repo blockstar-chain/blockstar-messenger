@@ -1,4 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
+import { assetUrl } from '@/lib/assetUrl';
+import { ringtoneService } from '@/lib/ringtones';
 import { useAppStore } from '@/store';
 import { db, dbHelpers } from '@/lib/database';
 import { Conversation } from '@/types';
@@ -284,7 +286,7 @@ export default function Sidebar({
       // Stop any existing ringtone first
       stopRingtone();
 
-      ringtoneRef.current = new Audio('/sounds/incoming.mp3');
+      ringtoneRef.current = new Audio(assetUrl(ringtoneService.getIncomingRingtoneFile()));
       ringtoneRef.current.loop = true;
       ringtoneRef.current.volume = 1.0;
 

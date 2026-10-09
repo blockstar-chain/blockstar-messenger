@@ -2,6 +2,7 @@
 // Mobile incoming call page - stays on page during active call (no redirect)
 'use client';
 
+import { assetUrl } from '@/lib/assetUrl';
 import React, { useEffect, useState, useCallback, Suspense, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Phone, PhoneOff, Video, Wifi, WifiOff, Mic, MicOff, Volume2 } from 'lucide-react';
@@ -652,7 +653,7 @@ function MobileCallContent() {
   return (
     <div className="fixed inset-0 bg-gradient-to-b from-gray-900 to-black flex flex-col items-center justify-between py-16 px-4">
       {/* Ringtone */}
-      <audio ref={ringtoneRef} src="/sounds/incoming.mp3" loop preload="auto" />
+      <audio ref={ringtoneRef} src={assetUrl('/sounds/incoming.mp3')} loop preload="auto" />
       
       {/* Top - Call type indicator */}
       <div className="text-center">
