@@ -318,7 +318,10 @@ export default function MainLayout() {
     performSync();
     const syncInterval = setInterval(performSync, 5 * 60 * 1000);
     return () => clearInterval(syncInterval);
-  }, [isAuthenticated, currentUser, setConversations]);
+    // Keyed on the wallet, not the user object: the object is replaced several
+    // times at startup (session saved, profile/avatar resolved), and each
+    // replacement re-ran a full sync — 5 back-to-back syncs per launch.
+  }, [isAuthenticated, currentUser?.walletAddress, setConversations]);
 
   // Setup call handlers
   useEffect(() => {
