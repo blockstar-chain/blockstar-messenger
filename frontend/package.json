@@ -1,7 +1,7 @@
 {
   "name": "blockstar-cypher-frontend",
   "productName": "BlockStar Cypher",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "main": "electron/main.js",
   "description": "BlockStar Cypher - Secure Messaging",
@@ -12,11 +12,11 @@
     "start": "next start",
     "lint": "next lint",
     "electron:dev": "electron .",
-    "electron:build": "electron-builder",
-    "electron:build:win": "electron-builder --win",
-    "electron:build:mac": "electron-builder --mac",
-    "electron:build:linux": "electron-builder --linux",
-    "electron:build:mac:unsigned": "electron-builder --mac --config.mac.identity=null"
+    "electron:build": "next build && electron-builder",
+    "electron:build:win": "next build && electron-builder --win",
+    "electron:build:mac": "next build && electron-builder --mac",
+    "electron:build:linux": "next build && electron-builder --linux",
+    "electron:build:mac:unsigned": "next build && electron-builder --mac --config.mac.identity=null"
   },
   "dependencies": {
     "@base-org/account": "^2.5.4",

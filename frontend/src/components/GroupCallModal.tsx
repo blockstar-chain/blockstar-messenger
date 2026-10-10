@@ -18,7 +18,7 @@ interface GroupCallParticipant {
     isConnected: boolean;
     isMuted: boolean;
     isVideoOff: boolean;
-    status?: 'ringing' | 'connected' | 'left' | 'declined' | 'no-answer';
+    status?: 'ringing' | 'connected' | 'left' | 'declined' | 'no-answer' | 'busy';
 }
 
 const API_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001';
@@ -267,13 +267,32 @@ export default function GroupCallModal() {
                 toast(`${truncateAddress(a)} left the call`, { icon: '👋' });
             }),
             webSocketService.on('group:call:participant:declined', (d: any) => {
-                if (forThisCall(d)) mark(d.participantAddress || d.address, { status: 'declined' });
+                if (forThisCall(d)) mark(d.participantAddress || d.address, { status: d.busy ? 'busy' : 'declined' });
             }),
             webSocketService.on('group:call:participant:unavailable', (d: any) => {
                 if (forThisCall(d)) mark(d.address, { status: 'no-answer' });
             }),
         ];
         return () => unsubs.forEach(u => u());
+    }, [activeCall?.id, isCallModalOpen, isGroupCall]);
+
+    // A link dropped (ICE failed, network lost, other side closed) → that person
+    // is no longer connected, even if the server never told us they left.
+    useEffect(() => {
+        if (!activeCall || !isCallModalOpen || !isGroupCall) return;
+        return webRTCService.onConnectionState((state, key) => {
+            if (state !== 'failed' && state !== 'closed' && state !== 'error') return;
+            const a = groupCallMesh.addressForPeer(key);
+            if (!a) return;
+            remoteStreams.current.delete(a);
+            setParticipants(prev => {
+                const ex = prev.get(a);
+                if (!ex || !ex.isConnected) return prev;
+                const updated = new Map(prev);
+                updated.set(a, { ...ex, isConnected: false, stream: undefined, status: 'left' });
+                return updated;
+            });
+        });
     }, [activeCall?.id, isCallModalOpen, isGroupCall]);
 
     const handleToggleAudio = () => {
@@ -343,6 +362,20 @@ export default function GroupCallModal() {
         }, 60000); // 60 second timeout
 
         return () => clearTimeout(timeout);
+    }, [activeCall?.id, callStatus, participants, handleEndCall]);
+
+    // Everyone else is gone from a call that was running → don't sit in an empty
+    // call (it also made this device show as "busy" and ignore the next ring).
+    useEffect(() => {
+        if (!activeCall || callStatus !== 'active') return;
+        const anyoneConnected = Array.from(participants.values()).some(p => p.isConnected);
+        if (anyoneConnected) return;
+        const t = setTimeout(() => {
+            console.log('📞 Group call: nobody else connected for 10s — ending');
+            toast('Call ended — no one else is connected', { icon: '📴' });
+            handleEndCall();
+        }, 10000);
+        return () => clearTimeout(t);
     }, [activeCall?.id, callStatus, participants, handleEndCall]);
 
     const formatDuration = (seconds: number): string => {
@@ -469,6 +502,7 @@ export default function GroupCallModal() {
                                                 ? 'Connected'
                                                 : participant?.status === 'left' ? 'Left the call'
                                                 : participant?.status === 'declined' ? 'Declined'
+                                                : participant?.status === 'busy' ? 'On another call'
                                                 : participant?.status === 'no-answer' ? 'No answer'
                                                 : 'Connecting...'}
                                         </p>

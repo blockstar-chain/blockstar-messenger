@@ -458,7 +458,8 @@ export default function MainLayout() {
       const { incomingCall: curIncoming, activeCall: curActive } = useAppStore.getState();
       if (curIncoming?.id === callId || curActive?.id === callId) return;
       if (curActive) {
-        console.log('📞 Busy — ignoring group call', callId);
+        console.log('📞 Busy — telling caller', callId);
+        webSocketService.emit('group:call:decline', { callId, groupId, busy: true });
         return;
       }
 
@@ -492,6 +493,24 @@ export default function MainLayout() {
         callId,
         callType || 'audio'
       );
+    });
+
+    // Same account signed in on several devices: once one of them answers or
+    // declines, the others stop ringing.
+    const unsubscribeAnsweredElsewhere = webSocketService.on('call:answered-elsewhere', (data: any) => {
+      const { incomingCall: cur } = useAppStore.getState();
+      if (!cur || !data?.callId || cur.id !== data.callId) return;
+      if (currentIncomingCallId === data.callId) {
+        // not a missed call — it was handled on another device
+        currentIncomingCallId = null;
+        currentIncomingCallData = null;
+      }
+      setIncomingCall(null);
+      sessionStorage.removeItem('incomingCallOffer');
+      sessionStorage.removeItem('incomingCallInfo');
+      sessionStorage.removeItem('incomingGroupCallData');
+      ringtoneService.stopCurrentSound();
+      toast(data.declined ? 'Call declined on another device' : 'Answered on another device', { icon: '📱' });
     });
 
     const unsubscribeGroupDeclined = webSocketService.on('group:call:participant:declined', (data: any) => {
@@ -553,6 +572,7 @@ export default function MainLayout() {
       handleCallStatus();
       unsubscribeGroupCallIncoming();
       unsubscribeGroupDeclined();
+      unsubscribeAnsweredElsewhere();
       unsubscribeGroupUnavailable();
       unsubscribeGroupCallAnswer();
       unsubscribeGroupCallIce();

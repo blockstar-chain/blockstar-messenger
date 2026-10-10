@@ -172,7 +172,15 @@ app.use('/uploads', (req, res, next) => {
 // ============================================
 
 // Active WebSocket connections (real-time tracking only)
-const activeConnections = new Map<string, string>(); // walletAddress -> socketId
+// walletAddress -> socket.io ROOM for that wallet ("user:<wallet>").
+// Every device signed in to the same wallet (phone, desktop app, PWA) joins the
+// room, so io.to(activeConnections.get(w)) reaches ALL of them. This used to be
+// a single socket id, so only the most recently connected device received calls,
+// call signalling and live messages — a call answered on the "other" device never
+// connected because its ICE candidates went to a different device.
+const activeConnections = new Map<string, string>();
+const walletSockets = new Map<string, Set<string>>(); // wallet -> its socket ids
+const userRoom = (wallet: string) => `user:${wallet.toLowerCase()}`;
 const socketToWallet = new Map<string, string>(); // socketId -> walletAddress
 
 // User statuses (cached in memory, backed by DB)
@@ -634,17 +642,19 @@ type Reach =
   | { status: 'delivered'; visible: boolean };
 
 function emitWithReach(walletAddress: string, event: string, payload: any, timeoutMs = 4000): Promise<Reach> {
-  const socketId = activeConnections.get(walletAddress.toLowerCase());
-  const target = socketId ? io.sockets.sockets.get(socketId) : undefined;
-  if (!target) return Promise.resolve({ status: 'offline' });
+  const room = activeConnections.get(walletAddress.toLowerCase());
+  if (!room) return Promise.resolve({ status: 'offline' });
 
+  // Broadcast to every device of this wallet and collect their acks. If ANY
+  // device is on screen we don't need a push; if none answered, treat as asleep.
   return new Promise<Reach>((resolve) => {
-    target.timeout(timeoutMs).emit(event, payload, (err: any, response: any) => {
-      if (err) {
-        console.log(`   ⏱️ No ack for ${event} from ${walletAddress} — treating as unreachable`);
+    (io.to(room) as any).timeout(timeoutMs).emit(event, payload, (_err: any, responses: any[]) => {
+      const list = Array.isArray(responses) ? responses.filter(Boolean) : [];
+      if (list.length === 0) {
+        console.log(`   ⏱️ No ack for ${event} from any device of ${walletAddress} — treating as unreachable`);
         resolve({ status: 'no-ack' });
       } else {
-        resolve({ status: 'delivered', visible: response?.visible !== false });
+        resolve({ status: 'delivered', visible: list.some((r: any) => r?.visible !== false) });
       }
     });
   });
@@ -2371,8 +2381,15 @@ io.on('connection', (socket: Socket) => {
 
   const address = walletAddress.toLowerCase();
 
-  // Register connection
-  activeConnections.set(address, socket.id);
+  // Register connection (multi-device: join the wallet's room)
+  socket.join(userRoom(address));
+  {
+    let set = walletSockets.get(address);
+    if (!set) { set = new Set(); walletSockets.set(address, set); }
+    set.add(socket.id);
+    if (set.size > 1) console.log(`📱 ${address} now has ${set.size} devices connected`);
+  }
+  activeConnections.set(address, userRoom(address));
   socketToWallet.set(socket.id, address);
   userStatuses.set(address, 'online');
 
@@ -2858,6 +2875,8 @@ io.on('connection', (socket: Socket) => {
       const callerSocketId = activeConnections.get(callerAddress);
 
       console.log('Call answer received:', { callId, callerAddress, callerSocketId: !!callerSocketId });
+      // Other devices of the person who answered: stop ringing
+      socket.to(userRoom(address)).emit('call:answered-elsewhere', { callId });
       // callTokenService.removePendingCall(callId);
       if (callerSocketId) {
         io.to(callerSocketId).emit('call:answer', {
@@ -2904,6 +2923,9 @@ io.on('connection', (socket: Socket) => {
       if (otherSocketId) {
         io.to(otherSocketId).emit('call:ended', { callId, endedBy: address });
       }
+      // Declined/ended on one device → stop ringing on this user's other devices
+      // (a separate event, so those devices don't record it as a missed call)
+      socket.to(userRoom(address)).emit('call:answered-elsewhere', { callId, declined: true });
       // callTokenService.removePendingCall(callId);
     } catch (error) {
       console.error('Error ending call:', error);
@@ -3129,6 +3151,10 @@ io.on('connection', (socket: Socket) => {
         console.log(`🔧 group:message used legacy id ${rawGroupId} → ${groupId}`);
         if (groupInfo && typeof groupInfo === 'object') groupInfo = { ...groupInfo, id: groupId };
       }
+
+      // Make sure every member being messaged will actually see the group in
+      // their chat list (server record is what /api/conversations returns)
+      await db.ensureGroupMembership(groupId, address, recipients || [], groupInfo);
       console.log(`📢 Group message in ${groupId} from ${address}:`, message.content?.substring(0, 30));
 
       // For encrypted group messages, we store a marker and send individual payloads
@@ -3386,6 +3412,7 @@ io.on('connection', (socket: Socket) => {
     if (!call) return;
     call.pending.delete(address);
     emitToUser(call.initiator, 'group:call:participant:declined', { callId, address, participantAddress: address });
+    socket.to(userRoom(address)).emit('call:answered-elsewhere', { callId, declined: true });
     console.log(`📵 ${address} declined group call ${callId}`);
   });
 
@@ -3398,6 +3425,8 @@ io.on('connection', (socket: Socket) => {
         call.pending.delete(address);
         call.joined.add(address);
       }
+      // This user's other devices: stop ringing for this group call
+      socket.to(userRoom(address)).emit('call:answered-elsewhere', { callId });
       const target = String(toAddress || call?.initiator || '').toLowerCase();
       const recipientSocketId = activeConnections.get(target);
 
@@ -3519,14 +3548,14 @@ io.on('connection', (socket: Socket) => {
 
     if (address) {
       socketToWallet.delete(socket.id);
-      // Only clear the mapping if it still points at THIS socket. When a phone
-      // reconnects, the new socket registers first and the old one's disconnect
-      // fires later (ping timeout) — deleting unconditionally made the user look
-      // offline while they were actually connected.
-      if (activeConnections.get(address) !== socket.id) {
-        console.log(`   (stale socket for ${address} closed; newer connection kept)`);
+      // Only go offline when this wallet's LAST device disconnects
+      const set = walletSockets.get(address);
+      set?.delete(socket.id);
+      if (set && set.size > 0) {
+        console.log(`   (${address} still has ${set.size} device(s) connected)`);
         return;
       }
+      walletSockets.delete(address);
       activeConnections.delete(address);
       userStatuses.set(address, 'offline');
       lastSeenTimes.set(address, Date.now()); // Track last seen time

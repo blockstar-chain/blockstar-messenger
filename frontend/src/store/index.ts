@@ -26,6 +26,7 @@ interface AppState {
   setAuthenticated: (isAuthenticated: boolean) => void;
   
   setConversations: (conversations: Conversation[]) => void;
+  removeConversation: (id: string) => void;
   addConversation: (conversation: Conversation) => void;
   updateConversation: (id: string, updates: Partial<Conversation>) => void;
   setActiveConversation: (id: string | null) => void;
@@ -42,6 +43,10 @@ interface AppState {
   
   reset: () => void;
 }
+
+// IDs the user removed on purpose (delete chat / left group) — the only way a
+// group may leave the list.
+const explicitlyRemoved = new Set<string>();
 
 export const useAppStore = create<AppState>((set, get) => ({
   // Initial state
@@ -60,7 +65,35 @@ export const useAppStore = create<AppState>((set, get) => ({
   setAuthenticated: (isAuthenticated) => set({ isAuthenticated }),
 
   // Conversation actions
-  setConversations: (conversations) => set({ conversations }),
+  // Replacing the list must never silently lose a real group. Several loaders
+  // rebuild the list (startup, refresh, periodic sync); if one of them comes back
+  // without a group the user is still in, keep it and log where it came from.
+  // Groups only leave the list through removeConversation() (user deletes it).
+  setConversations: (incoming) =>
+    set((state) => {
+      const me = state.currentUser?.walletAddress?.toLowerCase();
+      const ids = new Set(incoming.map((c) => c.id));
+      const dropped = state.conversations.filter((c) => !ids.has(c.id));
+      if (dropped.length === 0) return { conversations: incoming };
+
+      const keep = dropped.filter((c) =>
+        c.type === 'group' &&
+        typeof c.id === 'string' && c.id.startsWith('group_') &&
+        !explicitlyRemoved.has(c.id) &&
+        (!me || (c.participants || []).some((p) => p.toLowerCase() === me))
+      );
+      if (keep.length) {
+        console.warn('⚠️ A list update tried to drop group(s) — kept them:', keep.map((c) => c.id));
+        console.trace('Dropped-group source');
+      }
+      return { conversations: keep.length ? [...incoming, ...keep] : incoming };
+    }),
+
+  removeConversation: (id) =>
+    set((state) => {
+      explicitlyRemoved.add(id);
+      return { conversations: state.conversations.filter((c) => c.id !== id) };
+    }),
   
   addConversation: (conversation) =>
     set((state) => {

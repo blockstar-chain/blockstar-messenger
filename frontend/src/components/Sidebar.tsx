@@ -1553,9 +1553,9 @@ export default function Sidebar({
       // Clear from local cache
       dbHelpers.clearMessageCache(conversationId);
 
-      // Update local state
+      // Update local state (explicit removal — the only way a group leaves the list)
       const updated = conversations.filter(c => c.id !== conversationId);
-      setConversations(updated);
+      useAppStore.getState().removeConversation(conversationId);
 
       // Clear active conversation if it was deleted
       if (activeConversationId === conversationId) {
@@ -2557,7 +2557,7 @@ export default function Sidebar({
                 <div className="p-4 bg-dark-200 border border-midnight rounded-xl space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-secondary">Version</span>
-                    <span className="text-white">2.0.0</span>
+                    <span className="text-white">2.0.1</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-secondary">Build</span>

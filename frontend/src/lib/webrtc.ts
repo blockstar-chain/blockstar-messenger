@@ -489,6 +489,12 @@ export class WebRTCService {
     // @ts-ignore
     const pc = peer._pc as RTCPeerConnection;
     if (pc) {
+      let iceSummaryLogged = false;
+      const summarizeOnce = () => {
+        if (iceSummaryLogged) return;
+        iceSummaryLogged = true;
+        this.logIceSummary(pc, callId);
+      };
       pc.oniceconnectionstatechange = () => {
         console.log('🧊 ICE state:', pc.iceConnectionState);
         this.onConnectionStateHandlers.forEach(h => h(pc.iceConnectionState, callId));
@@ -500,11 +506,15 @@ export class WebRTCService {
         
         if (pc.iceConnectionState === 'failed') {
           console.error('❌ ICE FAILED - NAT/firewall issue');
+          summarizeOnce();
         }
       };
       
       pc.onconnectionstatechange = () => {
         console.log('🔗 Connection state:', pc.connectionState);
+        // simple-peer tears the connection down right after this, so grab the
+        // route summary now
+        if (pc.connectionState === 'failed') summarizeOnce();
       };
       
       // CRITICAL: Capture stream from ontrack since SimplePeer's stream event may not fire
@@ -548,11 +558,9 @@ export class WebRTCService {
           });
           console.log('========================================');
           
-          // Start audio monitoring
-          const audioTracks = streamToUse.getAudioTracks();
-          if (audioTracks.length > 0) {
-            this.startAudioMonitor(streamToUse, 'REMOTE');
-          }
+          // (No level meter on the remote stream: Chrome reports remote WebRTC
+          // audio as silent to WebAudio, which produced misleading warnings.
+          // logStats() checks real packets instead.)
           
           // Notify all handlers - pass callId as both callId and peerId
           this.onStreamHandlers.forEach((handler) => handler(streamToUse, callId, callId));
@@ -565,38 +573,73 @@ export class WebRTCService {
    * Log connection statistics
    */
   private async logStats(pc: RTCPeerConnection): Promise<void> {
+    // Measured a few seconds in — right at 'connected' nothing has flowed yet.
+    await new Promise(r => setTimeout(r, 4000));
+    if (pc.connectionState === 'closed') return;
     try {
       const stats = await pc.getStats();
-      let inboundAudio = false;
-      let outboundAudio = false;
-      
-      stats.forEach(report => {
-        if (report.type === 'inbound-rtp' && report.kind === 'audio') {
-          inboundAudio = true;
-          console.log('📊 INBOUND AUDIO:', {
-            packetsReceived: report.packetsReceived,
-            bytesReceived: report.bytesReceived,
-            packetsLost: report.packetsLost,
-          });
-        }
-        if (report.type === 'outbound-rtp' && report.kind === 'audio') {
-          outboundAudio = true;
-          console.log('📊 OUTBOUND AUDIO:', {
-            packetsSent: report.packetsSent,
-            bytesSent: report.bytesSent,
-          });
-        }
+      const byId = new Map<string, any>();
+      stats.forEach((r: any) => byId.set(r.id, r));
+
+      let pair: any;
+      stats.forEach((r: any) => {
+        if (r.type === 'transport' && r.selectedCandidatePairId) pair = byId.get(r.selectedCandidatePairId);
       });
-      
-      if (!inboundAudio) {
-        console.warn('⚠️ No inbound audio stats - not receiving audio');
+      if (!pair) {
+        stats.forEach((r: any) => {
+          if (!pair && r.type === 'candidate-pair' && (r.selected || (r.nominated && r.state === 'succeeded'))) pair = r;
+        });
       }
-      if (!outboundAudio) {
-        console.warn('⚠️ No outbound audio stats - not sending audio');
+      const local = pair && byId.get(pair.localCandidateId);
+      const remote = pair && byId.get(pair.remoteCandidateId);
+      if (local || remote) {
+        const relayed = local?.candidateType === 'relay' || remote?.candidateType === 'relay';
+        console.log(`🛰️ Route: me=${local?.candidateType || '?'}/${local?.protocol || '?'} them=${remote?.candidateType || '?'}/${remote?.protocol || '?'} → ${relayed ? 'via TURN relay' : 'direct'}`);
+      }
+
+      let inbound: any, outbound: any;
+      stats.forEach((r: any) => {
+        if (r.type === 'inbound-rtp' && r.kind === 'audio') inbound = r;
+        if (r.type === 'outbound-rtp' && r.kind === 'audio') outbound = r;
+      });
+      console.log('📊 Audio after 4s:', {
+        received: inbound ? inbound.packetsReceived : 0,
+        receivedLevel: inbound?.audioLevel,
+        sent: outbound ? outbound.packetsSent : 0,
+      });
+      if (!inbound || !inbound.packetsReceived) {
+        console.warn('⚠️ No audio packets from the other side after 4s');
+      }
+      if (!outbound || !outbound.packetsSent) {
+        console.warn('⚠️ Not sending audio after 4s');
       }
     } catch (e) {
       console.warn('Could not get stats:', e);
     }
+  }
+
+  /**
+   * When ICE fails, show which kinds of routes each side offered. No 'relay'
+   * on our side = this network can't reach the TURN server.
+   */
+  private async logIceSummary(pc: RTCPeerConnection, callId: string): Promise<void> {
+    try {
+      const stats = await pc.getStats();
+      const mine: Record<string, number> = {};
+      const theirs: Record<string, number> = {};
+      stats.forEach((r: any) => {
+        const k = `${r.candidateType}/${r.protocol}`;
+        if (r.type === 'local-candidate') mine[k] = (mine[k] || 0) + 1;
+        if (r.type === 'remote-candidate') theirs[k] = (theirs[k] || 0) + 1;
+      });
+      console.warn('🧊 ICE failed for', callId, '— my routes:', JSON.stringify(mine), 'their routes:', JSON.stringify(theirs));
+      if (!Object.keys(mine).some(k => k.startsWith('relay'))) {
+        console.warn('🧊 No TURN relay route on this device — the network may be blocking the TURN server');
+      }
+      if (!Object.keys(theirs).some(k => k.startsWith('relay'))) {
+        console.warn('🧊 The other device sent no TURN relay route — it may be on an old build or a network blocking TURN');
+      }
+    } catch {}
   }
 
   /**
